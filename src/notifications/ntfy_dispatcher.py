@@ -78,7 +78,8 @@ class NTFYDispatcher:
                 lines.append(f"• **Underlying SL:** `₹{risk.get('underlying_sl')}` | **Target:** `₹{risk.get('underlying_target')}`")
             lines.append(f"• **Regime Clearance:** `{stk.get('regime_badge')}`")
         else:
-            lines.append(f"• **Recommendation:** `HOLD CASH` (No setup cleared macro trend + 50pt confluence)")
+            reason = shortlist.get("stock_option_standby_reason", "No setup cleared macro trend + 50pt confluence")
+            lines.append(f"• **Recommendation:** `HOLD CASH` ({reason})")
         lines.append("")
 
         # 4. BEST INTRADAY CASH RUNNER (DECOUPLED & ANTI-CIRCUIT VERIFIED)
@@ -90,7 +91,8 @@ class NTFYDispatcher:
             lines.append(f"• **Safety:** Anti-Circuit Verified (Turnover > ₹15 Cr, Zero Freeze Risk)")
             lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | **Regime Gate:** `{cash.get('regime_badge')}`")
         else:
-            lines.append(f"• **Recommendation:** `HOLD CASH` (No high-turnover breakout cleared by market breadth)")
+            reason = shortlist.get("cash_standby_reason", "No high-turnover breakout cleared by market breadth")
+            lines.append(f"• **Recommendation:** `HOLD CASH` ({reason})")
         lines.append("")
             
         lines.append("---")
