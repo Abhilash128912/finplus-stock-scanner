@@ -31,6 +31,13 @@ class NTFYDispatcher:
         self.last_pulse_timestamp = 0.0
 
     def send_30m_shortlist_pulse(self, shortlist: Dict[str, Any], force: bool = False) -> bool:
+        # Strict Weekend Silence (Zero notifications on Saturday & Sunday)
+        from datetime import datetime, timezone, timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        if not force and ist_now.weekday() >= 5: # 5 = Saturday, 6 = Sunday
+            logger.info("Weekend detected (Saturday/Sunday). Skipping NTFY pulse.")
+            return False
+
         now = time.time()
         if not force and (now - self.last_pulse_timestamp) < self.min_interval:
             logger.info("Skipping NTFY pulse: 30m interval not reached yet.")
@@ -155,6 +162,11 @@ class NTFYDispatcher:
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         day_name = ist_now.strftime("%A")  # Monday, Tuesday, etc.
         date_str = ist_now.strftime("%d-%b-%Y")
+        
+        # Strict Weekend Silence (No briefings on Saturday or Sunday)
+        if not force and ist_now.weekday() >= 5:
+            logger.info("Weekend detected (Saturday/Sunday). Skipping 09:00 AM Morning Briefing.")
+            return False
         
         # Calculate Paper Crucible countdown (until Dec 1, 2026)
         crucible_end = datetime(2026, 12, 1, 23, 59, 59)
