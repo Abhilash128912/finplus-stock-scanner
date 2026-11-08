@@ -40,6 +40,16 @@ def is_market_open_ist() -> bool:
     curr_time = now_ist.time()
     return time(9, 15) <= curr_time <= time(15, 30)
 
+def is_pulse_window_ist() -> bool:
+    """Checks whether current IST time is within 30-minute pulse window (09:15 to 15:00 IST, Mon-Fri).
+    Stops 30 minutes before 15:30 closing.
+    """
+    now_ist = get_ist_now()
+    if now_ist.weekday() >= 5: # Saturday or Sunday
+        return False
+    curr_time = now_ist.time()
+    return time(9, 15) <= curr_time <= time(15, 0)
+
 def is_ignition_window_ist() -> bool:
     """Checks whether current IST time is in active ignition scan window (09:30 to 14:45 IST, Mon-Fri)."""
     now_ist = get_ist_now()

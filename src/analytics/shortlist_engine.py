@@ -34,12 +34,16 @@ class ShortlistEngine:
         # Separate Index items from Stock items
         sensex_item = next((r for r in scan_results if r.get("symbol") == "SENSEX"), None)
         nifty_item = next((r for r in scan_results if r.get("symbol") == "NIFTY"), None)
+        midcap_item = next((r for r in scan_results if r.get("symbol") in ("MIDCPNIFTY", "MIDCAP NIFTY")), None)
         
         # Format Sensex Radar (Never suggests CE and PE at the same time)
         sensex_radar = self._format_index_radar(sensex_item, default_sym="SENSEX", default_lot=20, default_step=100, regime=regime)
         
         # Format Nifty Radar (Never suggests CE and PE at the same time)
         nifty_radar = self._format_index_radar(nifty_item, default_sym="NIFTY", default_lot=65, default_step=50, regime=regime)
+        
+        # Format Midcap Nifty Radar (Never suggests CE and PE at the same time)
+        midcap_radar = self._format_index_radar(midcap_item, default_sym="MIDCPNIFTY", default_lot=75, default_step=25, regime=regime)
         
         # -------------------------------------------------------------
         # 1. STOCK OPTIONS: STRICT MARKET CONDITION FILTER
@@ -138,6 +142,7 @@ class ShortlistEngine:
             "ist_time": get_ist_time_str(),
             "sensex_radar": sensex_radar,
             "nifty_radar": nifty_radar,
+            "midcap_radar": midcap_radar,
             "best_index_option": best_index_option,
             "best_stock_option": best_stock_option,
             "best_intraday_stock": best_intraday_stock,

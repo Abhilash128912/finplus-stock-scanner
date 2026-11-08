@@ -30,12 +30,41 @@ class NTFYDispatcher:
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
 
+    def _fetch_app1_regime(self) -> Dict[str, Any]:
+        """Queries App #1 Macro Trend & Air Traffic Control locally or in cloud."""
+        try:
+            app1_url = os.getenv("APP1_URL", "http://127.0.0.1:8000")
+            resp = requests.get(f"{app1_url}/api/regime", timeout=1.5)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return {}
+
     def send_30m_shortlist_pulse(self, shortlist: Dict[str, Any], force: bool = False) -> bool:
-        # Strict Weekend Silence (Zero notifications on Saturday & Sunday)
-        from datetime import datetime, timezone, timedelta
+        """
+        Dispatches the 30-minute consolidated trade pulse during market hours (09:15 to 15:00 IST).
+        Strictly silent on weekends and outside 09:15 - 15:00 IST (stops 30 mins before 15:30 close).
+        Contains in exact numbered sequence:
+        1) Market Trend Status (App #1 Breadth Gate)
+        2) Best Intraday Trade (750 Broad Market #1 Crown Hero >= 80/100 or HOLD CASH)
+        3) Best Sensex Option (Active reminders on Wednesday & Thursday)
+        4) Best Nifty Option
+        5) Best Stock Option (F&O Lot <= 500 + Reliance)
+        + Midcap Nifty Swing (Active reminders on Monday & Tuesday)
+        """
+        from datetime import datetime, timezone, timedelta, time as dt_time
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        
+        # Strict Weekend Silence (Zero notifications on Saturday & Sunday)
         if not force and ist_now.weekday() >= 5: # 5 = Saturday, 6 = Sunday
             logger.info("Weekend detected (Saturday/Sunday). Skipping NTFY pulse.")
+            return False
+
+        # Pulse Window: 09:15 to 15:00 IST (stops 30 mins before 15:30 close)
+        curr_time = ist_now.time()
+        if not force and not (dt_time(9, 15) <= curr_time <= dt_time(15, 0)):
+            logger.info(f"Outside 30m pulse window (09:15 - 15:00 IST, current: {curr_time}). Skipping pulse.")
             return False
 
         now = time.time()
@@ -45,50 +74,88 @@ class NTFYDispatcher:
             
         self.last_pulse_timestamp = now
         ist_time = shortlist.get("ist_time", get_ist_time_str())
+        day_name = ist_now.strftime("%A")
+        is_sensex_day = day_name in ("Wednesday", "Thursday")
+        is_midcap_day = day_name in ("Monday", "Tuesday")
         
         sx = shortlist.get("sensex_radar", {})
         nf = shortlist.get("nifty_radar", {})
+        mid = shortlist.get("midcap_radar", {})
         stk = shortlist.get("best_stock_option", {})
         cash = shortlist.get("best_intraday_stock", {})
         
-        has_actionable = shortlist.get("has_actionable_trades", False)
+        # 1. Market Trend Status (App #1 Breadth Gate)
+        app1_data = self._fetch_app1_regime()
+        trend_info = app1_data.get("trend", {})
+        opt_dir = app1_data.get("options_directive", {})
+        metrics = app1_data.get("metrics", {})
         
         lines = [
-            f"🏛️ **FINPLUS+ 30-MIN INTRADAY PULSE** | `{ist_time}`",
-            "---"
+            f"🏛️ **FINPLUS+ 30-MIN INTRADAY PULSE** | `{day_name}, {ist_time}`",
+            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         ]
         
-        # 1. SENSEX 30 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
-        lines.append(f"👑 **BSE SENSEX 30 OPTIONS (HIGH PRIORITY):**")
-        lines.append(f"• **Spot LTP:** `₹{sx.get('last_price', '--')}` ({sx.get('pct_change_pdc', 0):+0.2f}%) | **50 EMA:** `₹{sx.get('ema50', '--')}` ({sx.get('ema50_dist_pct', 0):+0.2f}%)")
-        if sx.get("is_actionable") and sx.get("recommended_strike"):
-            lines.append(f"• **CONFIRMED STRIKE:** `{sx.get('recommended_strike')}`")
-            lines.append(f"• **ACTION:** `{sx.get('action_badge')}`")
-            lines.append(f"• **Setup:** {sx.get('directive')}")
+        # 1) MARKET TREND STATUS
+        lines.append("🌐 **1. MARKET TREND STATUS (App #1 Breadth Gate):**")
+        if trend_info:
+            score_lbl = trend_info.get("score_label", f"{trend_info.get('score', 0)}/100")
+            lines.append(f"• **CTI Trend:** `{trend_info.get('label', 'N/A')}` ({score_lbl})")
+            lines.append(f"• **NSE Breadth:** `{metrics.get('broad_advances', '--')} Adv` / `{metrics.get('broad_declines', '--')} Dec` (2,266 Equities, ADR: `{metrics.get('broad_adr', '--')}`)")
+            lines.append(f"• **Air Traffic Veto:** `{opt_dir.get('badge', 'ACTIVE')}`")
         else:
-            lines.append(f"• **Recommendation:** `HOLD CASH / STANDBY` (No option recommended)")
-            lines.append(f"• **Condition:** {sx.get('directive')}")
+            diag = shortlist.get("market_diagnostic", {})
+            lines.append(f"• **CTI Score:** `{diag.get('trend_score', 0)}/100` | `{diag.get('trend_label', 'ACTIVE')}`")
+            lines.append(f"• **Gate Clearance:** `{diag.get('status', 'ACTIVE')}`")
         lines.append("")
         
-        # 2. NIFTY 50 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
-        lines.append(f"🎯 **NSE NIFTY 50 OPTIONS:**")
-        lines.append(f"• **Spot LTP:** `₹{nf.get('last_price', '--')}` ({nf.get('pct_change_pdc', 0):+0.2f}%) | **50 EMA:** `₹{nf.get('ema50', '--')}` ({nf.get('ema50_dist_pct', 0):+0.2f}%)")
-        if nf.get("is_actionable") and nf.get("recommended_strike"):
-            lines.append(f"• **CONFIRMED STRIKE:** `{nf.get('recommended_strike')}`")
-            lines.append(f"• **ACTION:** `{nf.get('action_badge')}`")
-            lines.append(f"• **Setup:** {nf.get('directive')}")
+        # 2) BEST INTRADAY TRADE (750 Broad Market #1 Crown Hero)
+        lines.append("⚡ **2. BEST INTRADAY TRADE (750 Broad Market Quality):**")
+        if cash and cash.get("confluence_score", 0) >= 80:
+            lines.append(f"• **HERO:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
+            lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | 50 EMA: `₹{cash.get('ema50')}` ({cash.get('ema50_dist_pct', 0):+0.2f}%)")
+            lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
+            lines.append(f"• **Capital Pool:** ₹7,750 with 5x MIS leverage | Anti-Circuit Verified")
         else:
-            lines.append(f"• **Recommendation:** `HOLD CASH / STANDBY` (No option recommended)")
-            lines.append(f"• **Condition:** {nf.get('directive')}")
+            top_w = shortlist.get("top_watch_cash")
+            if top_w:
+                lines.append(f"• **Recommendation:** `HOLD CASH (Capital Safeguard Active)`")
+                lines.append(f"• **Reason:** Top candidate `{top_w.get('symbol')}` scored `{top_w.get('confluence_score')}/100` (< 80 threshold). No trade taken.")
+            else:
+                lines.append(f"• **Recommendation:** `HOLD CASH (Capital Safeguard Active)`")
+                lines.append("• **Reason:** No broad market equity meets strict 80/100 conviction threshold.")
         lines.append("")
 
-        # 3. BEST STOCK OPTION (STRICT MARKET GATED)
-        lines.append("💎 **BEST STOCK OPTION:**")
+        # 3) BEST SENSEX OPTION (Active on Wednesday & Thursday)
+        lines.append("👑 **3. BEST SENSEX 30 OPTION:**")
+        if is_sensex_day:
+            lines.append(f"• **Status:** 🔥 `ACTIVE TODAY ({day_name.upper()})`")
+            lines.append("• 👉 **REMINDER: Take Sensex Asymmetric entry (Lot 20, Outlay < ₹500, 75% Stop Loss).**")
+            if sx.get("is_actionable") and sx.get("recommended_strike"):
+                lines.append(f"• **CONFIRMED STRIKE:** `{sx.get('recommended_strike')}` | **ACTION:** `{sx.get('action_badge')}`")
+                lines.append(f"• **Spot LTP:** `₹{sx.get('last_price', '--')}` | **50 EMA:** `₹{sx.get('ema50', '--')}` ({sx.get('ema50_dist_pct', 0):+0.2f}%)")
+                lines.append(f"• **Setup:** {sx.get('directive')}")
+            else:
+                lines.append(f"• **Strike Stance:** `HOLD CASH / STANDBY` ({sx.get('directive')})")
+        else:
+            lines.append(f"• **Status:** ⏸️ `STANDBY` (Sensex trades scheduled for Wednesday & Thursday).")
+        lines.append("")
+
+        # 4) BEST NIFTY OPTION
+        lines.append("🎯 **4. BEST NIFTY 50 OPTION:**")
+        lines.append(f"• **Spot LTP:** `₹{nf.get('last_price', '--')}` ({nf.get('pct_change_pdc', 0):+0.2f}%) | **50 EMA:** `₹{nf.get('ema50', '--')}` ({nf.get('ema50_dist_pct', 0):+0.2f}%)")
+        if nf.get("is_actionable") and nf.get("recommended_strike"):
+            lines.append(f"• **CONFIRMED STRIKE:** `{nf.get('recommended_strike')}` | **ACTION:** `{nf.get('action_badge')}`")
+            lines.append(f"• **Setup:** {nf.get('directive')}")
+        else:
+            lines.append(f"• **Recommendation:** `HOLD CASH / STANDBY` ({nf.get('directive')})")
+        lines.append("")
+
+        # 5) BEST STOCK OPTION (Updates every 30m till 30m before close)
+        lines.append("💎 **5. BEST STOCK OPTION (F&O Lot ≤ 500 + Reliance):**")
         if stk:
             lines.append(f"• **CONFIRMED CONTRACT:** `{stk.get('recommended_contract')}` (Lot: `{stk.get('lot_size')}` | Spot: `₹{stk.get('last_price')}`)")
-            lines.append(f"• **ACTION:** `{stk.get('option_action_badge')}`")
-            lines.append(f"• **50 EMA Alignment:** `₹{stk.get('ema50')}` ({stk.get('ema50_dist_pct', 0):+0.2f}% confirmed)")
-            lines.append(f"• **Score:** `{stk.get('confluence_score')}/100`")
+            lines.append(f"• **ACTION:** `{stk.get('option_action_badge')}` | **Score:** `{stk.get('confluence_score')}/100`")
+            lines.append(f"• **50 EMA Alignment:** `₹{stk.get('ema50')}` ({stk.get('ema50_dist_pct', 0):+0.2f}%)")
             risk = stk.get("risk_management", {})
             if "underlying_sl" in risk:
                 lines.append(f"• **Underlying SL:** `₹{risk.get('underlying_sl')}` | **Target:** `₹{risk.get('underlying_target')}`")
@@ -98,24 +165,25 @@ class NTFYDispatcher:
             lines.append(f"• **Recommendation:** `HOLD CASH` ({reason})")
         lines.append("")
 
-        # 4. BEST INTRADAY CASH RUNNER (DECOUPLED & ANTI-CIRCUIT VERIFIED)
-        lines.append("📈 **BEST INTRADAY CASH RUNNER (BROAD MARKET QUALITY):**")
-        if cash:
-            lines.append(f"• **ACTION:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
-            lines.append(f"• **50 EMA Alignment:** `₹{cash.get('ema50')}` ({cash.get('ema50_dist_pct', 0):+0.2f}% confirmed)")
-            lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
-            lines.append(f"• **Safety:** Anti-Circuit Verified (Turnover > ₹15 Cr, Zero Freeze Risk)")
-            lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | **Regime Gate:** `{cash.get('regime_badge')}`")
+        # 6) MIDCAP NIFTY SWING (Active on Monday & Tuesday)
+        lines.append("🎯 **6. MIDCAP NIFTY SWING (Twice a Week / Expiry):**")
+        if is_midcap_day:
+            lines.append(f"• **Status:** 🔥 `ACTIVE TODAY ({day_name.upper()})`")
+            lines.append("• 👉 **REMINDER: Take Midcap Nifty trade (Lot 75, Outlay < ₹750, 60% Stop Loss, hold till 3 days before exp).**")
+            if mid.get("is_actionable") and mid.get("recommended_strike"):
+                lines.append(f"• **CONFIRMED STRIKE:** `{mid.get('recommended_strike')}` | **ACTION:** `{mid.get('action_badge')}`")
+                lines.append(f"• **Setup:** {mid.get('directive')}")
+            else:
+                lines.append(f"• **Strike Stance:** `HOLD CASH / STANDBY` ({mid.get('directive', 'Awaiting breakout confirmation')})")
         else:
-            reason = shortlist.get("cash_standby_reason", "No high-turnover breakout cleared by market breadth")
-            lines.append(f"• **Recommendation:** `HOLD CASH` ({reason})")
+            lines.append(f"• **Status:** ⏸️ `STANDBY` (Midcap trades scheduled for Monday & Tuesday).")
         lines.append("")
-            
-        lines.append("---")
-        lines.append("🛡️ *Next consolidated pulse in 30 minutes.*")
+
+        lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+        lines.append("🛡️ *Next 30-min consolidated pulse scheduled. Intraday pulses end at 15:00 IST.*")
 
         message = "\n".join(lines)
-        title = f"👑 FinPlus+ 30m Pulse: Strike Directives ({ist_time})"
+        title = f"FinPlus+ 30m Trade Directives ({ist_time})"
         
         success = False
         cockpit_url = os.getenv("RENDER_EXTERNAL_URL", "https://finplus-stock-scanner.onrender.com" if os.getenv("FINPLUS_ENVIRONMENT") == "production" else "http://127.0.0.1:8001")
@@ -174,7 +242,8 @@ class NTFYDispatcher:
         crucible_remaining = max(0, (crucible_end.date() - ist_now.date()).days)
         is_crucible = crucible_remaining > 0
         
-        is_tue_or_thu = day_name in ("Tuesday", "Thursday")
+        is_sensex_day = day_name in ("Wednesday", "Thursday")
+        is_midcap_day = day_name in ("Monday", "Tuesday")
         
         lines = [
             f"🌅 **FINPLUS+ 09:00 AM TACTICAL BRIEFING** | `{day_name}, {date_str}`",
@@ -208,10 +277,27 @@ class NTFYDispatcher:
                 lines.append("• **Status:** Scanning 750 broad market candidates at 09:15 open.")
         lines.append("")
         
-        # 2. Sensex Asymmetric (Tuesdays & Thursdays only)
-        lines.append(f"👑 **2. SENSEX 30 ASYMMETRIC TICKET (Lot Size 20):**")
-        if is_tue_or_thu:
+        # 2. Midcap Nifty Swing (Mondays & Tuesdays: Before Expiry & On Expiry)
+        lines.append(f"🎯 **2. MIDCAP NIFTY SWING (Lot Size 75):**")
+        if is_midcap_day:
             lines.append(f"• **Status:** 🔥 `ACTIVE TODAY ({day_name.upper()})`")
+            lines.append("• 👉 **REMINDER: Take Midcap Nifty entry today!**")
+            lines.append("• **Budget:** Max ₹750 invested (1 Lot).")
+            lines.append("• **Hold Plan:** Hold till 3 days before expiry or expiry afternoon.")
+            lines.append("• **Safety Stop:** Hard 60% loss cut (preserves capital if momentum stalls).")
+            if shortlist:
+                mid = shortlist.get("midcap_radar", {})
+                if mid and mid.get("symbol"):
+                    lines.append(f"• **Radar Strike:** `{mid.get('recommended_strike', mid.get('symbol'))}` @ ~₹{mid.get('entry_price', 0):.2f}")
+        else:
+            lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Mondays & Tuesdays).")
+        lines.append("")
+
+        # 3. Sensex Asymmetric (Wednesdays & Thursdays: Before Expiry & On Expiry)
+        lines.append(f"👑 **3. SENSEX 30 ASYMMETRIC TICKET (Lot Size 20):**")
+        if is_sensex_day:
+            lines.append(f"• **Status:** 🔥 `ACTIVE TODAY ({day_name.upper()})`")
+            lines.append("• 👉 **REMINDER: Take Sensex Asymmetric entry today!**")
             lines.append("• **Budget:** Outlay strictly < ₹500.")
             lines.append("• **Stop Loss:** Hard 75% max-loss cut.")
             lines.append("• **Gate:** Only enter if App #1 CTI confirms trend (Score ≥ +40 or ≤ -40).")
@@ -220,18 +306,7 @@ class NTFYDispatcher:
                 if sx and sx.get("symbol"):
                     lines.append(f"• **Radar Strike:** `{sx.get('symbol')}` @ ~₹{sx.get('entry_price', 0):.2f} (App #1: {sx.get('regime_badge', 'N/A')})")
         else:
-            lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Tuesdays & Thursdays).")
-        lines.append("")
-        
-        # 3. Midcap Nifty Swing (Tuesdays & Thursdays only)
-        lines.append(f"🎯 **3. MIDCAP NIFTY SWING (Twice a Week):**")
-        if is_tue_or_thu:
-            lines.append(f"• **Status:** 🔥 `ACTIVE TODAY ({day_name.upper()})`")
-            lines.append("• **Budget:** Max ₹750 invested (1 Lot).")
-            lines.append("• **Hold Plan:** Hold till 3 days before expiry.")
-            lines.append("• **Safety Stop:** Hard 60% loss cut (preserves capital if momentum stalls).")
-        else:
-            lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Tuesdays & Thursdays).")
+            lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Wednesdays & Thursdays).")
         lines.append("")
         
         # 4. Nifty 50 Benchmark Setup
