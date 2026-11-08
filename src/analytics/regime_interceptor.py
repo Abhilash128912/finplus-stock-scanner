@@ -83,6 +83,7 @@ class App1RegimeInterceptor:
         trend_score = regime.get("trend", {}).get("score", 0)
         is_divergent = regime.get("trend", {}).get("is_divergence", False)
         trend_code = regime.get("trend", {}).get("code", "")
+        heavyweights = regime.get("metrics", {}).get("heavyweights_above", "0/5")
 
         # UNIFIED CONFLUENCE METRIC: Composite Trend Index (CTI)
         # Pillar 1 (WABI) + Pillar 2 (All-NSE A/D) + Pillar 3 (VIX & Derivatives)
@@ -92,22 +93,22 @@ class App1RegimeInterceptor:
             if trend_score >= 30 and not is_divergent:
                 return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI UPTREND ALIGNED)", regime
             elif is_divergent or "CHOPPY" in trend_code:
-                return "VETOED_CHOP_RISK", "VETOED (MACRO CHOP / NARROW RALLY)", regime
+                return "VETOED_CHOP_RISK", "STANDBY (MARKET CHOPPY / DIVERGENCE)", regime
             elif trend_score <= -25 or "DOWNTREND" in trend_code:
-                return "VETOED_COUNTER_TREND", "VETOED (MACRO DOWNTREND)", regime
+                return "VETOED_COUNTER_TREND", f"VETOED (MACRO DOWNTREND • CTI {trend_score}/100)", regime
             else:
-                return "VETOED_LOW_MOMENTUM", "VETOED (INSUFFICIENT MACRO MOMENTUM)", regime
+                return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI +{trend_score} BELOW +30 THRESHOLD)", regime
                 
         # 2. Bearish Signal (Put Option / Short Breakdown)
         elif signal_direction == -1:
             if trend_score <= -30:
                 return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI DOWNTREND ALIGNED)", regime
             elif trend_score >= 30:
-                return "VETOED_COUNTER_TREND", "VETOED (MACRO UPTREND)", regime
+                return "VETOED_COUNTER_TREND", f"VETOED (MACRO UPTREND • CTI +{trend_score}/100)", regime
             elif is_divergent:
                 # In broad market divergence, shorting overvalued scrips has edge
                 return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (DIVERGENCE SHORT)", regime
             else:
-                return "VETOED_LOW_MOMENTUM", "VETOED (INSUFFICIENT SHORT MOMENTUM)", regime
+                return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI {trend_score} INSUFFICIENT)", regime
                 
         return "VETOED_DEFAULT", "VETOED (FAIL-CLOSED)", regime

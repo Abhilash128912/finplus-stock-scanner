@@ -60,6 +60,7 @@ class ScannerScheduler:
                 
                 eval_res["regime_confluence"] = conf_status
                 eval_res["regime_badge"] = conf_badge
+                eval_res["regime_data"] = regime_data
                 results.append(eval_res)
                 
             except Exception as e:

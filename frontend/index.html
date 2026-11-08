@@ -516,15 +516,27 @@
         }
         document.getElementById('stk-opt-risk-line').innerHTML = `<span>SL: ₹${stk.risk_management?.underlying_sl || '--'}</span><span class="text-emerald-400">Target: ₹${stk.risk_management?.underlying_target || '--'} (1:2 R:R)</span>`;
       } else {
-        stkActionBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
-        stkActionBadge.textContent = 'HOLD CASH / STANDBY';
-        document.getElementById('stk-opt-contract').textContent = 'NO CLEAR SETUP';
-        document.getElementById('stk-opt-spot-line').textContent = 'Zero stock options cleared macro trend gate & 50pt confluence.';
-        document.getElementById('stk-opt-score').textContent = '-- / 100';
-        document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>`;
-        document.getElementById('stk-opt-risk-line').innerHTML = `<span>SL: --</span><span>Target: --</span>`;
-        document.getElementById('stk-opt-tag').textContent = 'STANDBY';
-        document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold';
+        stkActionBadge.className = 'p-2.5 rounded-lg bg-amber-950/80 border border-amber-500/50 text-center font-bold text-xs mono text-amber-300';
+        stkActionBadge.textContent = '⏸️ STANDBY (MARKET CHOPPY)';
+        if (shortlist.top_watch_option) {
+          const w = shortlist.top_watch_option;
+          document.getElementById('stk-opt-contract').textContent = `WATCHING: ${w.symbol}`;
+          document.getElementById('stk-opt-spot-line').textContent = `${w.name || w.symbol} (Lot: ${w.lot_size}) | Score: ${w.confluence_score}/100`;
+          document.getElementById('stk-opt-score').textContent = `${w.confluence_score} / 100`;
+          const p = w.points_breakdown || {};
+          document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>EMA50: ${p.ema50_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span>`;
+          document.getElementById('stk-opt-risk-line').innerHTML = `<span class="text-amber-300 text-[10px]">${shortlist.stock_option_standby_reason || 'Market momentum below entry gate.'}</span>`;
+          document.getElementById('stk-opt-tag').textContent = 'ON WATCH';
+          document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
+        } else {
+          document.getElementById('stk-opt-contract').textContent = 'NO BREAKOUT ACTIVE';
+          document.getElementById('stk-opt-spot-line').textContent = shortlist.stock_option_standby_reason || 'All F&O contracts trading inside consolidation range.';
+          document.getElementById('stk-opt-score').textContent = '-- / 100';
+          document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>`;
+          document.getElementById('stk-opt-risk-line').innerHTML = `<span class="text-slate-400">Preserving option premium in cash.</span>`;
+          document.getElementById('stk-opt-tag').textContent = 'STANDBY';
+          document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold';
+        }
       }
 
       // 4. BEST INTRADAY CASH EQUITY (STRICT MARKET GATED)
@@ -547,13 +559,22 @@
         document.getElementById('cash-sl-level').textContent = `₹${cash.risk_management?.stop_loss || cash.risk_management?.underlying_sl || '--'}`;
         document.getElementById('cash-target-level').textContent = `₹${cash.risk_management?.target || cash.risk_management?.underlying_target || '--'}`;
       } else {
-        cashBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
-        cashBadge.textContent = 'HOLD CASH / STANDBY';
-        document.getElementById('cash-symbol').textContent = 'NO CLEAR SETUP';
-        document.getElementById('cash-spot-line').textContent = 'No broad-market runner cleared market breadth confluence.';
-        document.getElementById('cash-entry-level').textContent = '--';
-        document.getElementById('cash-sl-level').textContent = '--';
-        document.getElementById('cash-target-level').textContent = '--';
+        cashBadge.className = 'p-2.5 rounded-lg bg-amber-950/80 border border-amber-500/50 text-center font-bold text-xs mono text-amber-300';
+        cashBadge.textContent = '⏸️ STANDBY (MARKET CHOPPY)';
+        if (shortlist.top_watch_cash) {
+          const c = shortlist.top_watch_cash;
+          document.getElementById('cash-symbol').textContent = `WATCHING: ${c.symbol}`;
+          document.getElementById('cash-spot-line').textContent = `LTP: ₹${c.last_price} (${c.pct_change_pdc > 0 ? '+' : ''}${c.pct_change_pdc}%) | Coiled Setup (Score: ${c.confluence_score}/100)`;
+          document.getElementById('cash-entry-level').textContent = `₹${c.last_price} (Awaiting Thrust)`;
+          document.getElementById('cash-sl-level').textContent = `₹${c.range_bottom}`;
+          document.getElementById('cash-target-level').textContent = `₹${c.range_top}`;
+        } else {
+          document.getElementById('cash-symbol').textContent = 'NO BREAKOUT ACTIVE';
+          document.getElementById('cash-spot-line').textContent = shortlist.cash_standby_reason || 'All broad-market equities inside range bands.';
+          document.getElementById('cash-entry-level').textContent = '--';
+          document.getElementById('cash-sl-level').textContent = '--';
+          document.getElementById('cash-target-level').textContent = '--';
+        }
       }
     }
 
@@ -575,6 +596,8 @@
         const isCash = r.category === 'INTRADAY_CASH';
         const isOpt = r.category === 'STOCK_OPTIONS';
         const isIdx = r.category === 'INDEX_OPTIONS';
+        const isVetoed = r.regime_confluence && r.regime_confluence.includes('VETOED');
+        const isApproved = r.regime_confluence && r.regime_confluence.includes('APPROVED');
 
         // Category Tag
         let catBadge = `<span class="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 text-[9px] font-bold">F&O OPT</span>`;
@@ -584,23 +607,29 @@
           catBadge = `<span class="px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40 text-[9px] font-bold">INDEX</span>`;
         }
 
-        // Option Directive Pill
+        // Option Directive Pill (ONLY for Index & F&O Stock Options)
         let optDirectiveHtml = `<span class="text-slate-500 text-[11px]">Standby (Inside Range)</span>`;
         if (isCash) {
-          optDirectiveHtml = `<div class="text-purple-300 font-bold text-[11px]">💎 Pure Equity Cash</div><div class="text-[9px] text-emerald-400">🛡️ Anti-Circuit Safe</div>`;
-        } else if (isBull) {
+          optDirectiveHtml = `<div class="text-purple-300 font-semibold text-[11px]">Pure Equity Cash</div><div class="text-[9px] text-emerald-400">🛡️ Anti-Circuit Safe</div>`;
+        } else if (isVetoed) {
+          optDirectiveHtml = `<div class="text-amber-400 font-bold text-[11px]">⏸️ STANDBY (VETOED)</div><div class="text-[9px] text-slate-400">Market Choppy / CTI Low</div>`;
+        } else if (isApproved && isBull) {
           optDirectiveHtml = `<div class="text-emerald-300 font-bold">🟢 BUY ${r.call_strike} (CALL)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
-        } else if (isBear) {
+        } else if (isApproved && isBear) {
           optDirectiveHtml = `<div class="text-rose-300 font-bold">🔴 BUY ${r.put_strike} (PUT)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
         }
 
-        // Intraday Cash Action Pill
+        // Intraday Cash Action Pill (ONLY for INTRADAY_CASH stocks!)
         let cashActionHtml = `<span class="text-slate-500 text-[11px]">Standby</span>`;
-        if (isOpt) {
+        if (isIdx) {
+          cashActionHtml = `<span class="text-slate-500 text-[10px]">Index Derivative Only</span>`;
+        } else if (isOpt) {
           cashActionHtml = `<span class="text-slate-500 text-[10px]">F&O Derivative Only</span>`;
-        } else if (isBull) {
+        } else if (isVetoed) {
+          cashActionHtml = `<div class="text-amber-400 font-semibold text-[11px]">⏸️ STANDBY (CHOPPY)</div><div class="text-[9px] text-slate-400">Awaiting market thrust</div>`;
+        } else if (isApproved && isBull) {
           cashActionHtml = `<div class="text-emerald-300 font-bold text-xs">🟢 BUY INTRADAY</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.stop_loss || r.range_bottom} | Tgt: ₹${r.risk_management?.target || r.range_top}</div>`;
-        } else if (isBear) {
+        } else if (isApproved && isBear) {
           cashActionHtml = `<div class="text-rose-300 font-bold text-xs">🔴 SHORT INTRADAY</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.stop_loss || r.range_top} | Tgt: ₹${r.risk_management?.target || r.range_bottom}</div>`;
         }
 
