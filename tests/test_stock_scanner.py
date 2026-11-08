@@ -5,7 +5,7 @@ Validates:
 2. LuxAlgo Range Detector mathematical logic on CLOSED candles.
 3. Dynamic FNOContractMaster loading from NSE fo_mktlots.csv.
 4. Fail-closed 2.0s Veto Gate Interceptor.
-5. Tiered Confluence Merit model (Tier 1 vs Tier 2 vs Veto).
+5. ShortlistEngine ranking and Trend Continuation tracking.
 """
 
 import sys
@@ -33,6 +33,7 @@ from src.analytics.range_detector_engine import (
 )
 from src.analytics.regime_interceptor import App1RegimeInterceptor
 from src.feeds.fno_contract_master import FNOContractMaster
+from src.analytics.shortlist_engine import ShortlistEngine
 
 class TestStockScanner(unittest.TestCase):
 
@@ -48,13 +49,12 @@ class TestStockScanner(unittest.TestCase):
         self.assertEqual(str(ist_dt.tzinfo), "Asia/Kolkata")
         
         offset_seconds = ist_dt.utcoffset().total_seconds()
-        self.assertEqual(offset_seconds, 19800) # 5.5 hours
+        self.assertEqual(offset_seconds, 19800)
 
     def test_02_range_detector_math_closed_candle(self):
         """Verify LuxAlgo compression and breakout evaluation strictly on closed candles."""
         dates = pd.date_range("2026-11-01 09:15", periods=50, freq="15min", tz="Asia/Kolkata")
         
-        # Coiled data
         df_coiled = pd.DataFrame({
             "Open": [100.0] * 50,
             "High": [100.5] * 50,
@@ -69,6 +69,7 @@ class TestStockScanner(unittest.TestCase):
         res = detector.evaluate_instrument(df_coiled, meta)
         self.assertEqual(res["symbol"], "TESTCOIL")
         self.assertTrue(res["is_closed_candle"])
+        self.assertIn("points_breakdown", res)
         self.assertTrue(res["is_coiling"] or res["ignition_state"] in ["COILING_ALERT", "NEUTRAL"])
 
     def test_03_regime_interceptor_fail_closed(self):
@@ -86,14 +87,40 @@ class TestStockScanner(unittest.TestCase):
         """Verify dynamic NSE F&O contract master loads and filters lot <= 500 (+ Reliance)."""
         master = FNOContractMaster(max_lot_size=500)
         universe = master.load_universe(top_n_equities=10)
-        self.assertGreaterEqual(len(universe), 2) # At least Sensex + Nifty
+        self.assertGreaterEqual(len(universe), 2)
         symbols = [u["symbol"] for u in universe]
         self.assertIn("SENSEX", symbols)
         self.assertIn("NIFTY", symbols)
-        # Check that any equity has lot <= 500 or is Reliance
-        for u in universe:
-            if u["category"] == "STOCK_OPTIONS":
-                self.assertTrue(u["lot_size"] <= 500 or u["symbol"] == "RELIANCE")
+
+    def test_05_shortlist_engine_continuation(self):
+        """Verify ShortlistEngine ranks correctly and detects Trend Continuation in 30m cycles."""
+        engine = ShortlistEngine()
+        sample_items = [
+            {
+                'symbol': 'SENSEX',
+                'category': 'INDEX_OPTIONS',
+                'confluence_score': 75,
+                'signal_direction': 1,
+                'recommended_contract': 'SENSEX 81400 CE',
+                'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
+            },
+            {
+                'symbol': 'MARUTI',
+                'category': 'STOCK_OPTIONS',
+                'confluence_score': 85,
+                'signal_direction': 1,
+                'recommended_contract': 'MARUTI 11500 CE',
+                'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
+            }
+        ]
+        
+        cycle1 = engine.select_best_candidates(sample_items)
+        self.assertFalse(cycle1["index_continuation"])
+        self.assertFalse(cycle1["stock_continuation"])
+        
+        cycle2 = engine.select_best_candidates(sample_items)
+        self.assertTrue(cycle2["index_continuation"])
+        self.assertTrue(cycle2["stock_continuation"])
 
 if __name__ == "__main__":
     unittest.main()

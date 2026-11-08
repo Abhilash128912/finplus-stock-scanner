@@ -1,7 +1,8 @@
 """
 FinPlus+ Scanner Scheduler & Continuous Evaluation Loop
 Orchestrates data fetching, closed-candle LuxAlgo range calculation,
-fail-closed App #1 confluence check, and tiered NTFY alert dispatching.
+fail-closed App #1 confluence check, Shortlist Engine evaluation,
+and strict 30-minute NTFY pulse dispatching.
 """
 
 import time
@@ -10,6 +11,7 @@ from typing import Dict, Any, List
 from src.feeds.market_data_feed import MarketDataFeed
 from src.analytics.range_detector_engine import RangeDetectorEngine
 from src.analytics.regime_interceptor import App1RegimeInterceptor
+from src.analytics.shortlist_engine import ShortlistEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
 
@@ -20,9 +22,11 @@ class ScannerScheduler:
         self.feed = MarketDataFeed(cache_ttl_seconds=60, max_lot_size=500, top_n_stocks=20)
         self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=500)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
-        self.dispatcher = NTFYDispatcher()
+        self.shortlist_engine = ShortlistEngine()
+        self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
         
         self.latest_scan_results: List[Dict[str, Any]] = []
+        self.latest_shortlist: Dict[str, Any] = {}
         self.last_scan_utc: str = get_utc_iso()
         self.is_running: bool = False
 
@@ -53,24 +57,20 @@ class ScannerScheduler:
                 eval_res["regime_badge"] = conf_badge
                 results.append(eval_res)
                 
-                # Alert Dispatched ONLY IF NOT VETOED and Score >= 50
-                score = eval_res.get("confluence_score", 0)
-                state = eval_res.get("ignition_state")
-                is_vetoed = "VETOED" in conf_status
-                
-                if score >= 50 and not is_vetoed:
-                    if state in ["BULLISH_IGNITION", "BEARISH_IGNITION", "RANGE_BREAKOUT_LONG", "RANGE_BREAKDOWN_SHORT"]:
-                        self.dispatcher.send_early_ignition_alert(eval_res, conf_status, conf_badge)
-                        
-                elif state == "COILING_ALERT":
-                    self.dispatcher.send_coiling_alert(eval_res)
-                    
             except Exception as e:
                 logger.error(f"Error evaluating {sym} ({ticker}): {e}")
                 
         self.latest_scan_results = results
         self.last_scan_utc = get_utc_iso()
-        logger.info(f"Completed universe scan ({len(results)} items evaluated).")
+        
+        # Evaluate 30-Minute Best-in-Class Shortlist
+        shortlist = self.shortlist_engine.select_best_candidates(results)
+        self.latest_shortlist = shortlist
+        
+        # Dispatch 30m pulse (enforcing 30m cooldown)
+        self.dispatcher.send_30m_shortlist_pulse(shortlist)
+        
+        logger.info(f"Completed universe scan ({len(results)} items evaluated). Shortlist updated.")
         return results
 
     async def start_loop(self):

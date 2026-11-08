@@ -2,9 +2,11 @@
 FinPlus+ LuxAlgo Range Detector & Key Levels Engine
 MANDATE COMPLIANCE:
 1. Closed Candles Only: Evaluates strictly on completed, closed 15m candles (df.iloc[:-1]).
-   Zero phantom signals that appear and disappear mid-candle.
-2. Tiered Confluence Merit: Instead of an all-or-nothing bottleneck that kills trade frequency,
-   uses a dynamic scoring model (Tier 1 Ignition >= 65 pts, Tier 2 Early Scalp 50-64 pts).
+2. Explicit Point System (0-100) with granular points breakdown for each factor:
+   - Range Breakout: 35 pts
+   - PDH / PDL Confluence: 30 pts
+   - VWAP Alignment: 20 pts
+   - Relative Volume (RVOL >= 1.25x): 15 pts
 """
 
 import math
@@ -56,7 +58,7 @@ class RangeDetectorEngine:
     def evaluate_instrument(self, raw_df: pd.DataFrame, meta: Dict[str, Any]) -> Dict[str, Any]:
         """
         Evaluates strictly on CLOSED 15m candles.
-        Applies Tiered Confluence Scoring to avoid over-filtering.
+        Generates detailed numeric scoring with points breakdown.
         """
         symbol = meta.get("symbol", "UNKNOWN")
         if raw_df.empty or len(raw_df) < self.length + 5:
@@ -70,17 +72,16 @@ class RangeDetectorEngine:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # 1. MANDATE: Slice off the forming, unclosed candle
-        # Bar -1 is currently forming; Bar -2 is the last fully closed candle.
+        # 1. Closed candle slice: Bar -1 is currently forming, Bar -2 is last closed
         closed_df = df.iloc[:-1].copy() if len(df) > 30 else df.copy()
         
-        # 2. Compute Indicators on Closed Data
+        # 2. Indicators
         closed_df['atr'] = calc_atr(closed_df, self.atr_len) * self.mult
         closed_df['sma'] = closed_df['Close'].rolling(self.length).mean()
         closed_df['vwap'] = calc_intraday_vwap(closed_df)
         closed_df['vol_ma20'] = closed_df['Volume'].rolling(20).mean()
         
-        # 3. Extract Daily Key Levels (PDH, PDL, PDC)
+        # 3. Daily Key Levels (PDH, PDL, PDC)
         dates = pd.to_datetime(closed_df.index).date
         daily = closed_df.groupby(dates).agg({'High': 'max', 'Low': 'min', 'Close': 'last'})
         if len(daily) < 2:
@@ -93,7 +94,7 @@ class RangeDetectorEngine:
             pdl = float(prev_day['Low'])
             pdc = float(prev_day['Close'])
             
-        # 4. LuxAlgo Range State Machine
+        # 4. Range State Machine
         closes = closed_df['Close'].values
         volumes = closed_df['Volume'].values
         vol_ma = closed_df['vol_ma20'].values
@@ -164,9 +165,11 @@ class RangeDetectorEngine:
         range_bot_val = float(bx_bottom) if not np.isnan(bx_bottom) else (last_closed_price - (last_closed_price * 0.005))
         range_mid_val = (range_top_val + range_bot_val) / 2.0
         
-        # 6. TIERED CONFLUENCE SCORING ENGINE (0 to 100)
-        # Prevents over-filtering while weighting high-conviction factors
-        confluence_score = 0
+        # 6. Granular Point System (0 - 100)
+        pts_range = 0
+        pts_pdh_pdl = 0
+        pts_vwap = 0
+        pts_volume = 0
         signal_direction = 0
         ignition_state = "NEUTRAL"
         tier_label = "CONSOLIDATION"
@@ -177,7 +180,7 @@ class RangeDetectorEngine:
         below_pdl = last_closed_price < pdl
         above_vwap = last_closed_price > last_vwap
         below_vwap = last_closed_price < last_vwap
-        has_volume = rvol >= 1.2
+        has_volume = rvol >= 1.25
         
         if is_coiling:
             ignition_state = "COILING_ALERT"
@@ -186,55 +189,63 @@ class RangeDetectorEngine:
             
         elif broke_top:
             signal_direction = 1
-            # Base trigger: 35 points
-            confluence_score += 35
-            # PDH confirmation: 30 points
+            pts_range = 35
             if above_pdh:
-                confluence_score += 30
-            # VWAP confirmation: 20 points
+                pts_pdh_pdl = 30
             if above_vwap:
-                confluence_score += 20
-            # Volume confirmation: 15 points
+                pts_vwap = 20
             if has_volume:
-                confluence_score += 15
+                pts_volume = 15
                 
-            if confluence_score >= 65:
+            total_pts = pts_range + pts_pdh_pdl + pts_vwap + pts_volume
+            if total_pts >= 65:
                 ignition_state = "BULLISH_IGNITION"
                 tier_label = "TIER-1 HIGH CONVICTION"
-                reason = f"Closed above Range Top ({range_top_val:.2f})" + (" & PDH" if above_pdh else " + VWAP") + f" [Score: {confluence_score}/100]"
-            elif confluence_score >= 50:
+                reason = f"Closed above Range Top ({range_top_val:.2f})" + (" & PDH" if above_pdh else " + VWAP")
+            elif total_pts >= 50:
                 ignition_state = "RANGE_BREAKOUT_LONG"
                 tier_label = "TIER-2 EARLY SCALP"
-                reason = f"Closed above Range Top ({range_top_val:.2f}) with VWAP alignment [Score: {confluence_score}/100]"
+                reason = f"Closed above Range Top ({range_top_val:.2f}) with VWAP alignment"
             else:
                 ignition_state = "MILD_BREAKOUT_LONG"
                 tier_label = "WATCHLIST ONLY"
-                reason = f"Range broke without price/volume confluence [Score: {confluence_score}/100]"
+                reason = f"Range broke without strong price/volume support"
 
         elif broke_bot:
             signal_direction = -1
-            confluence_score += 35
+            pts_range = 35
             if below_pdl:
-                confluence_score += 30
+                pts_pdh_pdl = 30
             if below_vwap:
-                confluence_score += 20
+                pts_vwap = 20
             if has_volume:
-                confluence_score += 15
+                pts_volume = 15
                 
-            if confluence_score >= 65:
+            total_pts = pts_range + pts_pdh_pdl + pts_vwap + pts_volume
+            if total_pts >= 65:
                 ignition_state = "BEARISH_IGNITION"
                 tier_label = "TIER-1 HIGH CONVICTION"
-                reason = f"Closed below Range Bottom ({range_bot_val:.2f})" + (" & PDL" if below_pdl else " - VWAP") + f" [Score: {confluence_score}/100]"
-            elif confluence_score >= 50:
+                reason = f"Closed below Range Bottom ({range_bot_val:.2f})" + (" & PDL" if below_pdl else " - VWAP")
+            elif total_pts >= 50:
                 ignition_state = "RANGE_BREAKDOWN_SHORT"
                 tier_label = "TIER-2 EARLY SCALP"
-                reason = f"Closed below Range Bottom ({range_bot_val:.2f}) with VWAP alignment [Score: {confluence_score}/100]"
+                reason = f"Closed below Range Bottom ({range_bot_val:.2f}) with VWAP alignment"
             else:
                 ignition_state = "MILD_BREAKDOWN_SHORT"
                 tier_label = "WATCHLIST ONLY"
-                reason = f"Range breakdown without price/volume confluence [Score: {confluence_score}/100]"
+                reason = f"Range breakdown without strong price/volume support"
         else:
+            total_pts = 0
             reason = "Inside Range / Normal Consolidation"
+
+        points_breakdown = {
+            "range_breakout_pts": pts_range,
+            "pdh_pdl_pts": pts_pdh_pdl,
+            "vwap_pts": pts_vwap,
+            "volume_pts": pts_volume,
+            "total_score": pts_range + pts_pdh_pdl + pts_vwap + pts_volume
+        }
+        confluence_score = points_breakdown["total_score"]
 
         # 7. Recommended Contract & Risk Management
         strike_step = meta.get("strike_step", 50)
@@ -308,6 +319,7 @@ class RangeDetectorEngine:
             "ignition_state": ignition_state,
             "tier_label": tier_label,
             "confluence_score": confluence_score,
+            "points_breakdown": points_breakdown,
             "signal_direction": signal_direction,
             "reason": reason,
             "recommended_contract": recommended_contract,

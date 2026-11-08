@@ -43,14 +43,14 @@
             FinPlus<span class="text-blue-400">+</span>
           </h1>
           <span class="text-xs px-2.5 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono font-bold">
-            APP-02 • EARLY IGNITION
+            APP-02 • 30M BEST-IN-CLASS
           </span>
           <span class="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono" id="app1-sync-pill">
             Syncing App #1...
           </span>
         </div>
         <p class="text-xs text-slate-400 mt-1">
-          LuxAlgo Range Detector + PDH/PDL Strike Engine | Port <span class="mono text-blue-400 font-bold">:8001</span>
+          LuxAlgo + PDH/PDL Point System | Strict 30-Min Pulse | Port <span class="mono text-blue-400 font-bold">:8001</span>
         </p>
       </div>
     </div>
@@ -73,7 +73,7 @@
       </a>
 
       <button onclick="triggerTestAlert()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition">
-        📲 Test NTFY
+        📲 Test 30m Pulse
       </button>
     </div>
   </header>
@@ -105,10 +105,10 @@
         <div>
           <div class="flex items-center justify-between text-xs mono mb-2">
             <span class="text-emerald-400 font-bold">EARLY IGNITIONS</span>
-            <span class="text-slate-400">NO DELAY</span>
+            <span class="text-slate-400">CLOSED CANDLES</span>
           </div>
           <div class="text-2xl font-extrabold text-emerald-400" id="ignition-count">0 Active</div>
-          <div class="text-xs text-slate-400 mt-1">Crossed Range Top/Bot + PDH/PDL (+0.5%)</div>
+          <div class="text-xs text-slate-400 mt-1">Crossed Range + PDH/PDL (+0.5%)</div>
         </div>
         <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-emerald-300 flex justify-between">
           <span>Early Entry vs +5% Delay</span>
@@ -137,10 +137,10 @@
         <div>
           <div class="flex items-center justify-between text-xs mono mb-2">
             <span class="text-blue-400 font-bold">AIR TRAFFIC CONTROL</span>
-            <span class="text-slate-400">APP #1 VETO GATE</span>
+            <span class="text-slate-400">FAIL-CLOSED (2s)</span>
           </div>
           <div class="text-xl font-extrabold text-white" id="macro-trend-label">Checking...</div>
-          <div class="text-xs text-slate-400 mt-1" id="macro-trend-desc">70% False Breakout Filter</div>
+          <div class="text-xs text-slate-400 mt-1" id="macro-trend-desc">Unified CTI Confluence Gate</div>
         </div>
         <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-blue-300 flex justify-between">
           <span>CTI Score: <b id="macro-cti-val">--</b></span>
@@ -150,15 +150,123 @@
 
     </div>
 
+    <!-- 👑 30-MINUTE BEST-IN-CLASS SELECTION CARD (WITH POINTS BREAKDOWN) -->
+    <div class="glass-card rounded-2xl p-6 border-2 border-blue-500/40 bg-gradient-to-r from-blue-950/40 via-slate-900/80 to-slate-900/80 shadow-2xl relative overflow-hidden">
+      <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-300 text-xl font-bold">
+            👑
+          </div>
+          <div>
+            <h2 class="text-lg font-extrabold text-white flex items-center gap-2">
+              <span>30-Minute Institutional Shortlist</span>
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300">
+                ZERO OVERTRADING
+              </span>
+            </h2>
+            <p class="text-xs text-slate-400 mt-0.5">
+              Filtered to the #1 best setup every 30 mins with explicit points breakdown &amp; trend continuation tracking.
+            </p>
+          </div>
+        </div>
+        <div class="text-xs mono text-slate-400 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800">
+          Next NTFY Pulse: <span class="text-blue-400 font-bold" id="shortlist-interval-clock">30m Cycle Active</span>
+        </div>
+      </div>
+
+      <!-- Shortlist 3-Column Display -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6" id="shortlist-container">
+        
+        <!-- Box 1: Best Index Option -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-index">
+          <div>
+            <div class="flex items-center justify-between text-xs mono mb-2">
+              <span class="text-amber-400 font-bold">👑 BEST INDEX OPTION</span>
+              <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px]" id="idx-cont-badge">NEW STRIKE</span>
+            </div>
+            <div class="text-xl font-extrabold text-white" id="idx-contract-title">SENSEX / NIFTY</div>
+            <div class="text-xs text-slate-400 mt-1" id="idx-spot-desc">Evaluating best risk/reward...</div>
+
+            <!-- Points Breakdown Card -->
+            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
+              <div class="flex justify-between">
+                <span class="text-slate-400">Total Score:</span>
+                <span class="text-amber-400 font-bold" id="idx-total-score">-- / 100</span>
+              </div>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="idx-pts-detail">
+                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              </div>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="idx-risk-rules">
+            SL: 45% Premium | Target: 180%+
+          </div>
+        </div>
+
+        <!-- Box 2: Best Stock Option -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-stock">
+          <div>
+            <div class="flex items-center justify-between text-xs mono mb-2">
+              <span class="text-emerald-400 font-bold">💎 BEST STOCK OPTION</span>
+              <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px]" id="stk-cont-badge">NEW STRIKE</span>
+            </div>
+            <div class="text-xl font-extrabold text-white" id="stk-contract-title">HIGH-TICKET EQUITY</div>
+            <div class="text-xs text-slate-400 mt-1" id="stk-spot-desc">Lot &lt; 500 liquid selection...</div>
+
+            <!-- Points Breakdown Card -->
+            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
+              <div class="flex justify-between">
+                <span class="text-slate-400">Total Score:</span>
+                <span class="text-emerald-400 font-bold" id="stk-total-score">-- / 100</span>
+              </div>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="stk-pts-detail">
+                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              </div>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="stk-risk-rules">
+            SL: Range Opposite | Target: 1:2 R:R
+          </div>
+        </div>
+
+        <!-- Box 3: Best Intraday Cash Stock -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-cash">
+          <div>
+            <div class="flex items-center justify-between text-xs mono mb-2">
+              <span class="text-blue-400 font-bold">📈 INTRADAY CASH STOCK</span>
+              <span class="px-2 py-0.5 rounded bg-blue-950 text-blue-300 text-[10px]">EQUITY CASH</span>
+            </div>
+            <div class="text-xl font-extrabold text-white" id="cash-symbol-title">EQUITY SELECTION</div>
+            <div class="text-xs text-slate-400 mt-1" id="cash-spot-desc">Highest momentum confirmation...</div>
+
+            <!-- Points Breakdown Card -->
+            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
+              <div class="flex justify-between">
+                <span class="text-slate-400">Momentum Score:</span>
+                <span class="text-blue-400 font-bold" id="cash-total-score">-- / 100</span>
+              </div>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="cash-pts-detail">
+                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              </div>
+            </div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="cash-risk-rules">
+            Square-off at 15:15 IST
+          </div>
+        </div>
+
+      </div>
+    </div>
+
     <!-- Scanner Master Table -->
     <div class="glass-card rounded-2xl overflow-hidden border border-slate-800 shadow-2xl">
       <div class="p-4 bg-slate-900/80 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
         <div class="flex items-center gap-3">
           <h2 class="text-sm font-bold uppercase tracking-wider text-white mono flex items-center gap-2">
-            <span>🎯</span> Early Ignition Options Radar (20 Tracked Instruments)
+            <span>🎯</span> Early Ignition Options Radar (Dynamic NSE F&amp;O Master)
           </h2>
           <span class="text-[11px] mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-            Stocks Lot &lt; 500 + Reliance
+            Official Lot Sizes &lt;= 500
           </span>
         </div>
         <div class="text-xs mono text-slate-400 flex items-center gap-2">
@@ -174,6 +282,7 @@
               <th class="py-3 px-4">Spot LTP &amp; Move</th>
               <th class="py-3 px-4">LuxAlgo Range</th>
               <th class="py-3 px-4">Key Levels (PDH / PDL)</th>
+              <th class="py-3 px-4">Score &amp; Breakdown</th>
               <th class="py-3 px-4">Ignition Status</th>
               <th class="py-3 px-4">App #1 Gate</th>
               <th class="py-3 px-4">Recommended Strike &amp; SL</th>
@@ -181,8 +290,8 @@
           </thead>
           <tbody id="scanner-tbody" class="divide-y divide-slate-800/60 font-mono">
             <tr>
-              <td colspan="7" class="py-8 text-center text-slate-500">
-                Initializing LuxAlgo Range Engine and downloading 15m historical candles...
+              <td colspan="8" class="py-8 text-center text-slate-500">
+                Initializing LuxAlgo Range Engine and loading official NSE F&amp;O contracts...
               </td>
             </tr>
           </tbody>
@@ -214,6 +323,7 @@
         
         renderTable(data.results || []);
         updateCards(data.results || []);
+        renderShortlist(data.shortlist || {});
       } catch (err) {
         console.error('Fetch error:', err);
       }
@@ -232,7 +342,6 @@
           document.getElementById('macro-veto-badge').textContent = r.trend.is_divergence ? '⚠️ Divergence Veto' : 'Confluence Clear';
         }
       } catch (e) {
-        // Fallback to Render cloud
         try {
           const res2 = await fetch('https://finplus-index-breadth.onrender.com/api/regime');
           if (res2.ok) {
@@ -243,6 +352,64 @@
             document.getElementById('macro-cti-val').textContent = r2.trend.score_label || (r2.trend.score + ' / 100');
           }
         } catch (e2) {}
+      }
+    }
+
+    function renderShortlist(shortlist) {
+      const idx = shortlist.best_index_option;
+      const stk = shortlist.best_stock_option;
+      const cash = shortlist.best_intraday_stock;
+
+      // 1. Index Option
+      if (idx) {
+        document.getElementById('idx-contract-title').textContent = idx.recommended_contract || idx.symbol;
+        document.getElementById('idx-spot-desc').textContent = `Spot: ₹${idx.last_price} (${idx.pct_change_pdc > 0 ? '+' : ''}${idx.pct_change_pdc}%)`;
+        document.getElementById('idx-total-score').textContent = `${idx.confluence_score} / 100`;
+        const p = idx.points_breakdown || {};
+        document.getElementById('idx-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
+        if (idx.is_continuation) {
+          document.getElementById('idx-cont-badge').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
+          document.getElementById('idx-cont-badge').textContent = '🔄 TREND CONTINUATION';
+        } else {
+          document.getElementById('idx-cont-badge').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
+          document.getElementById('idx-cont-badge').textContent = '🎯 NEW STRIKE';
+        }
+      } else {
+        document.getElementById('idx-contract-title').textContent = 'HOLD CASH';
+        document.getElementById('idx-spot-desc').textContent = 'No index setup reached 50+ score';
+        document.getElementById('idx-total-score').textContent = '0 / 100';
+      }
+
+      // 2. Stock Option
+      if (stk) {
+        document.getElementById('stk-contract-title').textContent = stk.recommended_contract || stk.symbol;
+        document.getElementById('stk-spot-desc').textContent = `${stk.symbol} (Lot: ${stk.lot_size}) | Spot: ₹${stk.last_price} (${stk.pct_change_pdc > 0 ? '+' : ''}${stk.pct_change_pdc}%)`;
+        document.getElementById('stk-total-score').textContent = `${stk.confluence_score} / 100`;
+        const p = stk.points_breakdown || {};
+        document.getElementById('stk-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
+        if (stk.is_continuation) {
+          document.getElementById('stk-cont-badge').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
+          document.getElementById('stk-cont-badge').textContent = '🔄 TREND CONTINUATION';
+        } else {
+          document.getElementById('stk-cont-badge').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
+          document.getElementById('stk-cont-badge').textContent = '💎 NEW STRIKE';
+        }
+      } else {
+        document.getElementById('stk-contract-title').textContent = 'HOLD CASH';
+        document.getElementById('stk-spot-desc').textContent = 'No stock option cleared confluence gate';
+        document.getElementById('stk-total-score').textContent = '0 / 100';
+      }
+
+      // 3. Intraday Cash
+      if (cash) {
+        document.getElementById('cash-symbol-title').textContent = cash.symbol;
+        document.getElementById('cash-spot-desc').textContent = `LTP: ₹${cash.last_price} | Day Move: ${cash.pct_change_pdc > 0 ? '+' : ''}${cash.pct_change_pdc}%`;
+        document.getElementById('cash-total-score').textContent = `${cash.confluence_score} / 100`;
+        const p = cash.points_breakdown || {};
+        document.getElementById('cash-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
+      } else {
+        document.getElementById('cash-symbol-title').textContent = 'STANDBY';
+        document.getElementById('cash-spot-desc').textContent = 'Awaiting clean breakout setup';
       }
     }
 
@@ -273,7 +440,7 @@
     function renderTable(results) {
       const tbody = document.getElementById('scanner-tbody');
       if (!results || results.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="py-8 text-center text-slate-500">No instruments returned.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-slate-500">No instruments returned.</td></tr>';
         return;
       }
 
@@ -290,9 +457,9 @@
         } else if (r.is_coiling) {
           stateBadge = `<span class="px-2 py-0.5 rounded bg-purple-950 border border-purple-500 text-purple-300">⚡ COILING SQUEEZE</span>`;
         } else if (r.ignition_state === 'RANGE_BREAKOUT_LONG') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400">BREAKOUT LONG</span>`;
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400">TIER-2 SCALP LONG</span>`;
         } else if (r.ignition_state === 'RANGE_BREAKDOWN_SHORT') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 text-rose-400">BREAKDOWN SHORT</span>`;
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 text-rose-400">TIER-2 SCALP SHORT</span>`;
         }
 
         const moveColor = r.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
@@ -306,6 +473,17 @@
             gateBadge = `<span class="text-rose-400 font-bold">🛑 VETOED</span>`;
           }
         }
+
+        // Score Badge with points breakdown
+        const score = r.confluence_score || 0;
+        const scoreColor = score >= 65 ? 'text-emerald-400 border-emerald-500 bg-emerald-950/60' : (score >= 50 ? 'text-blue-400 border-blue-500 bg-blue-950/60' : 'text-slate-500 border-slate-800 bg-slate-900/60');
+        const pts = r.points_breakdown || {};
+        const scoreHtml = `
+          <div>
+            <span class="px-2 py-0.5 rounded border ${scoreColor} font-bold">${score} / 100</span>
+            <div class="text-[9px] text-slate-500 mt-1">R:${pts.range_breakout_pts || 0} P:${pts.pdh_pdl_pts || 0} V:${pts.vwap_pts || 0}</div>
+          </div>
+        `;
 
         let strikeHtml = `<span class="text-slate-500">—</span>`;
         if (r.recommended_contract) {
@@ -332,6 +510,7 @@
               <div>PDL: <span class="text-slate-300">₹${r.pdl}</span></div>
               <div class="text-[10px] text-blue-400">VWAP: ₹${r.vwap}</div>
             </td>
+            <td class="py-3 px-4">${scoreHtml}</td>
             <td class="py-3 px-4">${stateBadge}</td>
             <td class="py-3 px-4">${gateBadge}</td>
             <td class="py-3 px-4">${strikeHtml}</td>
@@ -349,7 +528,7 @@
     async function triggerTestAlert() {
       const res = await fetch('/api/trigger-test-alert', { method: 'POST' });
       const data = await res.json();
-      alert(data.status === 'SUCCESS' ? 'Test alert sent to ntfy.sh/Finplus-Delta!' : 'Failed sending alert.');
+      alert(data.status === 'SUCCESS' ? '30m Shortlist Pulse dispatched to ntfy.sh/Finplus-Delta!' : 'Failed dispatching pulse.');
     }
 
     loadData();
