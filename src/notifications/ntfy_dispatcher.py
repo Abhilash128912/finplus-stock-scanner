@@ -7,8 +7,7 @@ Intraday Cash BUY / SELL directives.
 
 import os
 import time
-import urllib.request
-import urllib.error
+import requests
 import json
 from typing import Dict, Any, List, Optional
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
@@ -120,7 +119,7 @@ class NTFYDispatcher:
                 
             url = f"https://ntfy.sh/{topic}"
             headers = {
-                "Title": title.encode('utf-8'),
+                "Title": title,
                 "Priority": "4",
                 "Tags": "chart_with_upwards_trend,dart,moneybag",
                 "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
@@ -129,19 +128,18 @@ class NTFYDispatcher:
             # Send with single retry on 429
             for attempt in range(2):
                 try:
-                    req = urllib.request.Request(url, data=message.encode('utf-8'), headers=headers, method="POST")
-                    with urllib.request.urlopen(req, timeout=5) as resp:
-                        if resp.status == 200:
-                            logger.info(f"30m pulse delivered to '{topic}'")
-                            success = True
-                            break
-                except urllib.error.HTTPError as he:
-                    if he.code == 429 and attempt == 0:
+                    resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        logger.info(f"30m pulse delivered to '{topic}'")
+                        success = True
+                        break
+                    elif resp.status_code == 429 and attempt == 0:
                         logger.warning(f"ntfy.sh rate limit (429) on '{topic}'. Waiting 2s before retry...")
                         time.sleep(2.0)
                         continue
-                    logger.error(f"Failed delivering pulse to '{topic}': HTTP Error {he.code}")
-                    break
+                    else:
+                        logger.error(f"Failed delivering pulse to '{topic}': HTTP {resp.status_code}")
+                        break
                 except Exception as e:
                     logger.error(f"Failed delivering pulse to '{topic}': {e}")
                     break
