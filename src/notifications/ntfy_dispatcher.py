@@ -5,19 +5,29 @@ Transmits explicit Call (CE) vs Put (PE) strike setups, and explicit
 Intraday Cash BUY / SELL directives.
 """
 
+import os
 import time
 import urllib.request
+import urllib.error
 import json
 from typing import Dict, Any, List, Optional
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
 
 logger = setup_logger("NTFYDispatcher")
 
-NTFY_TOPICS = ["Finplus-Delta", "Finplus-Breadth"]
+DEFAULT_TOPICS = ["Finplus-Delta"]
 
 class NTFYDispatcher:
-    def __init__(self, topics: List[str] = NTFY_TOPICS, min_interval_seconds: int = 1800):
-        self.topics = topics
+    def __init__(self, topics: Optional[List[str]] = None, min_interval_seconds: int = 1800):
+        # Prefer environment variable NTFY_TOPIC if provided
+        env_topic = os.getenv("NTFY_TOPIC")
+        if env_topic:
+            self.topics = [env_topic.strip()]
+        elif topics:
+            self.topics = topics
+        else:
+            self.topics = DEFAULT_TOPICS
+            
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
 
@@ -102,21 +112,38 @@ class NTFYDispatcher:
         title = f"👑 FinPlus+ 30m Pulse: Strike Directives ({ist_time})"
         
         success = False
-        for topic in self.topics:
+        cockpit_url = os.getenv("RENDER_EXTERNAL_URL", "https://finplus-stock-scanner.onrender.com" if os.getenv("FINPLUS_ENVIRONMENT") == "production" else "http://127.0.0.1:8001")
+        
+        for idx, topic in enumerate(self.topics):
+            if idx > 0:
+                time.sleep(1.5)  # Pace multi-topic requests
+                
             url = f"https://ntfy.sh/{topic}"
             headers = {
                 "Title": title.encode('utf-8'),
                 "Priority": "4",
                 "Tags": "chart_with_upwards_trend,dart,moneybag",
-                "Actions": "view, Open Scanner Cockpit, http://127.0.0.1:8001"
+                "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
             }
-            try:
-                req = urllib.request.Request(url, data=message.encode('utf-8'), headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    if resp.status == 200:
-                        logger.info(f"30m pulse delivered to '{topic}'")
-                        success = True
-            except Exception as e:
-                logger.error(f"Failed delivering pulse to '{topic}': {e}")
+            
+            # Send with single retry on 429
+            for attempt in range(2):
+                try:
+                    req = urllib.request.Request(url, data=message.encode('utf-8'), headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        if resp.status == 200:
+                            logger.info(f"30m pulse delivered to '{topic}'")
+                            success = True
+                            break
+                except urllib.error.HTTPError as he:
+                    if he.code == 429 and attempt == 0:
+                        logger.warning(f"ntfy.sh rate limit (429) on '{topic}'. Waiting 2s before retry...")
+                        time.sleep(2.0)
+                        continue
+                    logger.error(f"Failed delivering pulse to '{topic}': HTTP Error {he.code}")
+                    break
+                except Exception as e:
+                    logger.error(f"Failed delivering pulse to '{topic}': {e}")
+                    break
                 
         return success
