@@ -22,8 +22,8 @@ class ScannerScheduler:
         self.feed = MarketDataFeed(
             cache_ttl_seconds=60,
             max_lot_size=500,
-            top_n_fno_stocks=20,
-            top_n_cash_stocks=30
+            top_n_fno_stocks=50,
+            top_n_cash_stocks=750
         )
         self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=500)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
@@ -34,6 +34,7 @@ class ScannerScheduler:
         self.latest_shortlist: Dict[str, Any] = {}
         self.last_scan_utc: str = get_utc_iso()
         self.is_running: bool = False
+        self._last_briefing_date: str = ""
 
     def scan_universe_now(self) -> List[Dict[str, Any]]:
         """Scans all dynamic universe items synchronously (runs in worker pool)."""
@@ -90,6 +91,15 @@ class ScannerScheduler:
         
         while self.is_running:
             try:
+                # 09:00 AM IST Daily Tactical Morning Briefing Check
+                from datetime import datetime, timezone, timedelta
+                ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+                today_str = ist_now.strftime("%Y-%m-%d")
+                if ist_now.hour == 9 and ist_now.minute < 15 and self._last_briefing_date != today_str:
+                    self._last_briefing_date = today_str
+                    logger.info("Triggering 09:00 AM IST Daily Tactical Morning Briefing...")
+                    self.dispatcher.send_morning_tactical_briefing()
+
                 sleep_secs = 60 if is_market_open_ist() else 180
                 await asyncio.sleep(sleep_secs)
                 await asyncio.to_thread(self.scan_universe_now)

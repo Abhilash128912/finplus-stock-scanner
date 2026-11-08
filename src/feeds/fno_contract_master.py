@@ -45,6 +45,19 @@ INDEX_SPECS = [
         "target_gain_pct": 60.0,
         "strike_step": 50,
         "lot_size": 65 # Revised official SEBI lot
+    },
+    {
+        "symbol": "MIDCPNIFTY",
+        "name": "Nifty Midcap Select",
+        "exchange": "NSE",
+        "yf_ticker": "^NSEMDCP50",
+        "importance": "HIGH_SWING",
+        "category": "INDEX_OPTIONS",
+        "capital_tier": "SWING_ACCUMULATION",
+        "max_sl_premium_pct": 60.0,
+        "target_gain_pct": 160.0,
+        "strike_step": 25,
+        "lot_size": 75
     }
 ]
 

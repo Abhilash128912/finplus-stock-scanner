@@ -23,8 +23,8 @@ class MarketDataFeed:
         self,
         cache_ttl_seconds: int = 60,
         max_lot_size: int = 500,
-        top_n_fno_stocks: int = 20,
-        top_n_cash_stocks: int = 30,
+        top_n_fno_stocks: int = 50,
+        top_n_cash_stocks: int = 750,
     ):
         self.cache_ttl = cache_ttl_seconds
         

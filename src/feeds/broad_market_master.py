@@ -45,10 +45,10 @@ class BroadMarketMaster:
         self._universe: List[Dict[str, Any]] = []
         self.last_load_utc: Optional[str] = None
 
-    def load_universe(self, top_n_liquid: int = 50) -> List[Dict[str, Any]]:
+    def load_universe(self, top_n_liquid: int = 750) -> List[Dict[str, Any]]:
         """
         Loads, filters for quality anti-circuit safety, ranks by liquidity,
-        and returns the top N most liquid cash candidates.
+        and returns the top N (default 750) broad market cash candidates.
         """
         stocks = self._load_quality_from_excel(top_n_liquid)
 
@@ -59,7 +59,7 @@ class BroadMarketMaster:
         self._universe = stocks
         self.last_load_utc = get_utc_iso()
         logger.info(
-            f"Loaded {len(self._universe)} high-liquidity, anti-circuit intraday cash stocks "
+            f"Loaded {len(self._universe)} broad market intraday cash stocks "
             f"(Min Price: ₹{self.min_price}, Min Turnover: ₹{self.min_turnover_cr} Cr)."
         )
         return self._universe
@@ -102,10 +102,17 @@ class BroadMarketMaster:
 
             # Rank by institutional traded turnover (highest liquidity first)
             quality_df.sort_values(by="turnover_cr", ascending=False, inplace=True)
-            selected_df = quality_df.head(top_n)
+            
+            # If high-turnover count < top_n, add remaining symbols from broad list to reach top_n
+            remaining_needed = top_n - len(quality_df)
+            if remaining_needed > 0:
+                other_valid = valid[~valid.index.isin(quality_df.index)].sort_values(by="turnover_cr", ascending=False)
+                combined_df = pd.concat([quality_df, other_valid.head(remaining_needed)])
+            else:
+                combined_df = quality_df.head(top_n)
 
             items = []
-            for _, row in selected_df.iterrows():
+            for _, row in combined_df.iterrows():
                 sym = str(row["Symbol"]).strip().upper()
                 name = str(row.get("Stock Name", sym)).strip()
                 turnover = float(row.get("turnover_cr", 0.0))
@@ -117,7 +124,7 @@ class BroadMarketMaster:
                     "exchange": "NSE",
                     "yf_ticker": f"{sym}.NS",
                     "category": "INTRADAY_CASH",
-                    "importance": "HIGH_LIQUIDITY_CASH",
+                    "importance": "BROAD_MARKET_CASH",
                     "capital_tier": "EQUITY_CASH",
                     "max_sl_premium_pct": 1.5,
                     "target_gain_pct": 3.0,

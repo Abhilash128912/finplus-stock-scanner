@@ -73,14 +73,14 @@ class ShortlistEngine:
             stock_option_standby_reason = "All liquid F&O scrips are consolidating inside range bands. No breakout active."
         
         # -------------------------------------------------------------
-        # 2. INTRADAY CASH: STRICT MARKET CONDITION & ANTI-CIRCUIT FILTER
-        # Must be: Broad Market + Score >= 50 + APPROVED by App #1 + Anti-Circuit Safe
+        # 2. INTRADAY CASH: 750 BROAD MARKET CROWN HERO FILTER (SCORE >= 80)
+        # Must be: High turnover (> ₹15 Cr), anti-circuit safe, score >= 80 + APPROVED by App #1
         # -------------------------------------------------------------
         approved_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
             and r.get("signal_direction", 0) != 0
-            and r.get("confluence_score", 0) >= 50
+            and r.get("confluence_score", 0) >= 80
             and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
             and r.get("anti_circuit_status") == "SAFE"
         ]
@@ -89,21 +89,24 @@ class ShortlistEngine:
         approved_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
         best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
         
-        # Find top cash candidate on watch if gated by market conditions
+        # Find top cash candidate on watch if gated by score < 80 or market conditions
         coiled_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
             and r.get("signal_direction", 0) != 0
-            and r.get("confluence_score", 0) >= 50
             and r.get("anti_circuit_status") == "SAFE"
         ]
         coiled_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
         top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
         
         if top_watch_cash:
-            cash_standby_reason = f"Market Choppy: Top setup {top_watch_cash['symbol']} scored {top_watch_cash.get('confluence_score')}/100, but index heavyweights ({heavyweights} above VWAP) lack thrust. Holding cash to avoid false intraday breakout."
+            top_score = top_watch_cash.get('confluence_score', 0)
+            if top_score < 80:
+                cash_standby_reason = f"Capital Safeguard Active: Top candidate {top_watch_cash['symbol']} scored {top_score}/100 (below strict 80/100 threshold). HOLD CASH to protect capital."
+            else:
+                cash_standby_reason = f"Market Choppy: Top setup {top_watch_cash['symbol']} scored {top_score}/100, but index heavyweights ({heavyweights} above VWAP) lack thrust. Holding cash to avoid false intraday breakout."
         else:
-            cash_standby_reason = "All broad-market equities are inside range bands. Awaiting fresh breakout."
+            cash_standby_reason = "All 750 broad-market equities are inside range bands. Awaiting fresh breakout."
             
         # Detect Trend Continuation vs Previous 30m Cycle for Stock Option
         stock_continuation = False

@@ -130,3 +130,13 @@ async def trigger_test_alert():
         "payload": shortlist,
         "timestamp_utc": get_utc_iso()
     }
+
+@app.post("/api/briefing/test")
+async def trigger_briefing_test():
+    delivered = scheduler.dispatcher.send_morning_tactical_briefing(force=True)
+    return {
+        "status": "SUCCESS" if delivered else "FAILED",
+        "message": "09:00 AM Tactical Morning Briefing dispatched.",
+        "topics": scheduler.dispatcher.topics,
+        "timestamp_utc": get_utc_iso()
+    }
