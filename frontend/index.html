@@ -136,6 +136,10 @@
                 <span>Range Top: <span class="text-slate-300" id="sensex-rtop">--</span></span>
                 <span>Range Bot: <span class="text-slate-300" id="sensex-rbot">--</span></span>
               </div>
+              <div class="flex justify-between text-[10px] text-slate-400 pt-0.5">
+                <span>15m 50 EMA:</span>
+                <span class="font-bold text-amber-300" id="sensex-ema50">₹-- (--%)</span>
+              </div>
             </div>
 
             <!-- Directive description -->
@@ -177,6 +181,10 @@
               <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900">
                 <span>Range Top: <span class="text-slate-300" id="nifty-rtop">--</span></span>
                 <span>Range Bot: <span class="text-slate-300" id="nifty-rbot">--</span></span>
+              </div>
+              <div class="flex justify-between text-[10px] text-slate-400 pt-0.5">
+                <span>15m 50 EMA:</span>
+                <span class="font-bold text-blue-300" id="nifty-ema50">₹-- (--%)</span>
               </div>
             </div>
 
@@ -418,6 +426,9 @@
         
         document.getElementById('sensex-rtop').textContent = `₹${sx.range_top || '--'}`;
         document.getElementById('sensex-rbot').textContent = `₹${sx.range_bottom || '--'}`;
+        const sxDist = sx.ema50_dist_pct > 0 ? `+${sx.ema50_dist_pct}%` : `${sx.ema50_dist_pct}%`;
+        document.getElementById('sensex-ema50').textContent = sx.ema50 ? `₹${sx.ema50.toLocaleString('en-IN')} (${sxDist})` : '₹--';
+        document.getElementById('sensex-ema50').className = sx.last_price > sx.ema50 ? 'font-bold text-emerald-400' : 'font-bold text-rose-400';
         
         const pill = document.getElementById('sensex-action-pill');
         const strikeEl = document.getElementById('sensex-strike-name');
@@ -450,6 +461,9 @@
         
         document.getElementById('nifty-rtop').textContent = `₹${nf.range_top || '--'}`;
         document.getElementById('nifty-rbot').textContent = `₹${nf.range_bottom || '--'}`;
+        const nfDist = nf.ema50_dist_pct > 0 ? `+${nf.ema50_dist_pct}%` : `${nf.ema50_dist_pct}%`;
+        document.getElementById('nifty-ema50').textContent = nf.ema50 ? `₹${nf.ema50.toLocaleString('en-IN')} (${nfDist})` : '₹--';
+        document.getElementById('nifty-ema50').className = nf.last_price > nf.ema50 ? 'font-bold text-emerald-400' : 'font-bold text-rose-400';
         
         const pill = document.getElementById('nifty-action-pill');
         const strikeEl = document.getElementById('nifty-strike-name');
@@ -491,7 +505,7 @@
         document.getElementById('stk-opt-spot-line').textContent = `${stk.symbol} (Lot: ${stk.lot_size}) | Spot: ₹${stk.last_price} (${stk.pct_change_pdc > 0 ? '+' : ''}${stk.pct_change_pdc}%)`;
         document.getElementById('stk-opt-score').textContent = `${stk.confluence_score} / 100`;
         const p = stk.points_breakdown || {};
-        document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
+        document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>EMA50: ${p.ema50_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
         
         if (stk.is_continuation) {
           document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
@@ -606,9 +620,12 @@
         const scoreHtml = `
           <div>
             <span class="px-2 py-0.5 rounded border ${scoreColor} font-bold">${score} / 100</span>
-            <div class="text-[9px] text-slate-500 mt-1">R:${pts.range_breakout_pts || 0} P:${pts.pdh_pdl_pts || 0} V:${pts.vwap_pts || 0} Vol:${pts.volume_pts || 0}</div>
+            <div class="text-[9px] text-slate-500 mt-1">R:${pts.range_breakout_pts || 0} E:${pts.ema50_pts || 0} P:${pts.pdh_pdl_pts || 0} V:${pts.vwap_pts || 0}</div>
           </div>
         `;
+
+        const emaDistStr = r.ema50_dist_pct > 0 ? `+${r.ema50_dist_pct}%` : `${r.ema50_dist_pct}%`;
+        const emaColor = r.above_ema50 ? 'text-emerald-400' : 'text-rose-400';
 
         html += `
           <tr class="hover:bg-slate-900/60 transition">
@@ -627,9 +644,9 @@
             <td class="py-3 px-4">${cashActionHtml}</td>
             <td class="py-3 px-4">${scoreHtml}</td>
             <td class="py-3 px-4 text-[11px]">
-              <div>PDH: <span class="text-slate-300">₹${r.pdh}</span></div>
-              <div>PDL: <span class="text-slate-300">₹${r.pdl}</span></div>
+              <div>PDH: <span class="text-slate-300">₹${r.pdh}</span> | PDL: <span class="text-slate-300">₹${r.pdl}</span></div>
               <div class="text-[10px] text-blue-400">VWAP: ₹${r.vwap}</div>
+              <div class="text-[10px] ${emaColor} font-bold">50 EMA: ₹${r.ema50 || '--'} (${emaDistStr})</div>
             </td>
             <td class="py-3 px-4">${gateBadge}</td>
           </tr>

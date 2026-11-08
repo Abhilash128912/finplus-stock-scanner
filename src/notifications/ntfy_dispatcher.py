@@ -44,7 +44,7 @@ class NTFYDispatcher:
         
         # 1. SENSEX 30 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
         lines.append(f"👑 **BSE SENSEX 30 OPTIONS (HIGH PRIORITY):**")
-        lines.append(f"• **Spot LTP:** `₹{sx.get('last_price', '--')}` ({sx.get('pct_change_pdc', 0):+0.2f}%)")
+        lines.append(f"• **Spot LTP:** `₹{sx.get('last_price', '--')}` ({sx.get('pct_change_pdc', 0):+0.2f}%) | **50 EMA:** `₹{sx.get('ema50', '--')}` ({sx.get('ema50_dist_pct', 0):+0.2f}%)")
         if sx.get("is_actionable") and sx.get("recommended_strike"):
             lines.append(f"• **CONFIRMED STRIKE:** `{sx.get('recommended_strike')}`")
             lines.append(f"• **ACTION:** `{sx.get('action_badge')}`")
@@ -56,7 +56,7 @@ class NTFYDispatcher:
         
         # 2. NIFTY 50 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
         lines.append(f"🎯 **NSE NIFTY 50 OPTIONS:**")
-        lines.append(f"• **Spot LTP:** `₹{nf.get('last_price', '--')}` ({nf.get('pct_change_pdc', 0):+0.2f}%)")
+        lines.append(f"• **Spot LTP:** `₹{nf.get('last_price', '--')}` ({nf.get('pct_change_pdc', 0):+0.2f}%) | **50 EMA:** `₹{nf.get('ema50', '--')}` ({nf.get('ema50_dist_pct', 0):+0.2f}%)")
         if nf.get("is_actionable") and nf.get("recommended_strike"):
             lines.append(f"• **CONFIRMED STRIKE:** `{nf.get('recommended_strike')}`")
             lines.append(f"• **ACTION:** `{nf.get('action_badge')}`")
@@ -71,6 +71,7 @@ class NTFYDispatcher:
         if stk:
             lines.append(f"• **CONFIRMED CONTRACT:** `{stk.get('recommended_contract')}` (Lot: `{stk.get('lot_size')}` | Spot: `₹{stk.get('last_price')}`)")
             lines.append(f"• **ACTION:** `{stk.get('option_action_badge')}`")
+            lines.append(f"• **50 EMA Alignment:** `₹{stk.get('ema50')}` ({stk.get('ema50_dist_pct', 0):+0.2f}% confirmed)")
             lines.append(f"• **Score:** `{stk.get('confluence_score')}/100`")
             risk = stk.get("risk_management", {})
             if "underlying_sl" in risk:
@@ -84,6 +85,7 @@ class NTFYDispatcher:
         lines.append("📈 **BEST INTRADAY CASH RUNNER (BROAD MARKET QUALITY):**")
         if cash:
             lines.append(f"• **ACTION:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
+            lines.append(f"• **50 EMA Alignment:** `₹{cash.get('ema50')}` ({cash.get('ema50_dist_pct', 0):+0.2f}% confirmed)")
             lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
             lines.append(f"• **Safety:** Anti-Circuit Verified (Turnover > ₹15 Cr, Zero Freeze Risk)")
             lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | **Regime Gate:** `{cash.get('regime_badge')}`")

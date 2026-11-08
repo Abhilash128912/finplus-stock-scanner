@@ -198,6 +198,8 @@ class ShortlistEngine:
             "range_top": item.get("range_top", 0.0),
             "range_bottom": item.get("range_bottom", 0.0),
             "vwap": item.get("vwap", 0.0),
+            "ema50": item.get("ema50", 0.0),
+            "ema50_dist_pct": item.get("ema50_dist_pct", 0.0),
             "signal_direction": sig_dir,
             "recommended_strike": recommended_strike,
             "call_strike": call_strike,
