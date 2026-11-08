@@ -1,0 +1,9 @@
+# Git Ignore for FinPlus+ Stock Scanner (APP-02)
+.env
+*.env
+config/.env
+logs/
+*.log
+__pycache__/
+*.pyc
+.pytest_cache/

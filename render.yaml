@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: finplus-stock-scanner
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn src.api.server:app --host 0.0.0.0 --port $PORT
+    plan: free
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: FINPLUS_ENVIRONMENT
+        value: production
+      - key: NTFY_TOPIC
+        value: Finplus-Delta
+      - key: INDMONEY_CLIENT_ID
+        sync: false
+      - key: INDMONEY_TOTP_SECRET
+        sync: false
+      - key: INDMONEY_MPIN
+        sync: false
+      - key: INDMONEY_ACCESS_TOKEN
+        sync: false
