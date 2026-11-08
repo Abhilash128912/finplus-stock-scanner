@@ -153,10 +153,11 @@ class NTFYDispatcher:
                 
         return success
 
-    def send_morning_tactical_briefing(self, force: bool = False) -> bool:
+    def send_morning_tactical_briefing(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
         """
         Dispatches the 09:00 AM IST Daily Tactical Morning Briefing.
-        Eliminates ledger lookup by proactively declaring which segments are tradable today.
+        Eliminates ledger lookup by proactively declaring which segments are tradable today,
+        incorporating live market shortlist suggestions and dynamic wallet milestones.
         """
         from datetime import datetime, timezone, timedelta
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -197,6 +198,14 @@ class NTFYDispatcher:
         lines.append("• **Focus:** Single #1 Crown Hero breakout (Conviction score ≥ 80/100).")
         lines.append("• **Capital:** Deploy full ₹7,750 pool with 5x MIS leverage (~₹38,750 buying power).")
         lines.append("• **Rule:** If no stock scores ≥ 80, system orders HOLD CASH.")
+        if shortlist:
+            best_cash = shortlist.get("best_intraday_stock", {})
+            if best_cash and best_cash.get("symbol") and best_cash.get("symbol") != "NONE":
+                score = best_cash.get("confluence_score", 0)
+                status_txt = "🔥 QUALIFIED" if score >= 80 else "⚠️ WATCH ONLY (Score < 80)"
+                lines.append(f"• **Top Candidate:** `{best_cash.get('symbol')}` | Score: `{score}/100` ({status_txt})")
+            else:
+                lines.append("• **Status:** Scanning 750 broad market candidates at 09:15 open.")
         lines.append("")
         
         # 2. Sensex Asymmetric (Tuesdays & Thursdays only)
@@ -206,6 +215,10 @@ class NTFYDispatcher:
             lines.append("• **Budget:** Outlay strictly < ₹500.")
             lines.append("• **Stop Loss:** Hard 75% max-loss cut.")
             lines.append("• **Gate:** Only enter if App #1 CTI confirms trend (Score ≥ +40 or ≤ -40).")
+            if shortlist:
+                sx = shortlist.get("sensex_radar", {})
+                if sx and sx.get("symbol"):
+                    lines.append(f"• **Radar Strike:** `{sx.get('symbol')}` @ ~₹{sx.get('entry_price', 0):.2f} (App #1: {sx.get('regime_badge', 'N/A')})")
         else:
             lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Tuesdays & Thursdays).")
         lines.append("")
@@ -221,18 +234,47 @@ class NTFYDispatcher:
             lines.append(f"• **Status:** ⏸️ `STANDBY` (Active only on Tuesdays & Thursdays).")
         lines.append("")
         
-        # 4. MCX Commodities (Evening Session)
-        lines.append("🛢️ **4. MCX COMMODITIES (Crude Mini / NatGas Mini / Gold Petal):**")
+        # 4. Nifty 50 Benchmark Setup
+        if shortlist:
+            nf = shortlist.get("nifty_radar", {})
+            if nf and nf.get("symbol"):
+                lines.append("📈 **4. NIFTY 50 RADAR SETUP:**")
+                lines.append(f"• **Candidate:** `{nf.get('symbol')}` @ ~₹{nf.get('entry_price', 0):.2f} (SL: ~₹{nf.get('stop_loss', 0):.2f})")
+                lines.append(f"• **Confluence:** {nf.get('regime_badge', 'N/A')}")
+                lines.append("")
+
+        # 5. MCX Commodities (Evening Session)
+        lines.append("🛢️ **5. MCX COMMODITIES (Crude Mini / NatGas Mini / Gold Petal):**")
         lines.append("• **Session Window:** 17:00 – 23:30 IST (Prime US Window: 18:00–21:30).")
-        lines.append("• **Status:** Active via App #3 Priority Engine.")
+        lines.append("• **Priority Engine:** App #3 signals Crude Mini (10 Bbl), NatGas Mini (250 mmBtu), Gold Petal (1g).")
         if day_name == "Wednesday":
             lines.append("• ⚠️ **EIA Alert:** US Crude Oil Inventories release tonight at 20:00 IST! Shield active.")
         elif day_name == "Thursday":
             lines.append("• ⚠️ **EIA Alert:** US Natural Gas Storage report release tonight at 20:00 IST! Shield active.")
         lines.append("")
         
-        # 5. 4-Hour Timeframe Checks
-        lines.append("💎 **5. 4-HOUR PENNY (< ₹50, Zero Debt) & LONG-TERM:**")
+        # 6. Dynamic Live Wallet Milestones (queried from App #4 Journal)
+        try:
+            resp = requests.get("http://127.0.0.1:8003/api/wallets", timeout=1.5)
+            if resp.status_code == 200:
+                w_data = resp.json().get("wallets", [])
+                unlocked = [w for w in w_data if w.get("is_unlocked")]
+                accumulating = [w for w in w_data if not w.get("is_unlocked")]
+                lines.append("🏦 **LIVE WALLET MILESTONES & CAPITAL STATUS:**")
+                if unlocked:
+                    for uw in unlocked:
+                        lines.append(f"• 🎉 **{uw['display_name']}**: `UNLOCKED` (₹{uw['balance']:,.2f} ≥ ₹{uw['target_threshold']:,.2f}) - Ready to trade!")
+                else:
+                    lines.append("• All 5 Target Wallets actively accumulating via ₹250/day micro-savings.")
+                for aw in accumulating[:3]:
+                    short_fall = round(aw['target_threshold'] - aw['balance'], 2)
+                    lines.append(f"• {aw['display_name']}: ₹{aw['balance']:,.2f} / ₹{aw['target_threshold']:,.2f} (`₹{short_fall:,.2f} left`)")
+                lines.append("")
+        except Exception:
+            pass
+
+        # 7. 4-Hour Timeframe Checks
+        lines.append("💎 **6. 4-HOUR PENNY (< ₹50, Zero Debt) & LONG-TERM:**")
         lines.append("• Check 4H closed candles at `13:15 IST` and `15:30 IST` for Stage 2 breakouts.")
         lines.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
         lines.append("🛡️ *FinPlus+ Institutional Discipline Protocol.*")

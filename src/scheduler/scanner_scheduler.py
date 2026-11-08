@@ -98,7 +98,7 @@ class ScannerScheduler:
                 if ist_now.hour == 9 and ist_now.minute < 15 and self._last_briefing_date != today_str:
                     self._last_briefing_date = today_str
                     logger.info("Triggering 09:00 AM IST Daily Tactical Morning Briefing...")
-                    self.dispatcher.send_morning_tactical_briefing()
+                    self.dispatcher.send_morning_tactical_briefing(shortlist=self.latest_shortlist)
 
                 sleep_secs = 60 if is_market_open_ist() else 180
                 await asyncio.sleep(sleep_secs)
