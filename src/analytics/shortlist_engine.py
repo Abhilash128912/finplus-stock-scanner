@@ -32,37 +32,54 @@ class ShortlistEngine:
         # Format Nifty Radar
         nifty_radar = self._format_index_radar(nifty_item, default_sym="NIFTY", default_lot=65, default_step=50)
         
-        # Filter valid Stock Option candidates (score >= 50 and not vetoed)
-        stock_candidates = [
+        # -------------------------------------------------------------
+        # 1. STOCK OPTIONS CANDIDATES (Liquid F&O Equities Lot <= 500)
+        # -------------------------------------------------------------
+        stock_option_candidates = [
             r for r in scan_results 
             if r.get("category") == "STOCK_OPTIONS" 
             and r.get("signal_direction", 0) != 0
         ]
         
+        # -------------------------------------------------------------
+        # 2. INTRADAY CASH CANDIDATES (Broad Market Quality & Anti-Circuit)
+        # -------------------------------------------------------------
+        intraday_cash_candidates = [
+            r for r in scan_results 
+            if r.get("category") == "INTRADAY_CASH" 
+            and r.get("signal_direction", 0) != 0
+            and r.get("anti_circuit_status") != "EXTREME_CIRCUIT_DANGER"
+        ]
+        
         # Rank: Approved setups first, then highest score
-        def stock_rank_key(item):
+        def rank_key(item):
             score = item.get("confluence_score", 0)
             if not ("VETOED" in item.get("regime_confluence", "")):
                 score += 100 # High priority for cleared trades
             return score
             
-        stock_candidates.sort(key=stock_rank_key, reverse=True)
+        stock_option_candidates.sort(key=rank_key, reverse=True)
+        intraday_cash_candidates.sort(key=rank_key, reverse=True)
         
-        best_stock_option = None
-        best_intraday_stock = None
-        
-        if stock_candidates:
-            top = stock_candidates[0]
-            best_stock_option = top
-            best_intraday_stock = top
+        # DECOUPLED SELECTIONS: Never interconnected!
+        best_stock_option = stock_option_candidates[0] if stock_option_candidates else None
+        best_intraday_stock = intraday_cash_candidates[0] if intraday_cash_candidates else None
             
-        # Detect Trend Continuation vs Previous 30m Cycle
+        # Detect Trend Continuation vs Previous 30m Cycle for Stock Option
         stock_continuation = False
         prev_stk = self.previous_selection.get("best_stock_option")
         if prev_stk and best_stock_option:
             if prev_stk.get("symbol") == best_stock_option.get("symbol") and prev_stk.get("signal_direction") == best_stock_option.get("signal_direction"):
                 stock_continuation = True
                 best_stock_option["is_continuation"] = True
+
+        # Detect Trend Continuation vs Previous 30m Cycle for Intraday Cash Stock
+        cash_continuation = False
+        prev_cash = self.previous_selection.get("best_intraday_stock")
+        if prev_cash and best_intraday_stock:
+            if prev_cash.get("symbol") == best_intraday_stock.get("symbol") and prev_cash.get("signal_direction") == best_intraday_stock.get("signal_direction"):
+                cash_continuation = True
+                best_intraday_stock["is_continuation"] = True
                 
         index_continuation = False
         prev_idx = self.previous_selection.get("best_index_option")
@@ -81,9 +98,14 @@ class ShortlistEngine:
             "best_index_option": best_index_option,
             "best_stock_option": best_stock_option,
             "best_intraday_stock": best_intraday_stock,
-            "has_actionable_trades": (best_stock_option is not None and not ("VETOED" in best_stock_option.get("regime_confluence", ""))) or best_index_option.get("is_actionable", False),
+            "has_actionable_trades": (
+                (best_stock_option is not None and not ("VETOED" in best_stock_option.get("regime_confluence", ""))) or 
+                (best_intraday_stock is not None and not ("VETOED" in best_intraday_stock.get("regime_confluence", ""))) or
+                best_index_option.get("is_actionable", False)
+            ),
             "index_continuation": index_continuation,
-            "stock_continuation": stock_continuation
+            "stock_continuation": stock_continuation,
+            "cash_continuation": cash_continuation
         }
 
         self.previous_selection = self.current_selection if self.current_selection else selection_payload

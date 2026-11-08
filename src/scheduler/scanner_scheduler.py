@@ -19,7 +19,12 @@ logger = setup_logger("ScannerScheduler")
 
 class ScannerScheduler:
     def __init__(self):
-        self.feed = MarketDataFeed(cache_ttl_seconds=60, max_lot_size=500, top_n_stocks=20)
+        self.feed = MarketDataFeed(
+            cache_ttl_seconds=60,
+            max_lot_size=500,
+            top_n_fno_stocks=20,
+            top_n_cash_stocks=30
+        )
         self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=500)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
         self.shortlist_engine = ShortlistEngine()
@@ -35,13 +40,13 @@ class ScannerScheduler:
         universe = self.feed.get_all_universe_items()
         results = []
         
-        logger.info(f"Starting universe scan ({len(universe)} dynamic instruments)...")
+        logger.info(f"Starting universe scan ({len(universe)} dynamic instruments: F&O Options + Intraday Cash)...")
         
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
             try:
-                df = self.feed.fetch_15m_candles(ticker, period="59d")
+                df = self.feed.fetch_15m_candles(ticker, period="5d")
                 if df.empty:
                     continue
                     

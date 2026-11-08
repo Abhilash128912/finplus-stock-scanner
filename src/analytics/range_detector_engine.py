@@ -233,18 +233,27 @@ class RangeDetectorEngine:
         confluence_score = points_breakdown["total_score"]
 
         # -------------------------------------------------------------
-        # EXPLICIT ACTION DIRECTIVES (CE / PE & INTRADAY BUY / SELL)
+        # EXPLICIT ACTION DIRECTIVES (CE / PE vs INTRADAY CASH BUY / SELL)
         # -------------------------------------------------------------
+        category = meta.get("category", "STOCK_OPTIONS")
         strike_step = meta.get("strike_step", 50)
         atm_strike = int(round(last_closed_price / strike_step) * strike_step)
         
-        # Dual Contracts: Call (CE) & Put (PE)
-        call_strike_name = f"{symbol} {atm_strike} CE"
-        put_strike_name = f"{symbol} {atm_strike} PE"
+        is_cash_segment = (category == "INTRADAY_CASH")
         
-        option_action_badge = "WAITING"
+        if is_cash_segment:
+            call_strike_name = "-"
+            put_strike_name = "-"
+            option_action_badge = "EQUITY CASH ONLY"
+            option_directive_text = "Cash equity setup (High momentum runner, not an F&O contract)."
+        else:
+            # Dual Contracts: Call (CE) & Put (PE) for F&O Stocks / Indices
+            call_strike_name = f"{symbol} {atm_strike} CE"
+            put_strike_name = f"{symbol} {atm_strike} PE"
+            option_action_badge = "WAITING"
+            option_directive_text = "No breakout active. Avoid options."
+
         intraday_action_badge = "SIT OUT"
-        option_directive_text = "No breakout active. Avoid options."
         intraday_directive_text = "Price inside range. Avoid fresh cash entries."
         
         underlying_sl = 0.0
@@ -252,18 +261,29 @@ class RangeDetectorEngine:
         recommended_contract = None
         risk_management = {}
         
+        # Anti-circuit verification for cash equities
+        anti_circuit_status = "SAFE"
+        if is_cash_segment:
+            if abs(pct_change_pdc) >= 9.5:
+                anti_circuit_status = "EXTREME_CIRCUIT_DANGER"
+            elif abs(pct_change_pdc) >= 4.75 and meta.get("turnover_cr", 100) < 5.0:
+                anti_circuit_status = "CIRCUIT_RISK_WARNING"
+
         if signal_direction == 1: # Bullish
-            option_action_badge = f"BUY {call_strike_name} (CALL)"
+            if not is_cash_segment:
+                option_action_badge = f"BUY {call_strike_name} (CALL)"
+                recommended_contract = call_strike_name
             intraday_action_badge = f"BUY / LONG INTRADAY"
-            recommended_contract = call_strike_name
+            
             underlying_sl = round(range_bot_val, 2)
             risk_amt = max(last_closed_price - underlying_sl, last_closed_price * 0.003)
             underlying_target = round(last_closed_price + (risk_amt * 2.0), 2)
             
-            option_directive_text = f"BUY {call_strike_name} | Spot > Range Top. Target underlying ₹{underlying_target}."
-            intraday_directive_text = f"BUY {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R)"
+            if not is_cash_segment:
+                option_directive_text = f"BUY {call_strike_name} | Spot > Range Top. Target underlying ₹{underlying_target}."
+            intraday_directive_text = f"BUY {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
             
-            if meta.get("category") == "INDEX_OPTIONS":
+            if category == "INDEX_OPTIONS":
                 risk_management = {
                     "contract_type": "WEEKLY_CALL",
                     "action": f"BUY {call_strike_name}",
@@ -271,7 +291,7 @@ class RangeDetectorEngine:
                     "premium_target_pct": meta.get("target_gain_pct", 180.0),
                     "capital_guidance": "Small capital allocation. Max 45% premium SL, 180%+ Target."
                 }
-            else:
+            elif category == "STOCK_OPTIONS":
                 risk_management = {
                     "contract_type": "MONTHLY_CALL_ATM",
                     "action": f"BUY {call_strike_name}",
@@ -281,19 +301,33 @@ class RangeDetectorEngine:
                     "premium_stop_loss_pct": 25.0,
                     "rr_ratio": "1:2.0"
                 }
+            else: # INTRADAY_CASH
+                risk_management = {
+                    "segment": "EQUITY_CASH",
+                    "action": f"BUY {symbol} (CASH)",
+                    "entry_price": last_closed_price,
+                    "stop_loss": underlying_sl,
+                    "target": underlying_target,
+                    "rr_ratio": "1:2.0",
+                    "anti_circuit": anti_circuit_status,
+                    "square_off": "Mandatory square-off before 15:15 IST"
+                }
 
         elif signal_direction == -1: # Bearish
-            option_action_badge = f"BUY {put_strike_name} (PUT)"
+            if not is_cash_segment:
+                option_action_badge = f"BUY {put_strike_name} (PUT)"
+                recommended_contract = put_strike_name
             intraday_action_badge = f"SELL / SHORT INTRADAY"
-            recommended_contract = put_strike_name
+            
             underlying_sl = round(range_top_val, 2)
             risk_amt = max(underlying_sl - last_closed_price, last_closed_price * 0.003)
             underlying_target = round(last_closed_price - (risk_amt * 2.0), 2)
             
-            option_directive_text = f"BUY {put_strike_name} | Spot < Range Bottom. Target underlying ₹{underlying_target}."
-            intraday_directive_text = f"SHORT {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R)"
+            if not is_cash_segment:
+                option_directive_text = f"BUY {put_strike_name} | Spot < Range Bottom. Target underlying ₹{underlying_target}."
+            intraday_directive_text = f"SHORT {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
             
-            if meta.get("category") == "INDEX_OPTIONS":
+            if category == "INDEX_OPTIONS":
                 risk_management = {
                     "contract_type": "WEEKLY_PUT",
                     "action": f"BUY {put_strike_name}",
@@ -301,7 +335,7 @@ class RangeDetectorEngine:
                     "premium_target_pct": meta.get("target_gain_pct", 180.0),
                     "capital_guidance": "Small capital allocation. Max 45% premium SL, 180%+ Target."
                 }
-            else:
+            elif category == "STOCK_OPTIONS":
                 risk_management = {
                     "contract_type": "MONTHLY_PUT_ATM",
                     "action": f"BUY {put_strike_name}",
@@ -311,14 +345,25 @@ class RangeDetectorEngine:
                     "premium_stop_loss_pct": 25.0,
                     "rr_ratio": "1:2.0"
                 }
+            else: # INTRADAY_CASH
+                risk_management = {
+                    "segment": "EQUITY_CASH",
+                    "action": f"SHORT {symbol} (CASH INTRADAY)",
+                    "entry_price": last_closed_price,
+                    "stop_loss": underlying_sl,
+                    "target": underlying_target,
+                    "rr_ratio": "1:2.0",
+                    "anti_circuit": anti_circuit_status,
+                    "square_off": "Mandatory square-off before 15:15 IST"
+                }
         else:
             # Standby inside range
             underlying_sl = round(range_bot_val, 2)
             underlying_target = round(range_top_val, 2)
             risk_management = {
                 "action": "HOLD CASH / NO ENTRY",
-                "call_strike_watch": call_strike_name,
-                "put_strike_watch": put_strike_name
+                "call_strike_watch": call_strike_name if not is_cash_segment else "-",
+                "put_strike_watch": put_strike_name if not is_cash_segment else "-"
             }
 
         return {
@@ -355,6 +400,7 @@ class RangeDetectorEngine:
             "intraday_directive": intraday_directive_text,
             
             "recommended_contract": recommended_contract,
+            "anti_circuit_status": anti_circuit_status,
             "risk_management": risk_management,
             "timestamp_utc": get_utc_iso()
         }

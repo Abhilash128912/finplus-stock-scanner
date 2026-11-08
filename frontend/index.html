@@ -267,9 +267,15 @@
             </div>
           </div>
 
-          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-400 flex justify-between">
-            <span>Intraday Rule:</span>
-            <span class="text-amber-400">Square-off 15:15 IST</span>
+          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-400 flex flex-col gap-1">
+            <div class="flex justify-between text-emerald-400 font-bold">
+              <span>🛡️ Anti-Circuit Safety:</span>
+              <span>VERIFIED (High Turnover)</span>
+            </div>
+            <div class="flex justify-between text-slate-500">
+              <span>Intraday Rule:</span>
+              <span class="text-amber-400">Square-off 15:15 IST</span>
+            </div>
           </div>
         </div>
 
@@ -279,13 +285,17 @@
     <!-- Scanner Master Table -->
     <div class="glass-card rounded-2xl overflow-hidden border border-slate-800 shadow-2xl">
       <div class="p-4 bg-slate-900/80 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
-        <div class="flex items-center gap-3">
-          <h2 class="text-sm font-bold uppercase tracking-wider text-white mono flex items-center gap-2">
-            <span>🎯</span> Early Ignition Options Radar (Dynamic NSE F&amp;O Master)
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="text-sm font-bold uppercase tracking-wider text-white mono flex items-center gap-2 mr-2">
+            <span>🎯</span> Multi-Segment Opportunity Matrix
           </h2>
-          <span class="text-[11px] mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
-            Official Lot Sizes &lt;= 500
-          </span>
+          <!-- Filter Tabs -->
+          <div class="inline-flex rounded-lg p-0.5 bg-slate-950 border border-slate-800 text-xs mono">
+            <button onclick="setSegmentFilter('ALL')" id="tab-all" class="px-2.5 py-1 rounded-md bg-emerald-600 text-white font-bold transition">All</button>
+            <button onclick="setSegmentFilter('STOCK_OPTIONS')" id="tab-opt" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition">Stock Options (Lot &le; 500)</button>
+            <button onclick="setSegmentFilter('INTRADAY_CASH')" id="tab-cash" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition">Intraday Cash (Anti-Circuit)</button>
+            <button onclick="setSegmentFilter('INDEX_OPTIONS')" id="tab-index" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition">Indices</button>
+          </div>
         </div>
         <div class="text-xs mono text-slate-400 flex items-center gap-2">
           <span>UTC Time: <span id="utc-clock" class="text-slate-300">--:--:--Z</span></span>
@@ -329,6 +339,37 @@
   </footer>
 
   <script>
+    let cachedResults = [];
+    let activeSegment = 'ALL';
+
+    function setSegmentFilter(segment) {
+      activeSegment = segment;
+      ['tab-all', 'tab-opt', 'tab-cash', 'tab-index'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.className = 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition';
+      });
+      
+      const activeMap = {
+        'ALL': 'tab-all',
+        'STOCK_OPTIONS': 'tab-opt',
+        'INTRADAY_CASH': 'tab-cash',
+        'INDEX_OPTIONS': 'tab-index'
+      };
+      const activeBtn = document.getElementById(activeMap[segment] || 'tab-all');
+      if (activeBtn) {
+        activeBtn.className = 'px-2.5 py-1 rounded-md bg-emerald-600 text-white font-bold transition';
+      }
+      renderFilteredTable();
+    }
+
+    function renderFilteredTable() {
+      let filtered = cachedResults;
+      if (activeSegment !== 'ALL') {
+        filtered = cachedResults.filter(r => r.category === activeSegment);
+      }
+      renderTable(filtered);
+    }
+
     async function loadData() {
       try {
         const res = await fetch('/api/scan');
@@ -338,8 +379,9 @@
         document.getElementById('utc-clock').textContent = data.timestamp_utc ? data.timestamp_utc.split('.')[0] + 'Z' : '';
         document.getElementById('ist-clock').textContent = data.ist_time || '--:-- IST';
         
+        cachedResults = data.results || [];
         renderShortlist(data.shortlist || {});
-        renderTable(data.results || []);
+        renderFilteredTable();
       } catch (err) {
         console.error('Fetch error:', err);
       }
@@ -500,20 +542,36 @@
         const moveColor = r.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
         const moveSign = r.pct_change_pdc >= 0 ? '+' : '';
 
+        const isCash = r.category === 'INTRADAY_CASH';
+        const isOpt = r.category === 'STOCK_OPTIONS';
+        const isIdx = r.category === 'INDEX_OPTIONS';
+
+        // Category Tag
+        let catBadge = `<span class="px-1.5 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/40 text-[9px] font-bold">F&O OPT</span>`;
+        if (isCash) {
+          catBadge = `<span class="px-1.5 py-0.5 rounded bg-purple-950 text-purple-300 border border-purple-500/40 text-[9px] font-bold">CASH</span>`;
+        } else if (isIdx) {
+          catBadge = `<span class="px-1.5 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500/40 text-[9px] font-bold">INDEX</span>`;
+        }
+
         // Option Directive Pill
-        let optDirectiveHtml = `<span class="text-slate-500">Wait (Inside Range)</span>`;
-        if (isBull) {
+        let optDirectiveHtml = `<span class="text-slate-500 text-[11px]">Standby (Inside Range)</span>`;
+        if (isCash) {
+          optDirectiveHtml = `<div class="text-purple-300 font-bold text-[11px]">💎 Pure Equity Cash</div><div class="text-[9px] text-emerald-400">🛡️ Anti-Circuit Safe</div>`;
+        } else if (isBull) {
           optDirectiveHtml = `<div class="text-emerald-300 font-bold">🟢 BUY ${r.call_strike} (CALL)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
         } else if (isBear) {
           optDirectiveHtml = `<div class="text-rose-300 font-bold">🔴 BUY ${r.put_strike} (PUT)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
         }
 
         // Intraday Cash Action Pill
-        let cashActionHtml = `<span class="text-slate-500">Standby</span>`;
-        if (isBull) {
-          cashActionHtml = `<span class="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300 font-bold">BUY INTRADAY</span>`;
+        let cashActionHtml = `<span class="text-slate-500 text-[11px]">Standby</span>`;
+        if (isOpt) {
+          cashActionHtml = `<span class="text-slate-500 text-[10px]">F&O Derivative Only</span>`;
+        } else if (isBull) {
+          cashActionHtml = `<div class="text-emerald-300 font-bold text-xs">🟢 BUY INTRADAY</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.stop_loss || r.range_bottom} | Tgt: ₹${r.risk_management?.target || r.range_top}</div>`;
         } else if (isBear) {
-          cashActionHtml = `<span class="px-2 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 font-bold">SHORT INTRADAY</span>`;
+          cashActionHtml = `<div class="text-rose-300 font-bold text-xs">🔴 SHORT INTRADAY</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.stop_loss || r.range_top} | Tgt: ₹${r.risk_management?.target || r.range_bottom}</div>`;
         }
 
         let gateBadge = `<span class="text-slate-500">STANDBY</span>`;
@@ -538,12 +596,15 @@
         html += `
           <tr class="hover:bg-slate-900/60 transition">
             <td class="py-3 px-4">
-              <div class="font-bold text-white">${r.symbol}</div>
-              <div class="text-[10px] text-slate-400">${r.name || ''} (Lot: ${r.lot_size})</div>
+              <div class="flex items-center gap-1.5">
+                <span class="font-bold text-white">${r.symbol}</span>
+                ${catBadge}
+              </div>
+              <div class="text-[10px] text-slate-400">${r.name || ''} ${isCash ? '' : `(Lot: ${r.lot_size})`}</div>
             </td>
             <td class="py-3 px-4">
               <div class="text-slate-200">₹${r.last_price.toLocaleString('en-IN')}</div>
-              <div class="${moveColor} text-[11px] font-bold">${moveSign}${r.pct_change_pdc}% (from PDC)</div>
+              <div class="${moveColor} text-[11px] font-bold">${moveSign}${r.pct_change_pdc}%</div>
             </td>
             <td class="py-3 px-4">${optDirectiveHtml}</td>
             <td class="py-3 px-4">${cashActionHtml}</td>

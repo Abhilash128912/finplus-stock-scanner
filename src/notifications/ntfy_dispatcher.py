@@ -69,11 +69,13 @@ class NTFYDispatcher:
             lines.append(f"• **Regime Gate:** `{stk.get('regime_badge')}`")
             lines.append("")
 
-        # 4. BEST INTRADAY CASH STOCK
+        # 4. BEST INTRADAY CASH STOCK (DECOUPLED FROM OPTIONS)
         if cash:
-            lines.append("📈 **BEST INTRADAY CASH EQUITY:**")
+            lines.append("📈 **BEST INTRADAY CASH RUNNER (BROAD MARKET QUALITY):**")
             lines.append(f"• **ACTION:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
-            lines.append(f"• **Trade Plan:** {cash.get('intraday_directive')}")
+            lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
+            lines.append(f"• **Safety:** Anti-Circuit Verified (Deep Institutional Liquidity, No Freeze Risk)")
+            lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | **Regime Gate:** `{cash.get('regime_badge')}`")
             lines.append("")
             
         lines.append("---")

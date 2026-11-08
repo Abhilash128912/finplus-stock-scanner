@@ -6,6 +6,7 @@ MANDATE COMPLIANCE:
    benchmark breadth (WABI), all 2,266 NSE equities A/D ratio, and India VIX / Derivatives.
 """
 
+import time
 import urllib.request
 import urllib.error
 import socket
@@ -19,23 +20,33 @@ APP1_LOCAL_URL = "http://127.0.0.1:8000/api/regime"
 APP1_CLOUD_URL = "https://finplus-index-breadth.onrender.com/api/regime"
 
 class App1RegimeInterceptor:
-    def __init__(self, local_url: str = APP1_LOCAL_URL, fallback_url: str = APP1_CLOUD_URL, timeout_secs: float = 2.0):
+    def __init__(self, local_url: str = APP1_LOCAL_URL, fallback_url: str = APP1_CLOUD_URL, timeout_secs: float = 2.0, cache_ttl_seconds: float = 15.0):
         self.local_url = local_url
         self.fallback_url = fallback_url
         self.timeout_secs = timeout_secs
+        self.cache_ttl = cache_ttl_seconds
+        self._cached_result: Tuple[bool, Dict[str, Any]] = None
+        self._cache_ts: float = 0.0
 
     def fetch_current_regime(self) -> Tuple[bool, Dict[str, Any]]:
         """
         Fetches live regime from App #1 with strict 2.0-second timeout.
+        Caches result for 15s to keep scan loops sub-second.
         Returns (is_success, regime_payload).
         """
+        now = time.time()
+        if self._cached_result is not None and (now - self._cache_ts) < self.cache_ttl:
+            return self._cached_result
+
         for url in [self.local_url, self.fallback_url]:
             try:
                 req = urllib.request.Request(url, headers={'User-Agent': 'FinPlus-StockScanner/2.0'})
                 with urllib.request.urlopen(req, timeout=self.timeout_secs) as resp:
                     if resp.status == 200:
                         data = json.loads(resp.read().decode('utf-8'))
-                        return True, data
+                        self._cached_result = (True, data)
+                        self._cache_ts = now
+                        return self._cached_result
             except (urllib.error.URLError, socket.timeout, TimeoutError, Exception) as e:
                 logger.warning(f"App #1 probe to {url} failed or timed out (>2.0s): {e}")
                 continue
@@ -50,7 +61,9 @@ class App1RegimeInterceptor:
                 "description": "App #1 did not respond within 2.0s. All breakout entries are strictly VETOED for capital protection."
             }
         }
-        return False, fail_closed_payload
+        self._cached_result = (False, fail_closed_payload)
+        self._cache_ts = now
+        return self._cached_result
 
     def evaluate_confluence(self, signal_direction: int, instrument_type: str = "STOCK") -> Tuple[str, str, Dict[str, Any]]:
         """
