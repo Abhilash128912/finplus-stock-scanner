@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>FinPlus+ Options Ignition Floater</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&display=swap');
+    body {
+      font-family: 'JetBrains Mono', monospace;
+      background-color: #050811;
+      color: #e2e8f0;
+      margin: 0;
+      padding: 8px;
+      user-select: none;
+    }
+  </style>
+</head>
+<body class="flex flex-col justify-between h-screen text-xs">
+  <div class="flex items-center justify-between border-b border-slate-800 pb-1.5 mb-2">
+    <div class="flex items-center gap-1.5">
+      <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+      <span class="font-extrabold text-white text-[11px]">OPTIONS IGNITION (APP-02)</span>
+    </div>
+    <span class="text-[10px] text-slate-400" id="time-ist">--:-- IST</span>
+  </div>
+
+  <div class="flex-grow flex flex-col justify-center space-y-1" id="lead-alert-box">
+    <div class="text-[10px] text-slate-400">SCANNING 20 ASSETS...</div>
+    <div class="text-sm font-bold text-slate-300">Evaluating LuxAlgo Ranges</div>
+  </div>
+
+  <div class="pt-1.5 border-t border-slate-800 flex items-center justify-between text-[10px] text-slate-500">
+    <span id="ignitions-pill">0 Ignitions</span>
+    <span class="text-blue-400 font-bold">:8001</span>
+  </div>
+
+  <script>
+    async function updateFloater() {
+      try {
+        const res = await fetch('/api/scan');
+        if (!res.ok) return;
+        const data = await res.json();
+        document.getElementById('time-ist').textContent = data.ist_time || '';
+        
+        const ignitions = (data.results || []).filter(r => ['BULLISH_IGNITION', 'BEARISH_IGNITION'].includes(r.ignition_state));
+        document.getElementById('ignitions-pill').textContent = ignitions.length + ' Ignitions';
+        
+        const box = document.getElementById('lead-alert-box');
+        if (ignitions.length > 0) {
+          const top = ignitions[0];
+          const isBull = top.signal_direction === 1;
+          const color = isBull ? 'text-emerald-400' : 'text-rose-400';
+          const icon = isBull ? '🟢' : '🔴';
+          box.innerHTML = `
+            <div class="flex items-center justify-between">
+              <span class="font-extrabold text-white text-sm">${icon} ${top.symbol}</span>
+              <span class="${color} font-bold">${top.pct_change_pdc > 0 ? '+' : ''}${top.pct_change_pdc}%</span>
+            </div>
+            <div class="text-[11px] font-bold ${color}">${top.recommended_contract || ''}</div>
+            <div class="text-[9px] text-slate-400">PDH: ${top.pdh} | PDL: ${top.pdl}</div>
+          `;
+        } else {
+          box.innerHTML = `
+            <div class="text-[10px] text-slate-400">NO BREAKOUT ACTIVE</div>
+            <div class="text-xs font-semibold text-slate-300">All 20 Assets Inside Range</div>
+          `;
+        }
+      } catch (e) {}
+    }
+    updateFloater();
+    setInterval(updateFloater, 10000);
+  </script>
+</body>
+</html>

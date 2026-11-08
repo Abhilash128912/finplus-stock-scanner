@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FinPlus+ Stock & Options Ignition Scanner (APP-02)</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap');
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #070b12;
+      color: #e2e8f0;
+      background-image: radial-gradient(circle at 50% 0%, rgba(59, 130, 246, 0.08), transparent 45%);
+    }
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    .glass-card {
+      background: rgba(15, 23, 42, 0.75);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      backdrop-filter: blur(16px);
+      transition: all 0.2s ease;
+    }
+    .pulse-dot {
+      animation: pulse-glow 2s infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.85); }
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between p-4 md:p-8">
+
+  <!-- Header -->
+  <header class="max-w-7xl w-full mx-auto flex flex-col md:flex-row items-center justify-between pb-6 border-b border-slate-800 gap-4">
+    <div class="flex items-center gap-4">
+      <div class="w-12 h-12 rounded-2xl bg-blue-600/20 border border-blue-500/40 flex items-center justify-center text-blue-400 font-extrabold text-xl shadow-lg shadow-blue-500/10">
+        ⚡
+      </div>
+      <div>
+        <div class="flex items-center gap-3">
+          <h1 class="text-2xl md:text-3xl font-extrabold tracking-tight text-white flex items-center">
+            FinPlus<span class="text-blue-400">+</span>
+          </h1>
+          <span class="text-xs px-2.5 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono font-bold">
+            APP-02 • EARLY IGNITION
+          </span>
+          <span class="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono" id="app1-sync-pill">
+            Syncing App #1...
+          </span>
+        </div>
+        <p class="text-xs text-slate-400 mt-1">
+          LuxAlgo Range Detector + PDH/PDL Strike Engine | Port <span class="mono text-blue-400 font-bold">:8001</span>
+        </p>
+      </div>
+    </div>
+
+    <!-- Clock & Controls -->
+    <div class="flex items-center gap-3 flex-wrap">
+      <div class="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-xl text-xs mono">
+        <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot" id="market-status-dot"></span>
+        <span id="market-status-text" class="text-slate-300 font-semibold">MARKET HOURS (IST)</span>
+        <span class="text-slate-500">|</span>
+        <span id="ist-clock" class="text-emerald-400 font-bold">--:-- -- IST</span>
+      </div>
+      
+      <button onclick="refreshData()" class="bg-blue-600 hover:bg-blue-500 text-white font-semibold text-xs py-2 px-3.5 rounded-xl shadow-lg transition active:scale-95 flex items-center gap-1.5">
+        <span>🔄 Refresh</span>
+      </button>
+
+      <a href="http://127.0.0.1:8000" target="_blank" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition" title="Open App #1">
+        🏛️ Air Traffic (:8000)
+      </a>
+
+      <button onclick="triggerTestAlert()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition">
+        📲 Test NTFY
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-7xl w-full mx-auto my-6 flex-grow space-y-6">
+
+    <!-- KPI Summary Row -->
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      
+      <!-- Card 1: Sensex Options (High Priority) -->
+      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-amber-500 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between text-xs mono mb-2">
+            <span class="text-amber-400 font-bold">BSE SENSEX OPTIONS</span>
+            <span class="text-slate-400">HIGH IMPORTANCE</span>
+          </div>
+          <div class="text-2xl font-extrabold text-white" id="sensex-spot">Loading...</div>
+          <div class="text-xs text-slate-400 mt-1" id="sensex-directive">Small Capital • 45% Premium SL</div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-slate-400 flex justify-between" id="sensex-contract">
+          <span>Contract: Standby</span>
+          <span class="text-amber-400">Asymmetric 1:3</span>
+        </div>
+      </div>
+
+      <!-- Card 2: Active Early Ignitions -->
+      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-emerald-500 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between text-xs mono mb-2">
+            <span class="text-emerald-400 font-bold">EARLY IGNITIONS</span>
+            <span class="text-slate-400">NO DELAY</span>
+          </div>
+          <div class="text-2xl font-extrabold text-emerald-400" id="ignition-count">0 Active</div>
+          <div class="text-xs text-slate-400 mt-1">Crossed Range Top/Bot + PDH/PDL (+0.5%)</div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-emerald-300 flex justify-between">
+          <span>Early Entry vs +5% Delay</span>
+          <span>⚡ Strike Ready</span>
+        </div>
+      </div>
+
+      <!-- Card 3: Volatility Coiling Watch -->
+      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-purple-500 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between text-xs mono mb-2">
+            <span class="text-purple-400 font-bold">VOLATILITY COILING</span>
+            <span class="text-slate-400">20-BAR SQUEEZE</span>
+          </div>
+          <div class="text-2xl font-extrabold text-purple-300" id="coiling-count">0 Coiled</div>
+          <div class="text-xs text-slate-400 mt-1">Trapped in ±1 ATR band (Pre-ignition)</div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-purple-300 flex justify-between">
+          <span>Spring Compressed</span>
+          <span>Watch Closely</span>
+        </div>
+      </div>
+
+      <!-- Card 4: App #1 Air Traffic Control -->
+      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-blue-500 flex flex-col justify-between">
+        <div>
+          <div class="flex items-center justify-between text-xs mono mb-2">
+            <span class="text-blue-400 font-bold">AIR TRAFFIC CONTROL</span>
+            <span class="text-slate-400">APP #1 VETO GATE</span>
+          </div>
+          <div class="text-xl font-extrabold text-white" id="macro-trend-label">Checking...</div>
+          <div class="text-xs text-slate-400 mt-1" id="macro-trend-desc">70% False Breakout Filter</div>
+        </div>
+        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-blue-300 flex justify-between">
+          <span>CTI Score: <b id="macro-cti-val">--</b></span>
+          <span id="macro-veto-badge">Veto Active</span>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- Scanner Master Table -->
+    <div class="glass-card rounded-2xl overflow-hidden border border-slate-800 shadow-2xl">
+      <div class="p-4 bg-slate-900/80 border-b border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div class="flex items-center gap-3">
+          <h2 class="text-sm font-bold uppercase tracking-wider text-white mono flex items-center gap-2">
+            <span>🎯</span> Early Ignition Options Radar (20 Tracked Instruments)
+          </h2>
+          <span class="text-[11px] mono px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+            Stocks Lot &lt; 500 + Reliance
+          </span>
+        </div>
+        <div class="text-xs mono text-slate-400 flex items-center gap-2">
+          <span>UTC Time: <span id="utc-clock" class="text-slate-300">--:--:--Z</span></span>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-950/80 text-slate-400 uppercase font-mono text-[11px] border-b border-slate-800">
+            <tr>
+              <th class="py-3 px-4">Instrument</th>
+              <th class="py-3 px-4">Spot LTP &amp; Move</th>
+              <th class="py-3 px-4">LuxAlgo Range</th>
+              <th class="py-3 px-4">Key Levels (PDH / PDL)</th>
+              <th class="py-3 px-4">Ignition Status</th>
+              <th class="py-3 px-4">App #1 Gate</th>
+              <th class="py-3 px-4">Recommended Strike &amp; SL</th>
+            </tr>
+          </thead>
+          <tbody id="scanner-tbody" class="divide-y divide-slate-800/60 font-mono">
+            <tr>
+              <td colspan="7" class="py-8 text-center text-slate-500">
+                Initializing LuxAlgo Range Engine and downloading 15m historical candles...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="max-w-7xl w-full mx-auto pt-6 border-t border-slate-800/80 flex flex-col md:flex-row items-center justify-between text-xs text-slate-500 gap-2">
+    <div>
+      FinPlus+ Quantitative Suite • APP-02 Stock &amp; Options Scanner • Port <span class="mono text-slate-400">:8001</span>
+    </div>
+    <div class="mono">
+      Logs: <span class="text-blue-400">UTC</span> | Market Logic: <span class="text-emerald-400">IST (Asia/Kolkata)</span>
+    </div>
+  </footer>
+
+  <script>
+    async function loadData() {
+      try {
+        const res = await fetch('/api/scan');
+        if (!res.ok) throw new Error('API offline');
+        const data = await res.json();
+        
+        document.getElementById('utc-clock').textContent = data.timestamp_utc ? data.timestamp_utc.split('.')[0] + 'Z' : '';
+        document.getElementById('ist-clock').textContent = data.ist_time || '--:-- IST';
+        
+        renderTable(data.results || []);
+        updateCards(data.results || []);
+      } catch (err) {
+        console.error('Fetch error:', err);
+      }
+    }
+
+    async function syncApp1() {
+      try {
+        const res = await fetch('http://127.0.0.1:8000/api/regime');
+        if (res.ok) {
+          const r = await res.json();
+          document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
+          document.getElementById('app1-sync-pill').textContent = 'App #1 Synced :8000';
+          document.getElementById('macro-trend-label').textContent = r.trend.label || 'N/A';
+          document.getElementById('macro-cti-val').textContent = r.trend.score_label || (r.trend.score + ' / 100');
+          document.getElementById('macro-trend-desc').textContent = r.trend.description || '';
+          document.getElementById('macro-veto-badge').textContent = r.trend.is_divergence ? '⚠️ Divergence Veto' : 'Confluence Clear';
+        }
+      } catch (e) {
+        // Fallback to Render cloud
+        try {
+          const res2 = await fetch('https://finplus-index-breadth.onrender.com/api/regime');
+          if (res2.ok) {
+            const r2 = await res2.json();
+            document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono';
+            document.getElementById('app1-sync-pill').textContent = 'App #1 Cloud Synced';
+            document.getElementById('macro-trend-label').textContent = r2.trend.label || 'N/A';
+            document.getElementById('macro-cti-val').textContent = r2.trend.score_label || (r2.trend.score + ' / 100');
+          }
+        } catch (e2) {}
+      }
+    }
+
+    function updateCards(results) {
+      let ignitions = 0;
+      let coilings = 0;
+
+      results.forEach(item => {
+        if (['BULLISH_IGNITION', 'BEARISH_IGNITION', 'RANGE_BREAKOUT_LONG', 'RANGE_BREAKDOWN_SHORT'].includes(item.ignition_state)) {
+          ignitions++;
+        }
+        if (item.is_coiling || item.ignition_state === 'COILING_ALERT') {
+          coilings++;
+        }
+        if (item.symbol === 'SENSEX') {
+          document.getElementById('sensex-spot').textContent = '₹' + item.last_price.toLocaleString('en-IN');
+          document.getElementById('sensex-directive').textContent = item.reason || 'Inside Range';
+          if (item.recommended_contract) {
+            document.getElementById('sensex-contract').innerHTML = `<span>Contract: <b>${item.recommended_contract}</b></span><span class="text-emerald-400">SL: 45% Prem</span>`;
+          }
+        }
+      });
+
+      document.getElementById('ignition-count').textContent = ignitions + ' Active';
+      document.getElementById('coiling-count').textContent = coilings + ' Coiled';
+    }
+
+    function renderTable(results) {
+      const tbody = document.getElementById('scanner-tbody');
+      if (!results || results.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="py-8 text-center text-slate-500">No instruments returned.</td></tr>';
+        return;
+      }
+
+      let html = '';
+      results.forEach(r => {
+        const isBull = r.signal_direction === 1;
+        const isBear = r.signal_direction === -1;
+        
+        let stateBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400">CONSOLIDATING</span>`;
+        if (r.ignition_state === 'BULLISH_IGNITION') {
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300 font-bold">🟢 BULLISH IGNITION</span>`;
+        } else if (r.ignition_state === 'BEARISH_IGNITION') {
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 font-bold">🔴 BEARISH IGNITION</span>`;
+        } else if (r.is_coiling) {
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-purple-950 border border-purple-500 text-purple-300">⚡ COILING SQUEEZE</span>`;
+        } else if (r.ignition_state === 'RANGE_BREAKOUT_LONG') {
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400">BREAKOUT LONG</span>`;
+        } else if (r.ignition_state === 'RANGE_BREAKDOWN_SHORT') {
+          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 text-rose-400">BREAKDOWN SHORT</span>`;
+        }
+
+        const moveColor = r.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        const moveSign = r.pct_change_pdc >= 0 ? '+' : '';
+
+        let gateBadge = `<span class="text-slate-500">STANDBY</span>`;
+        if (r.regime_confluence) {
+          if (r.regime_confluence.includes('APPROVED')) {
+            gateBadge = `<span class="text-emerald-400 font-bold">✅ CLEAR</span>`;
+          } else if (r.regime_confluence.includes('VETOED')) {
+            gateBadge = `<span class="text-rose-400 font-bold">🛑 VETOED</span>`;
+          }
+        }
+
+        let strikeHtml = `<span class="text-slate-500">—</span>`;
+        if (r.recommended_contract) {
+          const color = isBull ? 'text-emerald-300' : 'text-rose-300';
+          strikeHtml = `<div><b class="${color}">${r.recommended_contract}</b><div class="text-[10px] text-slate-400">SL: ${r.risk_management?.premium_stop_loss_pct ? r.risk_management.premium_stop_loss_pct + '% Prem' : '₹' + r.risk_management?.underlying_sl}</div></div>`;
+        }
+
+        html += `
+          <tr class="hover:bg-slate-900/60 transition">
+            <td class="py-3 px-4">
+              <div class="font-bold text-white">${r.symbol}</div>
+              <div class="text-[10px] text-slate-400">${r.name || ''} (Lot: ${r.lot_size})</div>
+            </td>
+            <td class="py-3 px-4">
+              <div class="text-slate-200">₹${r.last_price.toLocaleString('en-IN')}</div>
+              <div class="${moveColor} text-[11px] font-bold">${moveSign}${r.pct_change_pdc}% (from PDC)</div>
+            </td>
+            <td class="py-3 px-4 text-[11px]">
+              <div>Top: <span class="text-slate-300">₹${r.range_top}</span></div>
+              <div>Bot: <span class="text-slate-300">₹${r.range_bottom}</span></div>
+            </td>
+            <td class="py-3 px-4 text-[11px]">
+              <div>PDH: <span class="text-slate-300">₹${r.pdh}</span></div>
+              <div>PDL: <span class="text-slate-300">₹${r.pdl}</span></div>
+              <div class="text-[10px] text-blue-400">VWAP: ₹${r.vwap}</div>
+            </td>
+            <td class="py-3 px-4">${stateBadge}</td>
+            <td class="py-3 px-4">${gateBadge}</td>
+            <td class="py-3 px-4">${strikeHtml}</td>
+          </tr>
+        `;
+      });
+      tbody.innerHTML = html;
+    }
+
+    async function refreshData() {
+      await fetch('/api/refresh', { method: 'POST' });
+      await loadData();
+    }
+
+    async function triggerTestAlert() {
+      const res = await fetch('/api/trigger-test-alert', { method: 'POST' });
+      const data = await res.json();
+      alert(data.status === 'SUCCESS' ? 'Test alert sent to ntfy.sh/Finplus-Delta!' : 'Failed sending alert.');
+    }
+
+    loadData();
+    syncApp1();
+    setInterval(loadData, 15000);
+    setInterval(syncApp1, 30000);
+  </script>
+</body>
+</html>
