@@ -46,7 +46,7 @@
             APP-02 • 30M BEST-IN-CLASS
           </span>
           <span class="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono" id="app1-sync-pill">
-            Syncing App #1...
+            Connecting Gateway (:8000)...
           </span>
         </div>
         <p class="text-xs text-slate-400 mt-1">
@@ -58,9 +58,9 @@
     <!-- Clock & Controls -->
     <div class="flex items-center gap-3 flex-wrap">
       <div class="flex items-center gap-2 bg-slate-900/90 border border-slate-800 px-3.5 py-1.5 rounded-xl text-xs mono">
-        <span class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot" id="market-status-dot"></span>
-        <span id="market-status-text" class="text-slate-300 font-semibold">MARKET HOURS (IST)</span>
-        <span class="text-slate-500">|</span>
+        <span class="w-2 h-2 rounded-full bg-slate-500" id="market-status-dot"></span>
+        <span id="market-status-text" class="text-slate-400 font-semibold">NSE/BSE: CHECKING...</span>
+        <span class="text-slate-600">|</span>
         <span id="ist-clock" class="text-emerald-400 font-bold">--:-- -- IST</span>
       </div>
       
@@ -399,8 +399,44 @@
       renderTable(filtered);
     }
 
+    function updateExchangeStatus() {
+      const statusText = document.getElementById('market-status-text');
+      const statusDot = document.getElementById('market-status-dot');
+      if (!statusText || !statusDot) return;
+
+      const now = new Date();
+      const utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
+      const istDate = new Date(utcMs + (3600000 * 5.5));
+      const istHours = istDate.getHours();
+      const istMinutes = istDate.getMinutes();
+      const istDay = istDate.getDay();
+
+      if (istDay === 0 || istDay === 6) {
+        statusText.textContent = 'NSE/BSE: CLOSED (WEEKEND)';
+        statusText.className = 'text-slate-400 font-semibold';
+        statusDot.className = 'w-2 h-2 rounded-full bg-slate-500';
+      } else if (istHours === 15 && istMinutes >= 10 && istMinutes <= 30) {
+        statusText.textContent = '🔥 NSE/BSE: BTST POWER WINDOW (15:10 - 15:30 IST)';
+        statusText.className = 'text-emerald-400 font-bold';
+        statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400 pulse-dot';
+      } else if ((istHours > 9 || (istHours === 9 && istMinutes >= 15)) && (istHours < 15 || (istHours === 15 && istMinutes <= 30))) {
+        statusText.textContent = '🟢 NSE/BSE: REGULAR SESSION (09:15 - 15:30 IST)';
+        statusText.className = 'text-emerald-400 font-bold';
+        statusDot.className = 'w-2 h-2 rounded-full bg-emerald-400 pulse-dot';
+      } else if (istHours === 9 && istMinutes < 15) {
+        statusText.textContent = 'NSE/BSE: PRE-MARKET (09:00 - 09:15 IST)';
+        statusText.className = 'text-amber-400 font-semibold';
+        statusDot.className = 'w-2 h-2 rounded-full bg-amber-400';
+      } else {
+        statusText.textContent = 'NSE/BSE: CLOSED (POST-MARKET)';
+        statusText.className = 'text-slate-400 font-semibold';
+        statusDot.className = 'w-2 h-2 rounded-full bg-slate-500';
+      }
+    }
+
     async function loadData() {
       try {
+        updateExchangeStatus();
         const res = await fetch('/api/scan');
         if (!res.ok) throw new Error('API offline');
         const data = await res.json();
@@ -422,16 +458,19 @@
         if (res.ok) {
           const r = await res.json();
           document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
-          document.getElementById('app1-sync-pill').textContent = 'App #1 Synced :8000';
+          document.getElementById('app1-sync-pill').textContent = 'GATEWAY: SYNCED (:8000)';
         }
       } catch (e) {
         try {
           const res2 = await fetch('https://finplus-index-breadth.onrender.com/api/regime');
           if (res2.ok) {
             document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono';
-            document.getElementById('app1-sync-pill').textContent = 'App #1 Cloud Synced';
+            document.getElementById('app1-sync-pill').textContent = 'GATEWAY: CLOUD SYNCED';
           }
-        } catch (e2) {}
+        } catch (e2) {
+          document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-rose-950 border border-rose-500/40 text-rose-300 font-mono';
+          document.getElementById('app1-sync-pill').textContent = 'GATEWAY: OFFLINE (FAIL-CLOSED)';
+        }
       }
     }
 
