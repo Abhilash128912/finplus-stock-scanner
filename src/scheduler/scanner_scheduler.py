@@ -66,6 +66,8 @@ class ScannerScheduler:
             except Exception as e:
                 logger.error(f"Error evaluating {sym} ({ticker}): {e}")
                 
+        # Default Sort: Score & Breakdown (Highest Confluence Score First)
+        results.sort(key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
         self.latest_scan_results = results
         self.last_scan_utc = get_utc_iso()
         

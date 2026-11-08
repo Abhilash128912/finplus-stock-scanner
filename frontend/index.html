@@ -314,7 +314,9 @@
               <th class="py-3 px-4">Spot LTP &amp; Move</th>
               <th class="py-3 px-4">Option Directive (CE / PE)</th>
               <th class="py-3 px-4">Intraday Cash Action</th>
-              <th class="py-3 px-4">Score &amp; Breakdown</th>
+              <th class="py-3 px-4 cursor-pointer select-none text-emerald-400 hover:text-white transition" onclick="toggleScoreSort()" title="Click to toggle sort order">
+                Score &amp; Breakdown <span id="score-sort-arrow" class="font-bold">▼</span>
+              </th>
               <th class="py-3 px-4">Key Levels (PDH / PDL)</th>
               <th class="py-3 px-4">App #1 Gate</th>
             </tr>
@@ -345,6 +347,14 @@
   <script>
     let cachedResults = [];
     let activeSegment = 'ALL';
+    let scoreSortAsc = false; // Default: DESCENDING (Highest Score 100 First)
+
+    function toggleScoreSort() {
+      scoreSortAsc = !scoreSortAsc;
+      const arrow = document.getElementById('score-sort-arrow');
+      if (arrow) arrow.textContent = scoreSortAsc ? '▲' : '▼';
+      renderFilteredTable();
+    }
 
     function setSegmentFilter(segment) {
       activeSegment = segment;
@@ -367,10 +377,25 @@
     }
 
     function renderFilteredTable() {
-      let filtered = cachedResults;
+      let filtered = [...cachedResults];
       if (activeSegment !== 'ALL') {
         filtered = cachedResults.filter(r => r.category === activeSegment);
       }
+      
+      // Default Sort: Score & Breakdown (Highest Confluence Score First)
+      filtered.sort((a, b) => {
+        const scoreA = Number(a.confluence_score) || 0;
+        const scoreB = Number(b.confluence_score) || 0;
+        const scoreDiff = scoreB - scoreA;
+        if (scoreDiff !== 0) {
+          return scoreSortAsc ? -scoreDiff : scoreDiff;
+        }
+        // Secondary sort: Magnitude of percentage day move
+        const moveA = Math.abs(Number(a.pct_change_pdc) || 0);
+        const moveB = Math.abs(Number(b.pct_change_pdc) || 0);
+        return moveB - moveA;
+      });
+
       renderTable(filtered);
     }
 
