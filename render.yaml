@@ -21,3 +21,4 @@ services:
         sync: false
       - key: INDMONEY_ACCESS_TOKEN
         sync: false
+

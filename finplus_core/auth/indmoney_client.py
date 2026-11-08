@@ -356,7 +356,7 @@ class INDMoneyAuthClient:
         """Safely updates INDMONEY_ACCESS_TOKEN in the local .env file."""
         try:
             if not self.env_file_path.exists():
-                logger.warning("Env file not found at %s. Skipping disk write.", self.env_file_path)
+                logger.info("Cloud environment detected (no .env file at %s). Active token stored safely in memory.", self.env_file_path)
                 return
 
             with open(self.env_file_path, "r", encoding="utf-8") as f:

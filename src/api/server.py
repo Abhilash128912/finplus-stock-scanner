@@ -64,12 +64,16 @@ async def shutdown_event():
     if scheduler_task:
         scheduler_task.cancel()
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_index():
     index_file = os.path.join(FRONTEND_DIR, "index.html")
     if os.path.exists(index_file):
         return FileResponse(index_file)
     return HTMLResponse("<h1>FinPlus+ Stock Scanner API Online</h1>")
+
+@app.api_route("/health", methods=["GET", "HEAD"])
+async def health_check():
+    return {"status": "ok", "app": "FinPlus-Stock-Scanner"}
 
 @app.get("/api/status")
 async def get_status():
