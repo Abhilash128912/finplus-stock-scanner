@@ -1,12 +1,9 @@
 """
 FinPlus+ LuxAlgo Range Detector & Key Levels Engine
-MANDATE COMPLIANCE:
-1. Closed Candles Only: Evaluates strictly on completed, closed 15m candles (df.iloc[:-1]).
-2. Explicit Point System (0-100) with granular points breakdown for each factor:
-   - Range Breakout: 35 pts
-   - PDH / PDL Confluence: 30 pts
-   - VWAP Alignment: 20 pts
-   - Relative Volume (RVOL >= 1.25x): 15 pts
+Generates explicit actionable directives for:
+1. Stock Options: BUY CE (Call) vs BUY PE (Put)
+2. Intraday Cash: BUY / LONG vs SELL / SHORT with exact SL and Target price levels
+3. Index Options: Generates both Call (CE) and Put (PE) strikes for Sensex and Nifty
 """
 
 import math
@@ -38,13 +35,10 @@ def calc_atr(df: pd.DataFrame, length: int = 500) -> pd.Series:
     return calc_rma(tr, eff_len)
 
 def calc_intraday_vwap(df: pd.DataFrame) -> pd.Series:
-    """Computes intraday VWAP with daily reset."""
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3.0
     vol = df['Volume'].replace(0, 1)
-    
     dates = pd.to_datetime(df.index).date
     tp_vol = typical_price * vol
-    
     cum_tp_vol = tp_vol.groupby(dates).cumsum()
     cum_vol = vol.groupby(dates).cumsum()
     return cum_tp_vol / cum_vol
@@ -56,10 +50,6 @@ class RangeDetectorEngine:
         self.atr_len = atr_len
 
     def evaluate_instrument(self, raw_df: pd.DataFrame, meta: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Evaluates strictly on CLOSED 15m candles.
-        Generates detailed numeric scoring with points breakdown.
-        """
         symbol = meta.get("symbol", "UNKNOWN")
         if raw_df.empty or len(raw_df) < self.length + 5:
             return {
@@ -72,16 +62,16 @@ class RangeDetectorEngine:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # 1. Closed candle slice: Bar -1 is currently forming, Bar -2 is last closed
+        # Closed candle slice
         closed_df = df.iloc[:-1].copy() if len(df) > 30 else df.copy()
         
-        # 2. Indicators
+        # Indicators
         closed_df['atr'] = calc_atr(closed_df, self.atr_len) * self.mult
         closed_df['sma'] = closed_df['Close'].rolling(self.length).mean()
         closed_df['vwap'] = calc_intraday_vwap(closed_df)
         closed_df['vol_ma20'] = closed_df['Volume'].rolling(20).mean()
         
-        # 3. Daily Key Levels (PDH, PDL, PDC)
+        # Daily Key Levels
         dates = pd.to_datetime(closed_df.index).date
         daily = closed_df.groupby(dates).agg({'High': 'max', 'Low': 'min', 'Close': 'last'})
         if len(daily) < 2:
@@ -94,7 +84,6 @@ class RangeDetectorEngine:
             pdl = float(prev_day['Low'])
             pdc = float(prev_day['Close'])
             
-        # 4. Range State Machine
         closes = closed_df['Close'].values
         volumes = closed_df['Volume'].values
         vol_ma = closed_df['vol_ma20'].values
@@ -152,20 +141,18 @@ class RangeDetectorEngine:
             if n == n_bars - 1:
                 is_coiling = (count == 0)
 
-        # 5. Analysis on the Last Closed Bar
         last_closed_price = float(closes[-1])
         last_vwap = float(vwap_vals[-1]) if not np.isnan(vwap_vals[-1]) else last_closed_price
         last_vol = float(volumes[-1])
         last_vma = float(vol_ma[-1]) if not np.isnan(vol_ma[-1]) else 1.0
         rvol = round(last_vol / max(1.0, last_vma), 2)
-        
         pct_change_pdc = round(((last_closed_price - pdc) / pdc) * 100.0, 2)
         
         range_top_val = float(bx_top) if not np.isnan(bx_top) else (last_closed_price + (last_closed_price * 0.005))
         range_bot_val = float(bx_bottom) if not np.isnan(bx_bottom) else (last_closed_price - (last_closed_price * 0.005))
         range_mid_val = (range_top_val + range_bot_val) / 2.0
         
-        # 6. Granular Point System (0 - 100)
+        # Confluence Scoring
         pts_range = 0
         pts_pdh_pdl = 0
         pts_vwap = 0
@@ -186,7 +173,6 @@ class RangeDetectorEngine:
             ignition_state = "COILING_ALERT"
             tier_label = "PRE-IGNITION SQUEEZE"
             reason = "Spring coiled: 20 closed candles compressed within ±1 ATR band."
-            
         elif broke_top:
             signal_direction = 1
             pts_range = 35
@@ -235,7 +221,6 @@ class RangeDetectorEngine:
                 tier_label = "WATCHLIST ONLY"
                 reason = f"Range breakdown without strong price/volume support"
         else:
-            total_pts = 0
             reason = "Inside Range / Normal Consolidation"
 
         points_breakdown = {
@@ -247,56 +232,94 @@ class RangeDetectorEngine:
         }
         confluence_score = points_breakdown["total_score"]
 
-        # 7. Recommended Contract & Risk Management
+        # -------------------------------------------------------------
+        # EXPLICIT ACTION DIRECTIVES (CE / PE & INTRADAY BUY / SELL)
+        # -------------------------------------------------------------
         strike_step = meta.get("strike_step", 50)
+        atm_strike = int(round(last_closed_price / strike_step) * strike_step)
+        
+        # Dual Contracts: Call (CE) & Put (PE)
+        call_strike_name = f"{symbol} {atm_strike} CE"
+        put_strike_name = f"{symbol} {atm_strike} PE"
+        
+        option_action_badge = "WAITING"
+        intraday_action_badge = "SIT OUT"
+        option_directive_text = "No breakout active. Avoid options."
+        intraday_directive_text = "Price inside range. Avoid fresh cash entries."
+        
+        underlying_sl = 0.0
+        underlying_target = 0.0
         recommended_contract = None
         risk_management = {}
         
-        if signal_direction == 1 and confluence_score >= 50:
-            atm_strike = int(round(last_closed_price / strike_step) * strike_step)
-            recommended_contract = f"{symbol} {atm_strike} CE"
-            underlying_sl = range_bot_val
-            underlying_risk = max(last_closed_price - underlying_sl, last_closed_price * 0.002)
-            underlying_target = last_closed_price + (underlying_risk * 2.0)
+        if signal_direction == 1: # Bullish
+            option_action_badge = f"BUY {call_strike_name} (CALL)"
+            intraday_action_badge = f"BUY / LONG INTRADAY"
+            recommended_contract = call_strike_name
+            underlying_sl = round(range_bot_val, 2)
+            risk_amt = max(last_closed_price - underlying_sl, last_closed_price * 0.003)
+            underlying_target = round(last_closed_price + (risk_amt * 2.0), 2)
             
-            if meta.get("importance") == "HIGH" and meta.get("category") == "INDEX_OPTIONS": # Sensex
+            option_directive_text = f"BUY {call_strike_name} | Spot > Range Top. Target underlying ₹{underlying_target}."
+            intraday_directive_text = f"BUY {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R)"
+            
+            if meta.get("category") == "INDEX_OPTIONS":
                 risk_management = {
                     "contract_type": "WEEKLY_CALL",
+                    "action": f"BUY {call_strike_name}",
                     "premium_stop_loss_pct": meta.get("max_sl_premium_pct", 45.0),
                     "premium_target_pct": meta.get("target_gain_pct", 180.0),
-                    "capital_guidance": "Small capital allocation only. Max 45% premium SL, Asymmetric Upside."
+                    "capital_guidance": "Small capital allocation. Max 45% premium SL, 180%+ Target."
                 }
             else:
                 risk_management = {
                     "contract_type": "MONTHLY_CALL_ATM",
-                    "underlying_sl": round(underlying_sl, 2),
-                    "underlying_target": round(underlying_target, 2),
+                    "action": f"BUY {call_strike_name}",
+                    "underlying_entry": last_closed_price,
+                    "underlying_sl": underlying_sl,
+                    "underlying_target": underlying_target,
                     "premium_stop_loss_pct": 25.0,
                     "rr_ratio": "1:2.0"
                 }
-                
-        elif signal_direction == -1 and confluence_score >= 50:
-            atm_strike = int(round(last_closed_price / strike_step) * strike_step)
-            recommended_contract = f"{symbol} {atm_strike} PE"
-            underlying_sl = range_top_val
-            underlying_risk = max(underlying_sl - last_closed_price, last_closed_price * 0.002)
-            underlying_target = last_closed_price - (underlying_risk * 2.0)
+
+        elif signal_direction == -1: # Bearish
+            option_action_badge = f"BUY {put_strike_name} (PUT)"
+            intraday_action_badge = f"SELL / SHORT INTRADAY"
+            recommended_contract = put_strike_name
+            underlying_sl = round(range_top_val, 2)
+            risk_amt = max(underlying_sl - last_closed_price, last_closed_price * 0.003)
+            underlying_target = round(last_closed_price - (risk_amt * 2.0), 2)
             
-            if meta.get("importance") == "HIGH" and meta.get("category") == "INDEX_OPTIONS":
+            option_directive_text = f"BUY {put_strike_name} | Spot < Range Bottom. Target underlying ₹{underlying_target}."
+            intraday_directive_text = f"SHORT {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R)"
+            
+            if meta.get("category") == "INDEX_OPTIONS":
                 risk_management = {
                     "contract_type": "WEEKLY_PUT",
+                    "action": f"BUY {put_strike_name}",
                     "premium_stop_loss_pct": meta.get("max_sl_premium_pct", 45.0),
                     "premium_target_pct": meta.get("target_gain_pct", 180.0),
-                    "capital_guidance": "Small capital allocation only. Max 45% premium SL, Asymmetric Upside."
+                    "capital_guidance": "Small capital allocation. Max 45% premium SL, 180%+ Target."
                 }
             else:
                 risk_management = {
                     "contract_type": "MONTHLY_PUT_ATM",
-                    "underlying_sl": round(underlying_sl, 2),
-                    "underlying_target": round(underlying_target, 2),
+                    "action": f"BUY {put_strike_name}",
+                    "underlying_entry": last_closed_price,
+                    "underlying_sl": underlying_sl,
+                    "underlying_target": underlying_target,
                     "premium_stop_loss_pct": 25.0,
                     "rr_ratio": "1:2.0"
                 }
+        else:
+            # Standby inside range
+            underlying_sl = round(range_bot_val, 2)
+            underlying_target = round(range_top_val, 2)
+            risk_management = {
+                "action": "HOLD CASH / NO ENTRY",
+                "call_strike_watch": call_strike_name,
+                "put_strike_watch": put_strike_name
+            }
 
         return {
             "symbol": symbol,
@@ -322,6 +345,15 @@ class RangeDetectorEngine:
             "points_breakdown": points_breakdown,
             "signal_direction": signal_direction,
             "reason": reason,
+            
+            # Explicit Option & Intraday Action Fields
+            "call_strike": call_strike_name,
+            "put_strike": put_strike_name,
+            "option_action_badge": option_action_badge,
+            "intraday_action_badge": intraday_action_badge,
+            "option_directive": option_directive_text,
+            "intraday_directive": intraday_directive_text,
+            
             "recommended_contract": recommended_contract,
             "risk_management": risk_management,
             "timestamp_utc": get_utc_iso()

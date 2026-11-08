@@ -30,7 +30,7 @@ logger = setup_logger("APIServer")
 app = FastAPI(
     title="FinPlus+ Stock Scanner & Options Ignition Engine",
     description="Early Ignition Options & High-Ticket Stock Scanner",
-    version="2.1.0"
+    version="2.2.0"
 )
 
 app.add_middleware(
@@ -99,7 +99,6 @@ async def get_scan_results():
 
 @app.get("/api/shortlist")
 async def get_shortlist():
-    """Returns the #1 Best-in-Class picks per category with detailed points breakdown."""
     return {
         "timestamp_utc": scheduler.last_scan_utc,
         "ist_time": get_ist_time_str(),
@@ -116,55 +115,14 @@ async def trigger_refresh(background_tasks: BackgroundTasks):
 
 @app.post("/api/trigger-test-alert")
 async def trigger_test_alert():
-    # Build sample 30-minute shortlist payload with Trend Continuation test
-    sample_shortlist = {
-        "timestamp_utc": get_utc_iso(),
-        "ist_time": get_ist_time_str(),
-        "has_actionable_trades": True,
-        "best_index_option": {
-            "symbol": "SENSEX",
-            "last_price": 81350.0,
-            "pct_change_pdc": 0.65,
-            "recommended_contract": "SENSEX 81400 CE",
-            "confluence_score": 85,
-            "is_continuation": True,
-            "points_breakdown": {
-                "range_breakout_pts": 35,
-                "pdh_pdl_pts": 30,
-                "vwap_pts": 20,
-                "volume_pts": 0,
-                "total_score": 85
-            },
-            "risk_management": {
-                "premium_stop_loss_pct": 45.0,
-                "premium_target_pct": 180.0
-            }
-        },
-        "best_stock_option": {
-            "symbol": "MARUTI",
-            "lot_size": 50,
-            "last_price": 11450.0,
-            "pct_change_pdc": 0.72,
-            "recommended_contract": "MARUTI 11500 CE",
-            "confluence_score": 85,
-            "is_continuation": False,
-            "points_breakdown": {
-                "range_breakout_pts": 35,
-                "pdh_pdl_pts": 30,
-                "vwap_pts": 20,
-                "volume_pts": 0,
-                "total_score": 85
-            },
-            "risk_management": {
-                "underlying_sl": 11380.0,
-                "underlying_target": 11590.0
-            }
-        }
-    }
-    
-    delivered = scheduler.dispatcher.send_30m_shortlist_pulse(sample_shortlist, force=True)
+    shortlist = scheduler.latest_shortlist
+    if not shortlist:
+        scheduler.scan_universe_now()
+        shortlist = scheduler.latest_shortlist
+        
+    delivered = scheduler.dispatcher.send_30m_shortlist_pulse(shortlist, force=True)
     return {
         "status": "SUCCESS" if delivered else "FAILED",
-        "payload": sample_shortlist,
+        "payload": shortlist,
         "timestamp_utc": get_utc_iso()
     }

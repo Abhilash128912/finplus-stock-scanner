@@ -29,3 +29,4 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 - **Dual-Timezone Compliance:** Logs and internal records strictly in ISO-8601 UTC ('Z'); exchange market hours in IST (`Asia/Kolkata`).
 - **Web Cockpit & Desktop Floater:** Fast modern dashboard on `http://127.0.0.1:8001` and floating HUD on `/static/floater.html`.
 - **Automated Test Suite:** 5 unit and integration tests passing in `tests/test_stock_scanner.py`.
+

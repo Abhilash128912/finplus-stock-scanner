@@ -50,7 +50,7 @@
           </span>
         </div>
         <p class="text-xs text-slate-400 mt-1">
-          LuxAlgo + PDH/PDL Point System | Strict 30-Min Pulse | Port <span class="mono text-blue-400 font-bold">:8001</span>
+          Exact Strike Directives (CE/PE) &amp; Intraday Action | Port <span class="mono text-blue-400 font-bold">:8001</span>
         </p>
       </div>
     </div>
@@ -81,76 +81,7 @@
   <!-- Main Content -->
   <main class="max-w-7xl w-full mx-auto my-6 flex-grow space-y-6">
 
-    <!-- KPI Summary Row -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-      
-      <!-- Card 1: Sensex Options (High Priority) -->
-      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-amber-500 flex flex-col justify-between">
-        <div>
-          <div class="flex items-center justify-between text-xs mono mb-2">
-            <span class="text-amber-400 font-bold">BSE SENSEX OPTIONS</span>
-            <span class="text-slate-400">HIGH IMPORTANCE</span>
-          </div>
-          <div class="text-2xl font-extrabold text-white" id="sensex-spot">Loading...</div>
-          <div class="text-xs text-slate-400 mt-1" id="sensex-directive">Small Capital • 45% Premium SL</div>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-slate-400 flex justify-between" id="sensex-contract">
-          <span>Contract: Standby</span>
-          <span class="text-amber-400">Asymmetric 1:3</span>
-        </div>
-      </div>
-
-      <!-- Card 2: Active Early Ignitions -->
-      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-emerald-500 flex flex-col justify-between">
-        <div>
-          <div class="flex items-center justify-between text-xs mono mb-2">
-            <span class="text-emerald-400 font-bold">EARLY IGNITIONS</span>
-            <span class="text-slate-400">CLOSED CANDLES</span>
-          </div>
-          <div class="text-2xl font-extrabold text-emerald-400" id="ignition-count">0 Active</div>
-          <div class="text-xs text-slate-400 mt-1">Crossed Range + PDH/PDL (+0.5%)</div>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-emerald-300 flex justify-between">
-          <span>Early Entry vs +5% Delay</span>
-          <span>⚡ Strike Ready</span>
-        </div>
-      </div>
-
-      <!-- Card 3: Volatility Coiling Watch -->
-      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-purple-500 flex flex-col justify-between">
-        <div>
-          <div class="flex items-center justify-between text-xs mono mb-2">
-            <span class="text-purple-400 font-bold">VOLATILITY COILING</span>
-            <span class="text-slate-400">20-BAR SQUEEZE</span>
-          </div>
-          <div class="text-2xl font-extrabold text-purple-300" id="coiling-count">0 Coiled</div>
-          <div class="text-xs text-slate-400 mt-1">Trapped in ±1 ATR band (Pre-ignition)</div>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-purple-300 flex justify-between">
-          <span>Spring Compressed</span>
-          <span>Watch Closely</span>
-        </div>
-      </div>
-
-      <!-- Card 4: App #1 Air Traffic Control -->
-      <div class="glass-card rounded-2xl p-5 border-l-4 border-l-blue-500 flex flex-col justify-between">
-        <div>
-          <div class="flex items-center justify-between text-xs mono mb-2">
-            <span class="text-blue-400 font-bold">AIR TRAFFIC CONTROL</span>
-            <span class="text-slate-400">FAIL-CLOSED (2s)</span>
-          </div>
-          <div class="text-xl font-extrabold text-white" id="macro-trend-label">Checking...</div>
-          <div class="text-xs text-slate-400 mt-1" id="macro-trend-desc">Unified CTI Confluence Gate</div>
-        </div>
-        <div class="mt-3 pt-3 border-t border-slate-800/80 text-[11px] mono text-blue-300 flex justify-between">
-          <span>CTI Score: <b id="macro-cti-val">--</b></span>
-          <span id="macro-veto-badge">Veto Active</span>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- 👑 30-MINUTE BEST-IN-CLASS SELECTION CARD (WITH POINTS BREAKDOWN) -->
+    <!-- 👑 30-MINUTE INSTITUTIONAL BEST-IN-CLASS TRADE MATRIX (4 DISTINCT ACTION CARDS) -->
     <div class="glass-card rounded-2xl p-6 border-2 border-blue-500/40 bg-gradient-to-r from-blue-950/40 via-slate-900/80 to-slate-900/80 shadow-2xl relative overflow-hidden">
       <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
         <div class="flex items-center gap-3">
@@ -159,99 +90,186 @@
           </div>
           <div>
             <h2 class="text-lg font-extrabold text-white flex items-center gap-2">
-              <span>30-Minute Institutional Shortlist</span>
+              <span>30-Minute Institutional Trade Matrix</span>
               <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300">
-                ZERO OVERTRADING
+                EXPLICIT CE / PE DIRECTIVES
               </span>
             </h2>
             <p class="text-xs text-slate-400 mt-0.5">
-              Filtered to the #1 best setup every 30 mins with explicit points breakdown &amp; trend continuation tracking.
+              Filtered to the #1 best setup every 30 mins with explicit strike recommendations, entry triggers, SL, and targets.
             </p>
           </div>
         </div>
         <div class="text-xs mono text-slate-400 bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800">
-          Next NTFY Pulse: <span class="text-blue-400 font-bold" id="shortlist-interval-clock">30m Cycle Active</span>
+          Pulse Status: <span class="text-blue-400 font-bold" id="shortlist-interval-clock">30m Cycle Active</span>
         </div>
       </div>
 
-      <!-- Shortlist 3-Column Display -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6" id="shortlist-container">
+      <!-- 4-Card Actionable Grid -->
+      <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
         
-        <!-- Box 1: Best Index Option -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-index">
+        <!-- Card 1: BSE Sensex Options Radar -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-amber-500/30 flex flex-col justify-between" id="card-sensex-radar">
           <div>
             <div class="flex items-center justify-between text-xs mono mb-2">
-              <span class="text-amber-400 font-bold">👑 BEST INDEX OPTION</span>
-              <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px]" id="idx-cont-badge">NEW STRIKE</span>
+              <span class="text-amber-400 font-bold">👑 SENSEX 30 OPTIONS</span>
+              <span class="px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 text-[10px] font-bold">HIGH PRIORITY</span>
             </div>
-            <div class="text-xl font-extrabold text-white" id="idx-contract-title">SENSEX / NIFTY</div>
-            <div class="text-xs text-slate-400 mt-1" id="idx-spot-desc">Evaluating best risk/reward...</div>
+            
+            <div class="flex items-baseline justify-between">
+              <span class="text-xl font-extrabold text-white" id="sensex-spot-val">Loading...</span>
+              <span class="text-xs mono font-bold" id="sensex-move-val">--%</span>
+            </div>
 
-            <!-- Points Breakdown Card -->
-            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
-              <div class="flex justify-between">
-                <span class="text-slate-400">Total Score:</span>
-                <span class="text-amber-400 font-bold" id="idx-total-score">-- / 100</span>
+            <!-- Action Badge -->
+            <div class="mt-2.5 p-2 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="sensex-action-pill">
+              HOLD CASH / STANDBY
+            </div>
+
+            <!-- Dual Strikes: CE and PE -->
+            <div class="mt-3 grid grid-cols-2 gap-2 text-[11px] mono">
+              <div class="p-2 rounded bg-slate-950 border border-emerald-500/30 text-center">
+                <div class="text-[10px] text-emerald-400 font-bold">CALL STRIKE (CE)</div>
+                <div class="font-bold text-white mt-0.5" id="sensex-ce-strike">-- CE</div>
+                <div class="text-[9px] text-slate-500" id="sensex-ce-trigger">Trigger &gt; PDH</div>
               </div>
-              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="idx-pts-detail">
-                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              <div class="p-2 rounded bg-slate-950 border border-rose-500/30 text-center">
+                <div class="text-[10px] text-rose-400 font-bold">PUT STRIKE (PE)</div>
+                <div class="font-bold text-white mt-0.5" id="sensex-pe-strike">-- PE</div>
+                <div class="text-[9px] text-slate-500" id="sensex-pe-trigger">Trigger &lt; PDL</div>
               </div>
             </div>
+
+            <!-- Directive description -->
+            <p class="text-[11px] text-slate-400 mt-2.5 leading-tight" id="sensex-directive-text">
+              Evaluating breakout levels...
+            </p>
           </div>
-          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="idx-risk-rules">
-            SL: 45% Premium | Target: 180%+
+
+          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-400 flex justify-between">
+            <span>SL: 45% Premium</span>
+            <span class="text-amber-400">Target: +180%</span>
           </div>
         </div>
 
-        <!-- Box 2: Best Stock Option -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-stock">
+        <!-- Card 2: NSE Nifty Options Radar -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-blue-500/30 flex flex-col justify-between" id="card-nifty-radar">
+          <div>
+            <div class="flex items-center justify-between text-xs mono mb-2">
+              <span class="text-blue-400 font-bold">🎯 NIFTY 50 OPTIONS</span>
+              <span class="px-2 py-0.5 rounded bg-blue-950/80 text-blue-300 text-[10px] font-bold">SELECTIVE</span>
+            </div>
+            
+            <div class="flex items-baseline justify-between">
+              <span class="text-xl font-extrabold text-white" id="nifty-spot-val">Loading...</span>
+              <span class="text-xs mono font-bold" id="nifty-move-val">--%</span>
+            </div>
+
+            <!-- Action Badge -->
+            <div class="mt-2.5 p-2 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="nifty-action-pill">
+              HOLD CASH / STANDBY
+            </div>
+
+            <!-- Dual Strikes: CE and PE -->
+            <div class="mt-3 grid grid-cols-2 gap-2 text-[11px] mono">
+              <div class="p-2 rounded bg-slate-950 border border-emerald-500/30 text-center">
+                <div class="text-[10px] text-emerald-400 font-bold">CALL STRIKE (CE)</div>
+                <div class="font-bold text-white mt-0.5" id="nifty-ce-strike">-- CE</div>
+                <div class="text-[9px] text-slate-500" id="nifty-ce-trigger">Trigger &gt; PDH</div>
+              </div>
+              <div class="p-2 rounded bg-slate-950 border border-rose-500/30 text-center">
+                <div class="text-[10px] text-rose-400 font-bold">PUT STRIKE (PE)</div>
+                <div class="font-bold text-white mt-0.5" id="nifty-pe-strike">-- PE</div>
+                <div class="text-[9px] text-slate-500" id="nifty-pe-trigger">Trigger &lt; PDL</div>
+              </div>
+            </div>
+
+            <!-- Directive description -->
+            <p class="text-[11px] text-slate-400 mt-2.5 leading-tight" id="nifty-directive-text">
+              Evaluating breakout levels...
+            </p>
+          </div>
+
+          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-400 flex justify-between">
+            <span>SL: Range Boundary</span>
+            <span class="text-blue-400">Target: 1:1.5</span>
+          </div>
+        </div>
+
+        <!-- Card 3: Best Stock Option -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-emerald-500/40 flex flex-col justify-between" id="card-stock-option">
           <div>
             <div class="flex items-center justify-between text-xs mono mb-2">
               <span class="text-emerald-400 font-bold">💎 BEST STOCK OPTION</span>
-              <span class="px-2 py-0.5 rounded bg-slate-800 text-[10px]" id="stk-cont-badge">NEW STRIKE</span>
+              <span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 text-[10px] font-bold" id="stk-opt-tag">NEW STRIKE</span>
             </div>
-            <div class="text-xl font-extrabold text-white" id="stk-contract-title">HIGH-TICKET EQUITY</div>
-            <div class="text-xs text-slate-400 mt-1" id="stk-spot-desc">Lot &lt; 500 liquid selection...</div>
 
-            <!-- Points Breakdown Card -->
-            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
+            <!-- Big Action Pill -->
+            <div class="p-2.5 rounded-lg bg-emerald-950/80 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300" id="stk-opt-action-badge">
+              BUY CE / PE (OPTION)
+            </div>
+
+            <div class="mt-3">
+              <div class="text-2xl font-extrabold text-white" id="stk-opt-contract">--</div>
+              <div class="text-xs text-slate-400 mt-1" id="stk-opt-spot-line">Spot: -- | Lot: --</div>
+            </div>
+
+            <!-- Score & Points Breakdown -->
+            <div class="mt-3 p-2 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] mono space-y-1">
               <div class="flex justify-between">
-                <span class="text-slate-400">Total Score:</span>
-                <span class="text-emerald-400 font-bold" id="stk-total-score">-- / 100</span>
+                <span class="text-slate-400">Confluence Score:</span>
+                <span class="text-emerald-400 font-bold" id="stk-opt-score">-- / 100</span>
               </div>
-              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="stk-pts-detail">
-                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="stk-opt-pts-line">
+                <span>R: --</span><span>P: --</span><span>V: --</span><span>Vol: --</span>
               </div>
             </div>
           </div>
-          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="stk-risk-rules">
-            SL: Range Opposite | Target: 1:2 R:R
+
+          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-300 flex justify-between" id="stk-opt-risk-line">
+            <span>SL: Range Opposite</span>
+            <span class="text-emerald-400">Target: 1:2 R:R</span>
           </div>
         </div>
 
-        <!-- Box 3: Best Intraday Cash Stock -->
-        <div class="bg-slate-900/90 rounded-xl p-4 border border-slate-800 flex flex-col justify-between" id="box-best-cash">
+        <!-- Card 4: Best Intraday Cash Stock -->
+        <div class="bg-slate-900/90 rounded-xl p-4 border border-purple-500/40 flex flex-col justify-between" id="card-intraday-cash">
           <div>
             <div class="flex items-center justify-between text-xs mono mb-2">
-              <span class="text-blue-400 font-bold">📈 INTRADAY CASH STOCK</span>
-              <span class="px-2 py-0.5 rounded bg-blue-950 text-blue-300 text-[10px]">EQUITY CASH</span>
+              <span class="text-purple-400 font-bold">📈 BEST INTRADAY CASH</span>
+              <span class="px-2 py-0.5 rounded bg-purple-950 text-purple-300 text-[10px] font-bold">EQUITY CASH</span>
             </div>
-            <div class="text-xl font-extrabold text-white" id="cash-symbol-title">EQUITY SELECTION</div>
-            <div class="text-xs text-slate-400 mt-1" id="cash-spot-desc">Highest momentum confirmation...</div>
 
-            <!-- Points Breakdown Card -->
-            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800/80 text-[11px] mono space-y-1">
+            <!-- Big Action Pill -->
+            <div class="p-2.5 rounded-lg bg-purple-950/80 border border-purple-500 text-center font-extrabold text-sm mono text-purple-300" id="cash-action-badge">
+              BUY / SHORT INTRADAY
+            </div>
+
+            <div class="mt-3">
+              <div class="text-2xl font-extrabold text-white" id="cash-symbol">--</div>
+              <div class="text-xs text-slate-400 mt-1" id="cash-spot-line">LTP: ₹-- | Day Move: --%</div>
+            </div>
+
+            <!-- Levels Table -->
+            <div class="mt-3 p-2 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] mono space-y-1">
               <div class="flex justify-between">
-                <span class="text-slate-400">Momentum Score:</span>
-                <span class="text-blue-400 font-bold" id="cash-total-score">-- / 100</span>
+                <span class="text-slate-400">Entry LTP:</span>
+                <span class="text-white font-bold" id="cash-entry-level">₹--</span>
               </div>
-              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900" id="cash-pts-detail">
-                <span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>
+              <div class="flex justify-between text-rose-400">
+                <span>Stop Loss:</span>
+                <span class="font-bold" id="cash-sl-level">₹--</span>
+              </div>
+              <div class="flex justify-between text-emerald-400">
+                <span>Target (1:2):</span>
+                <span class="font-bold" id="cash-target-level">₹--</span>
               </div>
             </div>
           </div>
-          <div class="mt-4 pt-3 border-t border-slate-800 text-[11px] mono text-slate-300" id="cash-risk-rules">
-            Square-off at 15:15 IST
+
+          <div class="mt-3 pt-2.5 border-t border-slate-800 text-[10px] mono text-slate-400 flex justify-between">
+            <span>Intraday Rule:</span>
+            <span class="text-amber-400">Square-off 15:15 IST</span>
           </div>
         </div>
 
@@ -280,17 +298,16 @@
             <tr>
               <th class="py-3 px-4">Instrument</th>
               <th class="py-3 px-4">Spot LTP &amp; Move</th>
-              <th class="py-3 px-4">LuxAlgo Range</th>
-              <th class="py-3 px-4">Key Levels (PDH / PDL)</th>
+              <th class="py-3 px-4">Option Directive (CE / PE)</th>
+              <th class="py-3 px-4">Intraday Cash Action</th>
               <th class="py-3 px-4">Score &amp; Breakdown</th>
-              <th class="py-3 px-4">Ignition Status</th>
+              <th class="py-3 px-4">Key Levels (PDH / PDL)</th>
               <th class="py-3 px-4">App #1 Gate</th>
-              <th class="py-3 px-4">Recommended Strike &amp; SL</th>
             </tr>
           </thead>
           <tbody id="scanner-tbody" class="divide-y divide-slate-800/60 font-mono">
             <tr>
-              <td colspan="8" class="py-8 text-center text-slate-500">
+              <td colspan="7" class="py-8 text-center text-slate-500">
                 Initializing LuxAlgo Range Engine and loading official NSE F&amp;O contracts...
               </td>
             </tr>
@@ -321,9 +338,8 @@
         document.getElementById('utc-clock').textContent = data.timestamp_utc ? data.timestamp_utc.split('.')[0] + 'Z' : '';
         document.getElementById('ist-clock').textContent = data.ist_time || '--:-- IST';
         
-        renderTable(data.results || []);
-        updateCards(data.results || []);
         renderShortlist(data.shortlist || {});
+        renderTable(data.results || []);
       } catch (err) {
         console.error('Fetch error:', err);
       }
@@ -336,111 +352,143 @@
           const r = await res.json();
           document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
           document.getElementById('app1-sync-pill').textContent = 'App #1 Synced :8000';
-          document.getElementById('macro-trend-label').textContent = r.trend.label || 'N/A';
-          document.getElementById('macro-cti-val').textContent = r.trend.score_label || (r.trend.score + ' / 100');
-          document.getElementById('macro-trend-desc').textContent = r.trend.description || '';
-          document.getElementById('macro-veto-badge').textContent = r.trend.is_divergence ? '⚠️ Divergence Veto' : 'Confluence Clear';
         }
       } catch (e) {
         try {
           const res2 = await fetch('https://finplus-index-breadth.onrender.com/api/regime');
           if (res2.ok) {
-            const r2 = await res2.json();
             document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono';
             document.getElementById('app1-sync-pill').textContent = 'App #1 Cloud Synced';
-            document.getElementById('macro-trend-label').textContent = r2.trend.label || 'N/A';
-            document.getElementById('macro-cti-val').textContent = r2.trend.score_label || (r2.trend.score + ' / 100');
           }
         } catch (e2) {}
       }
     }
 
     function renderShortlist(shortlist) {
-      const idx = shortlist.best_index_option;
+      const sx = shortlist.sensex_radar;
+      const nf = shortlist.nifty_radar;
       const stk = shortlist.best_stock_option;
       const cash = shortlist.best_intraday_stock;
 
-      // 1. Index Option
-      if (idx) {
-        document.getElementById('idx-contract-title').textContent = idx.recommended_contract || idx.symbol;
-        document.getElementById('idx-spot-desc').textContent = `Spot: ₹${idx.last_price} (${idx.pct_change_pdc > 0 ? '+' : ''}${idx.pct_change_pdc}%)`;
-        document.getElementById('idx-total-score').textContent = `${idx.confluence_score} / 100`;
-        const p = idx.points_breakdown || {};
-        document.getElementById('idx-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
-        if (idx.is_continuation) {
-          document.getElementById('idx-cont-badge').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
-          document.getElementById('idx-cont-badge').textContent = '🔄 TREND CONTINUATION';
+      // 1. SENSEX RADAR
+      if (sx) {
+        document.getElementById('sensex-spot-val').textContent = '₹' + (sx.last_price ? sx.last_price.toLocaleString('en-IN') : '--');
+        const sxSign = sx.pct_change_pdc >= 0 ? '+' : '';
+        const sxColor = sx.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        document.getElementById('sensex-move-val').className = `text-xs mono font-bold ${sxColor}`;
+        document.getElementById('sensex-move-val').textContent = `${sxSign}${sx.pct_change_pdc}%`;
+        
+        document.getElementById('sensex-ce-strike').textContent = sx.call_strike || '-- CE';
+        document.getElementById('sensex-pe-strike').textContent = sx.put_strike || '-- PE';
+        document.getElementById('sensex-ce-trigger').textContent = `Trigger > ₹${sx.pdh}`;
+        document.getElementById('sensex-pe-trigger').textContent = `Trigger < ₹${sx.pdl}`;
+        
+        const pill = document.getElementById('sensex-action-pill');
+        pill.textContent = sx.action_badge;
+        if (sx.action_badge.includes('BUY') && sx.action_badge.includes('CALL')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
+        } else if (sx.action_badge.includes('BUY') && sx.action_badge.includes('PUT')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
+        } else if (sx.action_badge.includes('VETOED')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950/60 text-rose-400 border border-rose-800 text-center font-bold text-xs mono';
         } else {
-          document.getElementById('idx-cont-badge').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
-          document.getElementById('idx-cont-badge').textContent = '🎯 NEW STRIKE';
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
         }
-      } else {
-        document.getElementById('idx-contract-title').textContent = 'HOLD CASH';
-        document.getElementById('idx-spot-desc').textContent = 'No index setup reached 50+ score';
-        document.getElementById('idx-total-score').textContent = '0 / 100';
+        document.getElementById('sensex-directive-text').textContent = sx.directive;
       }
 
-      // 2. Stock Option
+      // 2. NIFTY RADAR
+      if (nf) {
+        document.getElementById('nifty-spot-val').textContent = '₹' + (nf.last_price ? nf.last_price.toLocaleString('en-IN') : '--');
+        const nfSign = nf.pct_change_pdc >= 0 ? '+' : '';
+        const nfColor = nf.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
+        document.getElementById('nifty-move-val').className = `text-xs mono font-bold ${nfColor}`;
+        document.getElementById('nifty-move-val').textContent = `${nfSign}${nf.pct_change_pdc}%`;
+        
+        document.getElementById('nifty-ce-strike').textContent = nf.call_strike || '-- CE';
+        document.getElementById('nifty-pe-strike').textContent = nf.put_strike || '-- PE';
+        document.getElementById('nifty-ce-trigger').textContent = `Trigger > ₹${nf.pdh}`;
+        document.getElementById('nifty-pe-trigger').textContent = `Trigger < ₹${nf.pdl}`;
+        
+        const pill = document.getElementById('nifty-action-pill');
+        pill.textContent = nf.action_badge;
+        if (nf.action_badge.includes('BUY') && nf.action_badge.includes('CALL')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
+        } else if (nf.action_badge.includes('BUY') && nf.action_badge.includes('PUT')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
+        } else if (nf.action_badge.includes('VETOED')) {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950/60 text-rose-400 border border-rose-800 text-center font-bold text-xs mono';
+        } else {
+          pill.className = 'mt-2.5 p-2 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
+        }
+        document.getElementById('nifty-directive-text').textContent = nf.directive;
+      }
+
+      // 3. BEST STOCK OPTION
       if (stk) {
-        document.getElementById('stk-contract-title').textContent = stk.recommended_contract || stk.symbol;
-        document.getElementById('stk-spot-desc').textContent = `${stk.symbol} (Lot: ${stk.lot_size}) | Spot: ₹${stk.last_price} (${stk.pct_change_pdc > 0 ? '+' : ''}${stk.pct_change_pdc}%)`;
-        document.getElementById('stk-total-score').textContent = `${stk.confluence_score} / 100`;
-        const p = stk.points_breakdown || {};
-        document.getElementById('stk-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
-        if (stk.is_continuation) {
-          document.getElementById('stk-cont-badge').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
-          document.getElementById('stk-cont-badge').textContent = '🔄 TREND CONTINUATION';
+        const isBull = stk.signal_direction === 1;
+        const isBear = stk.signal_direction === -1;
+        
+        const actionBadge = document.getElementById('stk-opt-action-badge');
+        if (isBull) {
+          actionBadge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
+          actionBadge.textContent = `🟢 BUY ${stk.call_strike} (CALL OPTION)`;
+          document.getElementById('stk-opt-contract').textContent = stk.call_strike;
+        } else if (isBear) {
+          actionBadge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
+          actionBadge.textContent = `🔴 BUY ${stk.put_strike} (PUT OPTION)`;
+          document.getElementById('stk-opt-contract').textContent = stk.put_strike;
         } else {
-          document.getElementById('stk-cont-badge').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
-          document.getElementById('stk-cont-badge').textContent = '💎 NEW STRIKE';
+          actionBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
+          actionBadge.textContent = 'HOLD CASH / AWAIT BREAKOUT';
+          document.getElementById('stk-opt-contract').textContent = 'STANDBY';
         }
-      } else {
-        document.getElementById('stk-contract-title').textContent = 'HOLD CASH';
-        document.getElementById('stk-spot-desc').textContent = 'No stock option cleared confluence gate';
-        document.getElementById('stk-total-score').textContent = '0 / 100';
+        
+        document.getElementById('stk-opt-spot-line').textContent = `${stk.symbol} (Lot: ${stk.lot_size}) | Spot: ₹${stk.last_price} (${stk.pct_change_pdc > 0 ? '+' : ''}${stk.pct_change_pdc}%)`;
+        document.getElementById('stk-opt-score').textContent = `${stk.confluence_score} / 100`;
+        const p = stk.points_breakdown || {};
+        document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
+        
+        if (stk.is_continuation) {
+          document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-amber-950 text-amber-300 border border-amber-500 text-[10px] font-bold';
+          document.getElementById('stk-opt-tag').textContent = '🔄 TREND CONTINUATION';
+        } else {
+          document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
+          document.getElementById('stk-opt-tag').textContent = '🎯 NEW STRIKE';
+        }
+        
+        document.getElementById('stk-opt-risk-line').innerHTML = `<span>SL: ₹${stk.risk_management?.underlying_sl || '--'}</span><span class="text-emerald-400">Target: ₹${stk.risk_management?.underlying_target || '--'} (1:2 R:R)</span>`;
       }
 
-      // 3. Intraday Cash
+      // 4. BEST INTRADAY CASH EQUITY
       if (cash) {
-        document.getElementById('cash-symbol-title').textContent = cash.symbol;
-        document.getElementById('cash-spot-desc').textContent = `LTP: ₹${cash.last_price} | Day Move: ${cash.pct_change_pdc > 0 ? '+' : ''}${cash.pct_change_pdc}%`;
-        document.getElementById('cash-total-score').textContent = `${cash.confluence_score} / 100`;
-        const p = cash.points_breakdown || {};
-        document.getElementById('cash-pts-detail').innerHTML = `<span>Range: ${p.range_breakout_pts || 0}</span><span>PDH/L: ${p.pdh_pdl_pts || 0}</span><span>VWAP: ${p.vwap_pts || 0}</span><span>Vol: ${p.volume_pts || 0}</span>`;
-      } else {
-        document.getElementById('cash-symbol-title').textContent = 'STANDBY';
-        document.getElementById('cash-spot-desc').textContent = 'Awaiting clean breakout setup';
+        const isBull = cash.signal_direction === 1;
+        const isBear = cash.signal_direction === -1;
+        const badge = document.getElementById('cash-action-badge');
+        
+        if (isBull) {
+          badge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
+          badge.textContent = `🟢 BUY / LONG INTRADAY`;
+        } else if (isBear) {
+          badge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
+          badge.textContent = `🔴 SELL / SHORT INTRADAY`;
+        } else {
+          badge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
+          badge.textContent = 'STANDBY / INSIDE RANGE';
+        }
+        
+        document.getElementById('cash-symbol').textContent = cash.symbol;
+        document.getElementById('cash-spot-line').textContent = `LTP: ₹${cash.last_price} | Day Move: ${cash.pct_change_pdc > 0 ? '+' : ''}${cash.pct_change_pdc}%`;
+        document.getElementById('cash-entry-level').textContent = `₹${cash.last_price}`;
+        document.getElementById('cash-sl-level').textContent = `₹${cash.risk_management?.underlying_sl || '--'}`;
+        document.getElementById('cash-target-level').textContent = `₹${cash.risk_management?.underlying_target || '--'}`;
       }
-    }
-
-    function updateCards(results) {
-      let ignitions = 0;
-      let coilings = 0;
-
-      results.forEach(item => {
-        if (['BULLISH_IGNITION', 'BEARISH_IGNITION', 'RANGE_BREAKOUT_LONG', 'RANGE_BREAKDOWN_SHORT'].includes(item.ignition_state)) {
-          ignitions++;
-        }
-        if (item.is_coiling || item.ignition_state === 'COILING_ALERT') {
-          coilings++;
-        }
-        if (item.symbol === 'SENSEX') {
-          document.getElementById('sensex-spot').textContent = '₹' + item.last_price.toLocaleString('en-IN');
-          document.getElementById('sensex-directive').textContent = item.reason || 'Inside Range';
-          if (item.recommended_contract) {
-            document.getElementById('sensex-contract').innerHTML = `<span>Contract: <b>${item.recommended_contract}</b></span><span class="text-emerald-400">SL: 45% Prem</span>`;
-          }
-        }
-      });
-
-      document.getElementById('ignition-count').textContent = ignitions + ' Active';
-      document.getElementById('coiling-count').textContent = coilings + ' Coiled';
     }
 
     function renderTable(results) {
       const tbody = document.getElementById('scanner-tbody');
       if (!results || results.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="py-8 text-center text-slate-500">No instruments returned.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="py-8 text-center text-slate-500">No instruments returned.</td></tr>';
         return;
       }
 
@@ -449,21 +497,24 @@
         const isBull = r.signal_direction === 1;
         const isBear = r.signal_direction === -1;
         
-        let stateBadge = `<span class="px-2 py-0.5 rounded bg-slate-800 text-slate-400">CONSOLIDATING</span>`;
-        if (r.ignition_state === 'BULLISH_IGNITION') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300 font-bold">🟢 BULLISH IGNITION</span>`;
-        } else if (r.ignition_state === 'BEARISH_IGNITION') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 font-bold">🔴 BEARISH IGNITION</span>`;
-        } else if (r.is_coiling) {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-purple-950 border border-purple-500 text-purple-300">⚡ COILING SQUEEZE</span>`;
-        } else if (r.ignition_state === 'RANGE_BREAKOUT_LONG') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-400">TIER-2 SCALP LONG</span>`;
-        } else if (r.ignition_state === 'RANGE_BREAKDOWN_SHORT') {
-          stateBadge = `<span class="px-2 py-0.5 rounded bg-rose-950 text-rose-400">TIER-2 SCALP SHORT</span>`;
-        }
-
         const moveColor = r.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
         const moveSign = r.pct_change_pdc >= 0 ? '+' : '';
+
+        // Option Directive Pill
+        let optDirectiveHtml = `<span class="text-slate-500">Wait (Inside Range)</span>`;
+        if (isBull) {
+          optDirectiveHtml = `<div class="text-emerald-300 font-bold">🟢 BUY ${r.call_strike} (CALL)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
+        } else if (isBear) {
+          optDirectiveHtml = `<div class="text-rose-300 font-bold">🔴 BUY ${r.put_strike} (PUT)</div><div class="text-[10px] text-slate-400">SL: ₹${r.risk_management?.underlying_sl || '--'} | Tgt: ₹${r.risk_management?.underlying_target || '--'}</div>`;
+        }
+
+        // Intraday Cash Action Pill
+        let cashActionHtml = `<span class="text-slate-500">Standby</span>`;
+        if (isBull) {
+          cashActionHtml = `<span class="px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500 text-emerald-300 font-bold">BUY INTRADAY</span>`;
+        } else if (isBear) {
+          cashActionHtml = `<span class="px-2 py-0.5 rounded bg-rose-950 border border-rose-500 text-rose-300 font-bold">SHORT INTRADAY</span>`;
+        }
 
         let gateBadge = `<span class="text-slate-500">STANDBY</span>`;
         if (r.regime_confluence) {
@@ -474,22 +525,15 @@
           }
         }
 
-        // Score Badge with points breakdown
         const score = r.confluence_score || 0;
         const scoreColor = score >= 65 ? 'text-emerald-400 border-emerald-500 bg-emerald-950/60' : (score >= 50 ? 'text-blue-400 border-blue-500 bg-blue-950/60' : 'text-slate-500 border-slate-800 bg-slate-900/60');
         const pts = r.points_breakdown || {};
         const scoreHtml = `
           <div>
             <span class="px-2 py-0.5 rounded border ${scoreColor} font-bold">${score} / 100</span>
-            <div class="text-[9px] text-slate-500 mt-1">R:${pts.range_breakout_pts || 0} P:${pts.pdh_pdl_pts || 0} V:${pts.vwap_pts || 0}</div>
+            <div class="text-[9px] text-slate-500 mt-1">R:${pts.range_breakout_pts || 0} P:${pts.pdh_pdl_pts || 0} V:${pts.vwap_pts || 0} Vol:${pts.volume_pts || 0}</div>
           </div>
         `;
-
-        let strikeHtml = `<span class="text-slate-500">—</span>`;
-        if (r.recommended_contract) {
-          const color = isBull ? 'text-emerald-300' : 'text-rose-300';
-          strikeHtml = `<div><b class="${color}">${r.recommended_contract}</b><div class="text-[10px] text-slate-400">SL: ${r.risk_management?.premium_stop_loss_pct ? r.risk_management.premium_stop_loss_pct + '% Prem' : '₹' + r.risk_management?.underlying_sl}</div></div>`;
-        }
 
         html += `
           <tr class="hover:bg-slate-900/60 transition">
@@ -501,19 +545,15 @@
               <div class="text-slate-200">₹${r.last_price.toLocaleString('en-IN')}</div>
               <div class="${moveColor} text-[11px] font-bold">${moveSign}${r.pct_change_pdc}% (from PDC)</div>
             </td>
-            <td class="py-3 px-4 text-[11px]">
-              <div>Top: <span class="text-slate-300">₹${r.range_top}</span></div>
-              <div>Bot: <span class="text-slate-300">₹${r.range_bottom}</span></div>
-            </td>
+            <td class="py-3 px-4">${optDirectiveHtml}</td>
+            <td class="py-3 px-4">${cashActionHtml}</td>
+            <td class="py-3 px-4">${scoreHtml}</td>
             <td class="py-3 px-4 text-[11px]">
               <div>PDH: <span class="text-slate-300">₹${r.pdh}</span></div>
               <div>PDL: <span class="text-slate-300">₹${r.pdl}</span></div>
               <div class="text-[10px] text-blue-400">VWAP: ₹${r.vwap}</div>
             </td>
-            <td class="py-3 px-4">${scoreHtml}</td>
-            <td class="py-3 px-4">${stateBadge}</td>
             <td class="py-3 px-4">${gateBadge}</td>
-            <td class="py-3 px-4">${strikeHtml}</td>
           </tr>
         `;
       });
