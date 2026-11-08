@@ -1,16 +1,17 @@
 """
-FinPlus+ Best-in-Class Shortlist & 30-Minute Trend Continuation Engine
-Provides transparent, detailed institutional trade setups:
-1. BSE Sensex Options Radar (Always shows Call CE vs Put PE strikes, triggers, and active directive)
-2. NSE Nifty Options Radar (Always shows Call CE vs Put PE strikes, triggers, and active directive)
-3. Best Stock Option (Explicit BUY CE vs BUY PE with exact entry, SL, and target)
-4. Best Intraday Cash Stock (Explicit BUY / LONG vs SELL / SHORT with exact entry, SL, and target)
+FinPlus+ Best-in-Class Shortlist & Trend Continuation Engine
+STRICT INSTITUTIONAL MARKET REGIME GATING:
+1. Never suggest CE and PE simultaneously.
+2. Market conditions (App #1 Air Traffic Control) MUST confirm the direction before any strike is recommended.
+3. If market regime is Choppy, Neutral, or Vetoed, output HOLD CASH (Zero options recommended).
+4. Stock Options and Intraday Cash are completely decoupled.
 """
 
 from typing import Dict, Any, List, Optional
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
 
 logger = setup_logger("ShortlistEngine")
+
 
 class ShortlistEngine:
     def __init__(self):
@@ -20,50 +21,51 @@ class ShortlistEngine:
 
     def select_best_candidates(self, scan_results: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
-        Ranks all scanned candidates and prepares the full actionable trade matrix.
+        Ranks all scanned candidates with strict market-condition gates.
+        VETOED trades are strictly disqualified from being recommended.
         """
         # Separate Index items from Stock items
         sensex_item = next((r for r in scan_results if r.get("symbol") == "SENSEX"), None)
         nifty_item = next((r for r in scan_results if r.get("symbol") == "NIFTY"), None)
         
-        # Format Sensex Radar
+        # Format Sensex Radar (Never suggests CE and PE at the same time)
         sensex_radar = self._format_index_radar(sensex_item, default_sym="SENSEX", default_lot=20, default_step=100)
         
-        # Format Nifty Radar
+        # Format Nifty Radar (Never suggests CE and PE at the same time)
         nifty_radar = self._format_index_radar(nifty_item, default_sym="NIFTY", default_lot=65, default_step=50)
         
         # -------------------------------------------------------------
-        # 1. STOCK OPTIONS CANDIDATES (Liquid F&O Equities Lot <= 500)
+        # 1. STOCK OPTIONS: STRICT MARKET CONDITION FILTER
+        # Must be: F&O (lot <= 500) + Score >= 50 + APPROVED by App #1 Macro Regime
         # -------------------------------------------------------------
-        stock_option_candidates = [
+        approved_stock_options = [
             r for r in scan_results 
             if r.get("category") == "STOCK_OPTIONS" 
             and r.get("signal_direction", 0) != 0
+            and r.get("confluence_score", 0) >= 50
+            and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
         ]
         
+        # Sort by highest confluence score
+        approved_stock_options.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+        best_stock_option = approved_stock_options[0] if approved_stock_options else None
+        
         # -------------------------------------------------------------
-        # 2. INTRADAY CASH CANDIDATES (Broad Market Quality & Anti-Circuit)
+        # 2. INTRADAY CASH: STRICT MARKET CONDITION & ANTI-CIRCUIT FILTER
+        # Must be: Broad Market + Score >= 50 + APPROVED by App #1 + Anti-Circuit Safe
         # -------------------------------------------------------------
-        intraday_cash_candidates = [
+        approved_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
             and r.get("signal_direction", 0) != 0
-            and r.get("anti_circuit_status") != "EXTREME_CIRCUIT_DANGER"
+            and r.get("confluence_score", 0) >= 50
+            and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
+            and r.get("anti_circuit_status") == "SAFE"
         ]
         
-        # Rank: Approved setups first, then highest score
-        def rank_key(item):
-            score = item.get("confluence_score", 0)
-            if not ("VETOED" in item.get("regime_confluence", "")):
-                score += 100 # High priority for cleared trades
-            return score
-            
-        stock_option_candidates.sort(key=rank_key, reverse=True)
-        intraday_cash_candidates.sort(key=rank_key, reverse=True)
-        
-        # DECOUPLED SELECTIONS: Never interconnected!
-        best_stock_option = stock_option_candidates[0] if stock_option_candidates else None
-        best_intraday_stock = intraday_cash_candidates[0] if intraday_cash_candidates else None
+        # Sort by highest confluence score
+        approved_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+        best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
             
         # Detect Trend Continuation vs Previous 30m Cycle for Stock Option
         stock_continuation = False
@@ -99,8 +101,8 @@ class ShortlistEngine:
             "best_stock_option": best_stock_option,
             "best_intraday_stock": best_intraday_stock,
             "has_actionable_trades": (
-                (best_stock_option is not None and not ("VETOED" in best_stock_option.get("regime_confluence", ""))) or 
-                (best_intraday_stock is not None and not ("VETOED" in best_intraday_stock.get("regime_confluence", ""))) or
+                best_stock_option is not None or 
+                best_intraday_stock is not None or 
                 best_index_option.get("is_actionable", False)
             ),
             "index_continuation": index_continuation,
@@ -114,15 +116,26 @@ class ShortlistEngine:
         return selection_payload
 
     def _format_index_radar(self, item: Optional[Dict[str, Any]], default_sym: str, default_lot: int, default_step: int) -> Dict[str, Any]:
-        """Ensures Sensex and Nifty always have explicit Call/Put strikes, trigger levels, and clear actionable directives."""
+        """
+        Formats Index Options Radar with STRICT SINGLE-DIRECTION RULE:
+        - NEVER suggests Call (CE) and Put (PE) simultaneously.
+        - If market is in Bullish Breakout + Uptrend: Suggests ONLY the Call Strike.
+        - If market is in Bearish Breakdown + Downtrend: Suggests ONLY the Put Strike.
+        - If Inside Range or Choppy/Vetoed: Suggests ZERO strikes with HOLD CASH.
+        """
         if not item:
             return {
                 "symbol": default_sym,
+                "name": default_sym,
                 "lot_size": default_lot,
+                "last_price": 0.0,
+                "pct_change_pdc": 0.0,
                 "status": "INITIALIZING",
-                "call_strike": f"{default_sym} CE",
-                "put_strike": f"{default_sym} PE",
-                "action_badge": "STANDBY",
+                "recommended_strike": None,
+                "call_strike": None,
+                "put_strike": None,
+                "trade_side": "NONE_HOLD_CASH",
+                "action_badge": "HOLD CASH / STANDBY",
                 "directive": "Downloading 15m candle history...",
                 "is_actionable": False
             }
@@ -131,34 +144,49 @@ class ShortlistEngine:
         strike_step = item.get("strike_step", default_step)
         atm_strike = int(round(last_price / strike_step) * strike_step) if last_price > 0 else 0
         
-        call_strike = f"{item['symbol']} {atm_strike} CE"
-        put_strike = f"{item['symbol']} {atm_strike} PE"
-        
         sig_dir = item.get("signal_direction", 0)
         is_vetoed = "VETOED" in item.get("regime_confluence", "")
         confluence_badge = item.get("regime_badge", "")
         
-        action_badge = "HOLD CASH / WAIT"
-        directive = f"Inside Range. Call trigger > ₹{item.get('pdh', 0)} | Put trigger < ₹{item.get('pdl', 0)}"
+        recommended_strike = None
+        call_strike = None
+        put_strike = None
+        trade_side = "NONE_HOLD_CASH"
         is_actionable = False
-        
-        if sig_dir == 1: # Bullish
+        action_badge = "HOLD CASH / STANDBY"
+        directive = f"Inside Range ({item.get('range_bottom', 0)} - {item.get('range_top', 0)}). No option entry recommended."
+
+        # Case 1: Bullish Breakout
+        if sig_dir == 1:
             if is_vetoed:
-                action_badge = f"🛑 VETOED (DO NOT BUY CALLS)"
-                directive = f"Macro trend is Bearish/Choppy ({confluence_badge}). Long breakout rejected for capital safety."
+                action_badge = "🛑 VETOED (DO NOT BUY CALLS)"
+                directive = f"Long breakout rejected: Market Breadth / Air Traffic Control is hostile ({confluence_badge})."
             else:
-                action_badge = f"🟢 BUY {call_strike} (CALL OPTION)"
-                directive = f"Breakout above Range Top (₹{item.get('range_top')}) & PDH (₹{item.get('pdh')}). Target: +180% on Premium."
+                call_strike = f"{item['symbol']} {atm_strike} CE"
+                recommended_strike = call_strike
+                trade_side = "CALL_ONLY"
+                action_badge = f"🟢 BUY {call_strike} (CALL)"
+                directive = f"Breakout above Range Top (₹{item.get('range_top')}) confirmed by Market Breadth. Target: +180%."
                 is_actionable = True
-        elif sig_dir == -1: # Bearish
+
+        # Case 2: Bearish Breakdown
+        elif sig_dir == -1:
             if is_vetoed:
-                action_badge = f"🛑 VETOED (DO NOT SHORT)"
-                directive = f"Macro trend is Bullish ({confluence_badge}). Short breakdown rejected for capital safety."
+                action_badge = "🛑 VETOED (DO NOT BUY PUTS)"
+                directive = f"Short breakdown rejected: Market Breadth / Air Traffic Control is hostile ({confluence_badge})."
             else:
-                action_badge = f"🔴 BUY {put_strike} (PUT OPTION)"
-                directive = f"Breakdown below Range Bottom (₹{item.get('range_bottom')}) & PDL (₹{item.get('pdl')}). Target: +180% on Premium."
+                put_strike = f"{item['symbol']} {atm_strike} PE"
+                recommended_strike = put_strike
+                trade_side = "PUT_ONLY"
+                action_badge = f"🔴 BUY {put_strike} (PUT)"
+                directive = f"Breakdown below Range Bottom (₹{item.get('range_bottom')}) confirmed by Market Breadth. Target: +180%."
                 is_actionable = True
-                
+
+        # Case 3: Inside Range / No Breakout
+        else:
+            action_badge = "HOLD CASH / INSIDE RANGE"
+            directive = f"Price inside range (₹{item.get('range_bottom')} - ₹{item.get('range_top')}). Zero options recommended."
+
         return {
             "symbol": item["symbol"],
             "name": item.get("name", item["symbol"]),
@@ -169,14 +197,17 @@ class ShortlistEngine:
             "pdl": item.get("pdl", 0.0),
             "range_top": item.get("range_top", 0.0),
             "range_bottom": item.get("range_bottom", 0.0),
-            "confluence_score": item.get("confluence_score", 0),
-            "points_breakdown": item.get("points_breakdown", {}),
+            "vwap": item.get("vwap", 0.0),
+            "signal_direction": sig_dir,
+            "recommended_strike": recommended_strike,
             "call_strike": call_strike,
             "put_strike": put_strike,
+            "trade_side": trade_side,
             "action_badge": action_badge,
             "directive": directive,
-            "is_actionable": is_actionable,
+            "confluence_score": item.get("confluence_score", 0),
+            "points_breakdown": item.get("points_breakdown", {}),
             "regime_confluence": item.get("regime_confluence", ""),
             "regime_badge": confluence_badge,
-            "risk_management": item.get("risk_management", {})
+            "is_actionable": is_actionable
         }

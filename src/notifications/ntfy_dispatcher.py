@@ -42,41 +42,54 @@ class NTFYDispatcher:
             "---"
         ]
         
-        # 1. SENSEX 30 RADAR
+        # 1. SENSEX 30 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
         lines.append(f"👑 **BSE SENSEX 30 OPTIONS (HIGH PRIORITY):**")
         lines.append(f"• **Spot LTP:** `₹{sx.get('last_price', '--')}` ({sx.get('pct_change_pdc', 0):+0.2f}%)")
-        lines.append(f"• **Call Strike (CE):** `{sx.get('call_strike')}` (Trigger > `₹{sx.get('pdh')}`)")
-        lines.append(f"• **Put Strike (PE):** `{sx.get('put_strike')}` (Trigger < `₹{sx.get('pdl')}`)")
-        lines.append(f"• **Directive:** `{sx.get('action_badge')}` — *{sx.get('directive')}*")
+        if sx.get("is_actionable") and sx.get("recommended_strike"):
+            lines.append(f"• **CONFIRMED STRIKE:** `{sx.get('recommended_strike')}`")
+            lines.append(f"• **ACTION:** `{sx.get('action_badge')}`")
+            lines.append(f"• **Setup:** {sx.get('directive')}")
+        else:
+            lines.append(f"• **Recommendation:** `HOLD CASH / STANDBY` (No option recommended)")
+            lines.append(f"• **Condition:** {sx.get('directive')}")
         lines.append("")
         
-        # 2. NIFTY 50 RADAR
+        # 2. NIFTY 50 RADAR (SINGLE CONFIRMED DIRECTION ONLY)
         lines.append(f"🎯 **NSE NIFTY 50 OPTIONS:**")
         lines.append(f"• **Spot LTP:** `₹{nf.get('last_price', '--')}` ({nf.get('pct_change_pdc', 0):+0.2f}%)")
-        lines.append(f"• **Call Strike (CE):** `{nf.get('call_strike')}` | **Put Strike (PE):** `{nf.get('put_strike')}`")
-        lines.append(f"• **Directive:** `{nf.get('action_badge')}`")
+        if nf.get("is_actionable") and nf.get("recommended_strike"):
+            lines.append(f"• **CONFIRMED STRIKE:** `{nf.get('recommended_strike')}`")
+            lines.append(f"• **ACTION:** `{nf.get('action_badge')}`")
+            lines.append(f"• **Setup:** {nf.get('directive')}")
+        else:
+            lines.append(f"• **Recommendation:** `HOLD CASH / STANDBY` (No option recommended)")
+            lines.append(f"• **Condition:** {nf.get('directive')}")
         lines.append("")
 
-        # 3. BEST STOCK OPTION
+        # 3. BEST STOCK OPTION (STRICT MARKET GATED)
+        lines.append("💎 **BEST STOCK OPTION:**")
         if stk:
-            lines.append("💎 **BEST STOCK OPTION:**")
+            lines.append(f"• **CONFIRMED CONTRACT:** `{stk.get('recommended_contract')}` (Lot: `{stk.get('lot_size')}` | Spot: `₹{stk.get('last_price')}`)")
             lines.append(f"• **ACTION:** `{stk.get('option_action_badge')}`")
-            lines.append(f"• **Contract:** `{stk.get('recommended_contract')}` (Lot: `{stk.get('lot_size')}` | Spot: `₹{stk.get('last_price')}`)")
             lines.append(f"• **Score:** `{stk.get('confluence_score')}/100`")
             risk = stk.get("risk_management", {})
             if "underlying_sl" in risk:
                 lines.append(f"• **Underlying SL:** `₹{risk.get('underlying_sl')}` | **Target:** `₹{risk.get('underlying_target')}`")
-            lines.append(f"• **Regime Gate:** `{stk.get('regime_badge')}`")
-            lines.append("")
+            lines.append(f"• **Regime Clearance:** `{stk.get('regime_badge')}`")
+        else:
+            lines.append(f"• **Recommendation:** `HOLD CASH` (No setup cleared macro trend + 50pt confluence)")
+        lines.append("")
 
-        # 4. BEST INTRADAY CASH STOCK (DECOUPLED FROM OPTIONS)
+        # 4. BEST INTRADAY CASH RUNNER (DECOUPLED & ANTI-CIRCUIT VERIFIED)
+        lines.append("📈 **BEST INTRADAY CASH RUNNER (BROAD MARKET QUALITY):**")
         if cash:
-            lines.append("📈 **BEST INTRADAY CASH RUNNER (BROAD MARKET QUALITY):**")
             lines.append(f"• **ACTION:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
             lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
-            lines.append(f"• **Safety:** Anti-Circuit Verified (Deep Institutional Liquidity, No Freeze Risk)")
+            lines.append(f"• **Safety:** Anti-Circuit Verified (Turnover > ₹15 Cr, Zero Freeze Risk)")
             lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | **Regime Gate:** `{cash.get('regime_badge')}`")
-            lines.append("")
+        else:
+            lines.append(f"• **Recommendation:** `HOLD CASH` (No high-turnover breakout cleared by market breadth)")
+        lines.append("")
             
         lines.append("---")
         lines.append("🛡️ *Next consolidated pulse in 30 minutes.*")

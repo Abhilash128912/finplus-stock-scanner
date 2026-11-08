@@ -121,22 +121,20 @@
               <span class="text-xs mono font-bold" id="sensex-move-val">--%</span>
             </div>
 
-            <!-- Action Badge -->
-            <div class="mt-2.5 p-2 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="sensex-action-pill">
+            <!-- Action Badge / Confirmed Strike -->
+            <div class="mt-2.5 p-2.5 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="sensex-action-pill">
               HOLD CASH / STANDBY
             </div>
 
-            <!-- Dual Strikes: CE and PE -->
-            <div class="mt-3 grid grid-cols-2 gap-2 text-[11px] mono">
-              <div class="p-2 rounded bg-slate-950 border border-emerald-500/30 text-center">
-                <div class="text-[10px] text-emerald-400 font-bold">CALL STRIKE (CE)</div>
-                <div class="font-bold text-white mt-0.5" id="sensex-ce-strike">-- CE</div>
-                <div class="text-[9px] text-slate-500" id="sensex-ce-trigger">Trigger &gt; PDH</div>
+            <!-- Single Confirmed Strike or Trigger Watch -->
+            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] mono space-y-1.5" id="sensex-strike-container">
+              <div class="flex justify-between items-center">
+                <span class="text-slate-400">Confirmed Strike:</span>
+                <span class="font-bold text-white" id="sensex-strike-name">NONE (HOLD CASH)</span>
               </div>
-              <div class="p-2 rounded bg-slate-950 border border-rose-500/30 text-center">
-                <div class="text-[10px] text-rose-400 font-bold">PUT STRIKE (PE)</div>
-                <div class="font-bold text-white mt-0.5" id="sensex-pe-strike">-- PE</div>
-                <div class="text-[9px] text-slate-500" id="sensex-pe-trigger">Trigger &lt; PDL</div>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900">
+                <span>Range Top: <span class="text-slate-300" id="sensex-rtop">--</span></span>
+                <span>Range Bot: <span class="text-slate-300" id="sensex-rbot">--</span></span>
               </div>
             </div>
 
@@ -165,22 +163,20 @@
               <span class="text-xs mono font-bold" id="nifty-move-val">--%</span>
             </div>
 
-            <!-- Action Badge -->
-            <div class="mt-2.5 p-2 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="nifty-action-pill">
+            <!-- Action Badge / Confirmed Strike -->
+            <div class="mt-2.5 p-2.5 rounded-lg bg-slate-950 text-center font-bold text-xs mono border" id="nifty-action-pill">
               HOLD CASH / STANDBY
             </div>
 
-            <!-- Dual Strikes: CE and PE -->
-            <div class="mt-3 grid grid-cols-2 gap-2 text-[11px] mono">
-              <div class="p-2 rounded bg-slate-950 border border-emerald-500/30 text-center">
-                <div class="text-[10px] text-emerald-400 font-bold">CALL STRIKE (CE)</div>
-                <div class="font-bold text-white mt-0.5" id="nifty-ce-strike">-- CE</div>
-                <div class="text-[9px] text-slate-500" id="nifty-ce-trigger">Trigger &gt; PDH</div>
+            <!-- Single Confirmed Strike or Trigger Watch -->
+            <div class="mt-3 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 text-[11px] mono space-y-1.5" id="nifty-strike-container">
+              <div class="flex justify-between items-center">
+                <span class="text-slate-400">Confirmed Strike:</span>
+                <span class="font-bold text-white" id="nifty-strike-name">NONE (HOLD CASH)</span>
               </div>
-              <div class="p-2 rounded bg-slate-950 border border-rose-500/30 text-center">
-                <div class="text-[10px] text-rose-400 font-bold">PUT STRIKE (PE)</div>
-                <div class="font-bold text-white mt-0.5" id="nifty-pe-strike">-- PE</div>
-                <div class="text-[9px] text-slate-500" id="nifty-pe-trigger">Trigger &lt; PDL</div>
+              <div class="flex justify-between text-[10px] text-slate-500 pt-1 border-t border-slate-900">
+                <span>Range Top: <span class="text-slate-300" id="nifty-rtop">--</span></span>
+                <span>Range Bot: <span class="text-slate-300" id="nifty-rbot">--</span></span>
               </div>
             </div>
 
@@ -412,7 +408,7 @@
       const stk = shortlist.best_stock_option;
       const cash = shortlist.best_intraday_stock;
 
-      // 1. SENSEX RADAR
+      // 1. SENSEX RADAR (SINGLE DIRECTION OR HOLD CASH)
       if (sx) {
         document.getElementById('sensex-spot-val').textContent = '₹' + (sx.last_price ? sx.last_price.toLocaleString('en-IN') : '--');
         const sxSign = sx.pct_change_pdc >= 0 ? '+' : '';
@@ -420,26 +416,31 @@
         document.getElementById('sensex-move-val').className = `text-xs mono font-bold ${sxColor}`;
         document.getElementById('sensex-move-val').textContent = `${sxSign}${sx.pct_change_pdc}%`;
         
-        document.getElementById('sensex-ce-strike').textContent = sx.call_strike || '-- CE';
-        document.getElementById('sensex-pe-strike').textContent = sx.put_strike || '-- PE';
-        document.getElementById('sensex-ce-trigger').textContent = `Trigger > ₹${sx.pdh}`;
-        document.getElementById('sensex-pe-trigger').textContent = `Trigger < ₹${sx.pdl}`;
+        document.getElementById('sensex-rtop').textContent = `₹${sx.range_top || '--'}`;
+        document.getElementById('sensex-rbot').textContent = `₹${sx.range_bottom || '--'}`;
         
         const pill = document.getElementById('sensex-action-pill');
+        const strikeEl = document.getElementById('sensex-strike-name');
         pill.textContent = sx.action_badge;
-        if (sx.action_badge.includes('BUY') && sx.action_badge.includes('CALL')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
-        } else if (sx.action_badge.includes('BUY') && sx.action_badge.includes('PUT')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
-        } else if (sx.action_badge.includes('VETOED')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950/60 text-rose-400 border border-rose-800 text-center font-bold text-xs mono';
+        
+        if (sx.is_actionable && sx.recommended_strike) {
+          strikeEl.textContent = sx.recommended_strike;
+          if (sx.trade_side === 'CALL_ONLY') {
+            pill.className = 'mt-2.5 p-2.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
+            strikeEl.className = 'font-bold text-emerald-300';
+          } else {
+            pill.className = 'mt-2.5 p-2.5 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
+            strikeEl.className = 'font-bold text-rose-300';
+          }
         } else {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
+          strikeEl.textContent = 'NONE (HOLD CASH)';
+          strikeEl.className = 'font-bold text-slate-400';
+          pill.className = 'mt-2.5 p-2.5 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
         }
         document.getElementById('sensex-directive-text').textContent = sx.directive;
       }
 
-      // 2. NIFTY RADAR
+      // 2. NIFTY RADAR (SINGLE DIRECTION OR HOLD CASH)
       if (nf) {
         document.getElementById('nifty-spot-val').textContent = '₹' + (nf.last_price ? nf.last_price.toLocaleString('en-IN') : '--');
         const nfSign = nf.pct_change_pdc >= 0 ? '+' : '';
@@ -447,43 +448,44 @@
         document.getElementById('nifty-move-val').className = `text-xs mono font-bold ${nfColor}`;
         document.getElementById('nifty-move-val').textContent = `${nfSign}${nf.pct_change_pdc}%`;
         
-        document.getElementById('nifty-ce-strike').textContent = nf.call_strike || '-- CE';
-        document.getElementById('nifty-pe-strike').textContent = nf.put_strike || '-- PE';
-        document.getElementById('nifty-ce-trigger').textContent = `Trigger > ₹${nf.pdh}`;
-        document.getElementById('nifty-pe-trigger').textContent = `Trigger < ₹${nf.pdl}`;
+        document.getElementById('nifty-rtop').textContent = `₹${nf.range_top || '--'}`;
+        document.getElementById('nifty-rbot').textContent = `₹${nf.range_bottom || '--'}`;
         
         const pill = document.getElementById('nifty-action-pill');
+        const strikeEl = document.getElementById('nifty-strike-name');
         pill.textContent = nf.action_badge;
-        if (nf.action_badge.includes('BUY') && nf.action_badge.includes('CALL')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
-        } else if (nf.action_badge.includes('BUY') && nf.action_badge.includes('PUT')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
-        } else if (nf.action_badge.includes('VETOED')) {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-rose-950/60 text-rose-400 border border-rose-800 text-center font-bold text-xs mono';
+        
+        if (nf.is_actionable && nf.recommended_strike) {
+          strikeEl.textContent = nf.recommended_strike;
+          if (nf.trade_side === 'CALL_ONLY') {
+            pill.className = 'mt-2.5 p-2.5 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500 text-center font-bold text-xs mono';
+            strikeEl.className = 'font-bold text-emerald-300';
+          } else {
+            pill.className = 'mt-2.5 p-2.5 rounded-lg bg-rose-950 text-rose-300 border border-rose-500 text-center font-bold text-xs mono';
+            strikeEl.className = 'font-bold text-rose-300';
+          }
         } else {
-          pill.className = 'mt-2.5 p-2 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
+          strikeEl.textContent = 'NONE (HOLD CASH)';
+          strikeEl.className = 'font-bold text-slate-400';
+          pill.className = 'mt-2.5 p-2.5 rounded-lg bg-slate-950 text-slate-400 border border-slate-800 text-center font-bold text-xs mono';
         }
         document.getElementById('nifty-directive-text').textContent = nf.directive;
       }
 
-      // 3. BEST STOCK OPTION
-      if (stk) {
+      // 3. BEST STOCK OPTION (STRICT MARKET GATED)
+      const stkActionBadge = document.getElementById('stk-opt-action-badge');
+      if (stk && stk.recommended_contract) {
         const isBull = stk.signal_direction === 1;
         const isBear = stk.signal_direction === -1;
         
-        const actionBadge = document.getElementById('stk-opt-action-badge');
         if (isBull) {
-          actionBadge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
-          actionBadge.textContent = `🟢 BUY ${stk.call_strike} (CALL OPTION)`;
+          stkActionBadge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
+          stkActionBadge.textContent = `🟢 BUY ${stk.call_strike} (CALL)`;
           document.getElementById('stk-opt-contract').textContent = stk.call_strike;
         } else if (isBear) {
-          actionBadge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
-          actionBadge.textContent = `🔴 BUY ${stk.put_strike} (PUT OPTION)`;
+          stkActionBadge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
+          stkActionBadge.textContent = `🔴 BUY ${stk.put_strike} (PUT)`;
           document.getElementById('stk-opt-contract').textContent = stk.put_strike;
-        } else {
-          actionBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
-          actionBadge.textContent = 'HOLD CASH / AWAIT BREAKOUT';
-          document.getElementById('stk-opt-contract').textContent = 'STANDBY';
         }
         
         document.getElementById('stk-opt-spot-line').textContent = `${stk.symbol} (Lot: ${stk.lot_size}) | Spot: ₹${stk.last_price} (${stk.pct_change_pdc > 0 ? '+' : ''}${stk.pct_change_pdc}%)`;
@@ -498,33 +500,48 @@
           document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500 text-[10px] font-bold';
           document.getElementById('stk-opt-tag').textContent = '🎯 NEW STRIKE';
         }
-        
         document.getElementById('stk-opt-risk-line').innerHTML = `<span>SL: ₹${stk.risk_management?.underlying_sl || '--'}</span><span class="text-emerald-400">Target: ₹${stk.risk_management?.underlying_target || '--'} (1:2 R:R)</span>`;
+      } else {
+        stkActionBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
+        stkActionBadge.textContent = 'HOLD CASH / STANDBY';
+        document.getElementById('stk-opt-contract').textContent = 'NO CLEAR SETUP';
+        document.getElementById('stk-opt-spot-line').textContent = 'Zero stock options cleared macro trend gate & 50pt confluence.';
+        document.getElementById('stk-opt-score').textContent = '-- / 100';
+        document.getElementById('stk-opt-pts-line').innerHTML = `<span>Range: --</span><span>PDH/L: --</span><span>VWAP: --</span><span>Vol: --</span>`;
+        document.getElementById('stk-opt-risk-line').innerHTML = `<span>SL: --</span><span>Target: --</span>`;
+        document.getElementById('stk-opt-tag').textContent = 'STANDBY';
+        document.getElementById('stk-opt-tag').className = 'px-2 py-0.5 rounded bg-slate-800 text-slate-400 text-[10px] font-bold';
       }
 
-      // 4. BEST INTRADAY CASH EQUITY
+      // 4. BEST INTRADAY CASH EQUITY (STRICT MARKET GATED)
+      const cashBadge = document.getElementById('cash-action-badge');
       if (cash) {
         const isBull = cash.signal_direction === 1;
         const isBear = cash.signal_direction === -1;
-        const badge = document.getElementById('cash-action-badge');
         
         if (isBull) {
-          badge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
-          badge.textContent = `🟢 BUY / LONG INTRADAY`;
+          cashBadge.className = 'p-2.5 rounded-lg bg-emerald-950 border border-emerald-500 text-center font-extrabold text-sm mono text-emerald-300';
+          cashBadge.textContent = `🟢 BUY / LONG INTRADAY`;
         } else if (isBear) {
-          badge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
-          badge.textContent = `🔴 SELL / SHORT INTRADAY`;
-        } else {
-          badge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
-          badge.textContent = 'STANDBY / INSIDE RANGE';
+          cashBadge.className = 'p-2.5 rounded-lg bg-rose-950 border border-rose-500 text-center font-extrabold text-sm mono text-rose-300';
+          cashBadge.textContent = `🔴 SELL / SHORT INTRADAY`;
         }
         
         document.getElementById('cash-symbol').textContent = cash.symbol;
         document.getElementById('cash-spot-line').textContent = `LTP: ₹${cash.last_price} | Day Move: ${cash.pct_change_pdc > 0 ? '+' : ''}${cash.pct_change_pdc}%`;
         document.getElementById('cash-entry-level').textContent = `₹${cash.last_price}`;
-        document.getElementById('cash-sl-level').textContent = `₹${cash.risk_management?.underlying_sl || '--'}`;
-        document.getElementById('cash-target-level').textContent = `₹${cash.risk_management?.underlying_target || '--'}`;
+        document.getElementById('cash-sl-level').textContent = `₹${cash.risk_management?.stop_loss || cash.risk_management?.underlying_sl || '--'}`;
+        document.getElementById('cash-target-level').textContent = `₹${cash.risk_management?.target || cash.risk_management?.underlying_target || '--'}`;
+      } else {
+        cashBadge.className = 'p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center font-bold text-xs mono text-slate-400';
+        cashBadge.textContent = 'HOLD CASH / STANDBY';
+        document.getElementById('cash-symbol').textContent = 'NO CLEAR SETUP';
+        document.getElementById('cash-spot-line').textContent = 'No broad-market runner cleared market breadth confluence.';
+        document.getElementById('cash-entry-level').textContent = '--';
+        document.getElementById('cash-sl-level').textContent = '--';
+        document.getElementById('cash-target-level').textContent = '--';
       }
+    }
     }
 
     function renderTable(results) {
