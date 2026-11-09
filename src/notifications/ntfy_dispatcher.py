@@ -103,117 +103,71 @@ class NTFYDispatcher:
         opt_dir = app1_data.get("options_directive", {})
         metrics = app1_data.get("metrics", {})
         
-        lines = [
-            f"**FINPLUS+ INSTITUTIONAL DESK PULSE**",
-            f"`{day_name}, {date_str} | {ist_time}`",
-            "----------------------------------------"
-        ]
-        
-        # 1. MARKET REGIME & BREADTH
-        lines.append("**1. MARKET REGIME & CONTINUOUS TREND**")
+        # Clean, ultra-compact institutional format (fits mobile without truncation)
         nf_spot = float(metrics.get("nifty_spot") or nf.get("last_price") or 24847.2)
         nf_chg = float(metrics.get("nifty_change_pct", -0.56))
         sx_spot = float(metrics.get("sensex_spot", 80757.2))
         sx_chg = float(metrics.get("sensex_change_pct", -0.33))
         
         reg_lbl = trend_info.get("label", "DOWNTREND (BEAR DISTRIBUTION)")
-        score_lbl = trend_info.get("score_label", f"{trend_info.get('score', -40)}/100")
-        lines.append(f"• Spot: NIFTY {nf_spot:,.2f} ({nf_chg:+.2f}%) | SENSEX {sx_spot:,.2f} ({sx_chg:+.2f}%)")
-        lines.append(f"• Regime: `{reg_lbl}` ({score_lbl}) | Gate: `{opt_dir.get('badge', 'DEFENSIVE')}`")
-        lines.append(f"• NSE Breadth: `{metrics.get('broad_advances', '--')} Adv` / `{metrics.get('broad_declines', '--')} Dec` (ADR: `{metrics.get('broad_adr', '--')}`)")
-        lines.append("")
+        adr_val = metrics.get('broad_adr', '0.49')
         
-        # 2. INTRADAY CASH PICKS
-        lines.append("**2. INTRADAY CASH EQUITY SUGGESTIONS**")
+        lines = [
+            f"Spot: NIFTY {nf_spot:,.0f} ({nf_chg:+.2f}%) | SENSEX {sx_spot:,.0f} ({sx_chg:+.2f}%)",
+            f"Trend: {reg_lbl} | ADR {adr_val}:1"
+        ]
+        
+        # 2. Intraday Cash
         top_stocks = shortlist.get("top_intraday_stocks", [])
         if not top_stocks and shortlist.get("best_intraday_stock"):
             top_stocks = [shortlist.get("best_intraday_stock")]
 
         if top_stocks:
-            for idx, item in enumerate(top_stocks, 1):
-                sym = item.get("symbol")
-                ltp = item.get("last_price")
-                act = item.get("intraday_action_badge", "BUY")
-                score = item.get("confluence_score", 0)
-                risk = item.get("risk_management", {})
-                sl = risk.get("stop_loss", item.get("range_bottom", "--"))
-                tgt = risk.get("target", "--")
-                lines.append(f"{idx}. `[{act}] {sym}` @ Rs {ltp:,.2f} (Score: {score}/100)")
-                lines.append(f"   Target: Rs {tgt} | SL: Rs {sl} | 50 EMA: Rs {item.get('ema50')} ({item.get('ema50_dist_pct', 0):+0.1f}%)")
+            item = top_stocks[0]
+            sym = item.get("symbol")
+            ltp = item.get("last_price", 0.0)
+            act = "SELL" if "SELL" in item.get("intraday_action_badge", "") else "BUY"
+            risk = item.get("risk_management", {})
+            sl = risk.get("stop_loss", "--")
+            tgt = risk.get("target", "--")
+            lines.append(f"Cash: [{act}] {sym} @ Rs {ltp:,.0f} (SL: {sl}, Tgt: {tgt})")
         else:
-            watch_list = shortlist.get("top_watch_stocks", [])
-            if watch_list:
-                lines.append("• Stance: `HOLD CASH` (Bear market defense; no scrip cleared 80/100 threshold)")
-                watch_syms = ", ".join([f"{w.get('symbol')} (Rs {w.get('last_price')})" for w in watch_list[:2]])
-                lines.append(f"• Key Watch: {watch_syms}")
-            else:
-                lines.append("• Stance: `HOLD CASH` (All universe equities consolidating inside defensive bands)")
-        lines.append("")
+            lines.append("Cash: [HOLD CASH] Bear distribution defense")
 
-        # 3. NIFTY & SENSEX OPTIONS DIRECTIVES
-        lines.append("**3. NIFTY & SENSEX OPTIONS DIRECTIVES**")
-        
-        # Nifty 50 Options Setup
+        # 3. Nifty & Sensex Options
         atm_nifty = int(round(nf_spot / 50.0) * 50) if nf_spot > 0 else 24850
         if "DOWNTREND" in reg_lbl or "BEAR" in reg_lbl:
-            lines.append(f"• NIFTY 50: `[BUY PUT]` NIFTY {atm_nifty} PE (Downside Bias • Outlay < Rs 5,000, 30% SL)")
+            lines.append(f"Nifty Opt: [BUY PUT] NIFTY {atm_nifty} PE (Outlay < 5K, 30% SL)")
         elif "UPTREND" in reg_lbl or "BULL" in reg_lbl:
-            lines.append(f"• NIFTY 50: `[BUY CALL]` NIFTY {atm_nifty} CE (Upside Bias • Outlay < Rs 5,000, 30% SL)")
+            lines.append(f"Nifty Opt: [BUY CALL] NIFTY {atm_nifty} CE (Outlay < 5K, 30% SL)")
         else:
-            lines.append(f"• NIFTY 50: `[STANDBY]` (Choppy market • Theta decay risk on naked options)")
+            lines.append(f"Nifty Opt: [STANDBY] Range consolidation (Theta risk)")
 
-        # Sensex 30 Options Setup
         if is_sensex_day:
-            atm_sensex = int(round(sx_spot / 100.0) * 100) if sx_spot > 0 else 80800
-            s_act = "PUT" if ("DOWNTREND" in reg_lbl or "BEAR" in reg_lbl) else "CALL"
-            lines.append(f"• SENSEX 30 (Active Today): `[BUY {s_act}]` SENSEX {atm_sensex} {s_act[:1]}E (Lot 20, Outlay < Rs 500, 75% SL)")
+            atm_sx = int(round(sx_spot / 100.0) * 100) if sx_spot > 0 else 80800
+            s_act = "PE" if ("DOWNTREND" in reg_lbl or "BEAR" in reg_lbl) else "CE"
+            lines.append(f"Sensex Opt: [BUY {s_act}] SENSEX {atm_sx} {s_act} (Lot 20)")
         else:
-            lines.append("• SENSEX 30: `[STANDBY]` (Scheduled for Wed & Thu cycle)")
+            lines.append("Sensex Opt: [STANDBY] (Active Wed/Thu)")
 
-        # Midcap Nifty (Active Mondays)
-        if is_midcap_day:
-            if mid.get("is_actionable") and mid.get("recommended_strike"):
-                lines.append(f"• MIDCAP NIFTY (Active Today): `[{mid.get('action_badge')}] {mid.get('recommended_strike')}` (Lot 75, Outlay < Rs 750, 60% SL)")
-            else:
-                lines.append("• MIDCAP NIFTY (Active Today): `[ACTIVE MONITORING]` (Lot 75, Outlay < Rs 750, 60% SL)")
-        else:
-            lines.append("• MIDCAP NIFTY: `[STANDBY]` (Scheduled for Mon & Tue cycle)")
+        # 4. Penny / 4H Check
+        lines.append("Penny/4H: [ACCUMULATING] (Wallet Rs 20/200 • 13:15 IST checkpoint)")
 
-        # Stock Options
-        if stk:
-            lines.append(f"• STOCK OPTION (Lot <= 500): `[{stk.get('option_action_badge')}] {stk.get('recommended_contract')}` (Score: {stk.get('confluence_score')}/100)")
-        else:
-            lines.append("• STOCK OPTION (Lot <= 500): `[HOLD CASH]` (No setup cleared +50pt confluence)")
-        lines.append("")
-
-        # 4. 4-HOUR PENNY & LONG-TERM BREAKOUTS
-        lines.append("**4. 4-HOUR PENNY & LONG-TERM BREAKOUTS**")
-        lines.append("• Penny (< Rs 50, Zero Debt): `[ACCUMULATING]` (Wallet: Rs 20 / Rs 200 | Next 4H close: 13:15 IST)")
-        lines.append("• Long-Term Quality: `[STANDBY]` (Awaiting base breakouts on weekly/4H closes)")
-        lines.append("")
-
-        # 5. MCX COMMODITIES
+        # 5. MCX Commodities
         app3_data = self._fetch_app3_commodity()
-        lines.append("**5. MCX COMMODITIES (18:00 - 21:30 US Focus)**")
         if app3_data:
-            p = app3_data.get("priority_trade", {})
             comms = app3_data.get("commodities", {})
             crude = comms.get("CRUDEOILM", {})
             natgas = comms.get("NATGASMINI", {})
             gold = comms.get("GOLDPETAL", {})
-            
-            lines.append(f"• Crude Mini: Rs {crude.get('ltp', 0):,.0f} | NatGas: Rs {natgas.get('ltp', 0):,.1f} | Gold: Rs {gold.get('ltp', 0):,.0f}")
-            if p and p.get("symbol"):
-                lines.append(f"• Priority: `{p.get('display_name')}` ({p.get('futures_directive')})")
+            lines.append(f"MCX: Crude {crude.get('ltp', 0):,.0f} | NatGas {natgas.get('ltp', 0):,.1f} | Gold {gold.get('ltp', 0):,.0f}")
         else:
-            lines.append("• Tracking Crude Mini, NatGas Mini, and Gold Petal for US session open.")
-        lines.append("")
+            lines.append("MCX: Crude, NatGas, Gold Petal (18:00 US Open Focus)")
 
-        lines.append("----------------------------------------")
         lines.append(f"Cockpit: {RENDER_SCANNER_URL}")
 
         message = "\n".join(lines)
-        title = f"FinPlus+ Pulse | {ist_time}"
+        title = f"FinPlus Desk • {ist_time}"
         
         success = False
         cockpit_url = RENDER_SCANNER_URL
@@ -226,10 +180,10 @@ class NTFYDispatcher:
             headers = {
                 "Title": title,
                 "Priority": "4",
-                "Markdown": "yes",
-                "X-Markdown": "yes",
+                "Markdown": "no",
+                "X-Markdown": "no",
                 "Click": cockpit_url,
-                "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
+                "Actions": f"view, Open Cockpit, {cockpit_url}"
             }
             
             for attempt in range(2):
