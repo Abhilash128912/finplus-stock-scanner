@@ -195,8 +195,8 @@ class NTFYDispatcher:
             headers = {
                 "Title": title,
                 "Priority": "4",
-                "Markdown": "no",
-                "X-Markdown": "no",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
                 "Click": cockpit_url,
                 "Actions": f"view, Open Cockpit, {cockpit_url}"
             }
