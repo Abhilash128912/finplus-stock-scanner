@@ -104,6 +104,11 @@ class ShortlistEngine:
         coiled_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
         top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
         top_watch_stocks = coiled_cash_stocks[:3]
+
+        # Ensure top_intraday_stocks always contains the highest-conviction scrips with clear triggers
+        if not top_intraday_stocks and coiled_cash_stocks:
+            best_intraday_stock = coiled_cash_stocks[0]
+            top_intraday_stocks = coiled_cash_stocks[:3]
         
         if top_watch_cash:
             top_score = top_watch_cash.get('confluence_score', 0)

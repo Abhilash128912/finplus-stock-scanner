@@ -95,27 +95,51 @@ class App1RegimeInterceptor:
         # UNIFIED CONFLUENCE METRIC: Composite Trend Index (CTI)
         # Pillar 1 (WABI) + Pillar 2 (All-NSE A/D) + Pillar 3 (VIX & Derivatives)
         
+        is_cash_equity = instrument_type.upper() in ("INTRADAY_CASH", "CASH", "EQUITY", "STOCK")
+        
         # 1. Bullish Signal (Call Option / Long Breakout)
         if signal_direction == 1:
-            if trend_score >= 30 and not is_divergent:
-                return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI UPTREND ALIGNED)", regime
-            elif is_divergent or "CHOPPY" in trend_code:
-                return "VETOED_CHOP_RISK", "STANDBY (MARKET CHOPPY / DIVERGENCE)", regime
-            elif trend_score <= -25 or "DOWNTREND" in trend_code:
-                return "VETOED_COUNTER_TREND", f"VETOED (MACRO DOWNTREND • CTI {trend_score}/100)", regime
+            if is_cash_equity:
+                # Cash equities do not suffer theta decay; allow selective high-scoring breakouts
+                if trend_score >= 15 and not is_divergent:
+                    return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI UPTREND ALIGNED)", regime
+                elif trend_score >= 0 and not is_divergent:
+                    return "APPROVED_MODERATE_CONFLUENCE", "SELECTIVE BUY (MODERATE CHOP RISK)", regime
+                elif trend_score <= -25 or "DOWNTREND" in trend_code:
+                    return "VETOED_COUNTER_TREND", f"VETOED (MACRO DOWNTREND • CTI {trend_score}/100)", regime
+                else:
+                    return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI {trend_score}/100)", regime
             else:
-                return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI +{trend_score} BELOW +30 THRESHOLD)", regime
+                # Options require strong thrust (CTI >= 30) to overcome theta decay
+                if trend_score >= 30 and not is_divergent:
+                    return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI UPTREND ALIGNED)", regime
+                elif is_divergent or "CHOPPY" in trend_code:
+                    return "VETOED_CHOP_RISK", "STANDBY (MARKET CHOPPY / DIVERGENCE)", regime
+                elif trend_score <= -25 or "DOWNTREND" in trend_code:
+                    return "VETOED_COUNTER_TREND", f"VETOED (MACRO DOWNTREND • CTI {trend_score}/100)", regime
+                else:
+                    return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI +{trend_score} BELOW +30 THRESHOLD)", regime
                 
         # 2. Bearish Signal (Put Option / Short Breakdown)
         elif signal_direction == -1:
-            if trend_score <= -30:
-                return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI DOWNTREND ALIGNED)", regime
-            elif trend_score >= 30:
-                return "VETOED_COUNTER_TREND", f"VETOED (MACRO UPTREND • CTI +{trend_score}/100)", regime
-            elif is_divergent:
-                # In broad market divergence, shorting overvalued scrips has edge
-                return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (DIVERGENCE SHORT)", regime
+            if is_cash_equity:
+                # Cash equity shorting (MIS intraday)
+                if trend_score <= -15:
+                    return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI DOWNTREND ALIGNED)", regime
+                elif trend_score <= 0:
+                    return "APPROVED_MODERATE_CONFLUENCE", "SELECTIVE SHORT (MODERATE CHOP RISK)", regime
+                elif trend_score >= 25:
+                    return "VETOED_COUNTER_TREND", f"VETOED (MACRO UPTREND • CTI +{trend_score}/100)", regime
+                else:
+                    return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI {trend_score}/100)", regime
             else:
-                return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI {trend_score} INSUFFICIENT)", regime
+                if trend_score <= -30:
+                    return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI DOWNTREND ALIGNED)", regime
+                elif trend_score >= 30:
+                    return "VETOED_COUNTER_TREND", f"VETOED (MACRO UPTREND • CTI +{trend_score}/100)", regime
+                elif is_divergent:
+                    return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (DIVERGENCE SHORT)", regime
+                else:
+                    return "VETOED_LOW_MOMENTUM", f"STANDBY (MARKET CHOPPY • CTI {trend_score} INSUFFICIENT)", regime
                 
         return "VETOED_DEFAULT", "VETOED (FAIL-CLOSED)", regime
