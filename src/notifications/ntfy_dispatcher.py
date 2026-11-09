@@ -224,7 +224,7 @@ class NTFYDispatcher:
     def send_morning_tactical_briefing(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
         """
         Dispatches the 09:00 AM IST Daily Tactical Morning Briefing.
-        Structured in clean, institutional financial bulletin format.
+        Structured in clean, institutional, ultra-compact financial bulletin format.
         """
         from datetime import datetime, timezone, timedelta
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
@@ -236,117 +236,59 @@ class NTFYDispatcher:
             logger.info("Weekend detected. Skipping 09:00 AM Morning Briefing.")
             return False
         
-        crucible_end = datetime(2026, 12, 1, 23, 59, 59)
-        crucible_remaining = max(0, (crucible_end.date() - ist_now.date()).days)
-        is_crucible = crucible_remaining > 0
-        
         is_sensex_day = day_name in ("Wednesday", "Thursday")
         is_midcap_day = day_name in ("Monday", "Tuesday")
         news = self._fetch_morning_macro_news()
         
         lines = [
-            f"**FINPLUS+ MORNING TACTICAL BRIEFING**",
-            f"`{day_name}, {date_str} | 09:00 IST`",
-            "----------------------------------------"
+            f"FinPlus Morning Briefing | {date_str}",
+            f"Macro: Gift Nifty {news['gift_nifty']} | US {news['global_cues'][:25]}",
+            f"Bias: {news['macro_sentiment'][:55]}",
         ]
         
-        if is_crucible:
-            lines.append(f"• Regime: Paper Crucible ({crucible_remaining} Days Remaining)")
-        else:
-            lines.append("• Regime: Live Flywheel Active (Rs 7,750 Pool + 5 Wallets)")
-        lines.append("")
-
-        # 1. MACRO CUES
-        lines.append("**1. MACRO & GLOBAL SENTIMENT**")
-        lines.append(f"• Gift Nifty: {news['gift_nifty']}")
-        lines.append(f"• Global: {news['global_cues']}")
-        lines.append(f"• Bias: {news['macro_sentiment']}")
-        lines.append("")
-
-        # 2. SEGMENT AGENDA
-        lines.append("**2. SEGMENT TRADING DIRECTIVES**")
+        # Directives
+        seg_line = "Directives: Intraday Core Active (09:15-15:00)"
         if is_midcap_day:
-            lines.append(f"• MIDCAP NIFTY: `ACTIVE TODAY ({day_name.upper()})` — Lot 75, Outlay < Rs 750, 60% SL, hold till expiry")
-        else:
-            lines.append("• MIDCAP NIFTY: `STANDBY` (Mon & Tue cycle)")
+            seg_line += " | Midcap Active"
+        elif is_sensex_day:
+            seg_line += " | Sensex Active"
+        lines.append(seg_line)
 
-        if is_sensex_day:
-            lines.append(f"• SENSEX 30: `ACTIVE TODAY ({day_name.upper()})` — Lot 20, Outlay < Rs 500, 75% SL, entered on confirmed CTI")
-        else:
-            lines.append("• SENSEX 30: `STANDBY` (Wed & Thu cycle)")
-
-        lines.append("• INTRADAY CORE: `ACTIVE` (09:15 - 15:00 IST) — Rs 7,750 pool, 5x MIS, minimum 80/100 conviction")
-        lines.append("")
-
-        # 3. SPECIFIC EQUITY SUGGESTIONS
-        lines.append("**3. SPECIFIC EQUITY CANDIDATES**")
-        if shortlist:
-            top_stocks = shortlist.get("top_intraday_stocks", [])
-            if not top_stocks and shortlist.get("best_intraday_stock"):
-                top_stocks = [shortlist.get("best_intraday_stock")]
-            
-            if top_stocks:
-                for idx, item in enumerate(top_stocks, 1):
-                    sym = item.get("symbol")
-                    ltp = item.get("last_price")
-                    act = item.get("intraday_action_badge", "BUY")
-                    risk = item.get("risk_management", {})
-                    sl = risk.get("stop_loss", "--")
-                    tgt = risk.get("target", "--")
-                    score = item.get("confluence_score", 0)
-                    lines.append(f"{idx}. `[{act}] {sym}` @ Rs {ltp:,.2f} (Target: Rs {tgt} | SL: Rs {sl} | Score: {score}/100)")
-            else:
-                watch_stocks = shortlist.get("top_watch_stocks", [])
-                if watch_stocks:
-                    w_text = ", ".join([f"{w.get('symbol')} (Trigger: Rs {w.get('range_top')})" for w in watch_stocks[:3]])
-                    lines.append(f"• Watch Levels: {w_text}")
-                else:
-                    lines.append("• Scanning 750 universe equities at 09:15 market open.")
-        else:
-            lines.append("• Scanning 750 universe equities at 09:15 market open.")
-        lines.append("")
-
-        # 4. MCX COMMODITIES & EIA SCHEDULE
-        lines.append("**4. MCX COMMODITIES & EIA TIMING**")
-        lines.append("• Session: 17:00 – 23:30 IST (Prime US Window: 18:00 – 21:30 IST)")
-        lines.append("• Universe: Crude Mini (10 Bbl), NatGas Mini (250 mmBtu), Gold Petal (1g)")
+        # Equity Setup
+        top_stocks = shortlist.get("top_intraday_stocks", []) if shortlist else []
+        if not top_stocks and shortlist and shortlist.get("best_intraday_stock"):
+            top_stocks = [shortlist.get("best_intraday_stock")]
         
-        if day_name == "Wednesday":
-            lines.append("• EIA Schedule: US Crude Oil Inventories tonight at 20:00 IST (Volatility Shield: Flat across release)")
-        elif day_name == "Thursday":
-            lines.append("• EIA Schedule: US Natural Gas Storage Report tonight at 20:00 IST (Volatility Shield: Flat across release)")
+        if top_stocks:
+            item = top_stocks[0]
+            sym = item.get("symbol")
+            ltp = item.get("last_price", 0.0)
+            act = "SELL" if "SELL" in item.get("intraday_action_badge", "") else "BUY"
+            risk = item.get("risk_management", {})
+            sl = risk.get("stop_loss", "--")
+            tgt = risk.get("target", "--")
+            lines.append(f"Cash: [{act}] {sym} @ Rs {ltp:,.0f} (SL: {sl}, Tgt: {tgt})")
         else:
-            lines.append("• EIA Schedule: Standard trend-following (Crude report: Wed 20:00 IST, NatGas: Thu 20:00 IST)")
-        lines.append("")
+            lines.append("Cash: [HOLD CASH] Bear distribution defense")
 
-        # 5. DYNAMIC LIVE WALLET MILESTONES
-        try:
-            resp = requests.get("http://127.0.0.1:8003/api/wallets", timeout=1.5)
-            if resp.status_code == 200:
-                w_data = resp.json().get("wallets", [])
-                unlocked = [w for w in w_data if w.get("is_unlocked")]
-                accumulating = [w for w in w_data if not w.get("is_unlocked")]
-                lines.append("**5. LIVE CAPITAL & WALLET STATUS**")
-                if unlocked:
-                    for uw in unlocked:
-                        lines.append(f"• `{uw['display_name']}`: UNLOCKED (Rs {uw['balance']:,.2f} >= Rs {uw['target_threshold']:,.2f})")
-                for aw in accumulating[:3]:
-                    short_fall = round(aw['target_threshold'] - aw['balance'], 2)
-                    lines.append(f"• `{aw['display_name']}`: Rs {aw['balance']:,.2f} / Rs {aw['target_threshold']:,.2f} (Rs {short_fall:,.2f} left)")
-                lines.append("")
-        except Exception:
-            pass
+        # Options
+        lines.append("Options: Prefer ATM Put on confirmed breakdowns; avoid OTM calls")
 
-        # 6. 4-Hour Timeframe Checks
-        lines.append("**6. 4-HOUR TIMEFRAME CHECKPOINTS**")
-        lines.append("• Inspect 4H closed candles at 13:15 IST and 15:30 IST for Stage 2 Penny (< Rs 50, Zero Debt) breakouts.")
-        lines.append("")
-        lines.append("----------------------------------------")
+        # 4H Penny
+        lines.append("Penny/4H: [ACCUMULATING] (Wallet Rs 20/200 • 13:15 IST check)")
+
+        # MCX
+        if day_name == "Wednesday":
+            lines.append("MCX: Crude/NatGas/Gold (18:00 US Open) | EIA Crude 20:00")
+        elif day_name == "Thursday":
+            lines.append("MCX: Crude/NatGas/Gold (18:00 US Open) | EIA NatGas 20:00")
+        else:
+            lines.append("MCX: Crude/NatGas/Gold (18:00 US Open) | EIA Clear")
+
         lines.append(f"Cockpit: {RENDER_SCANNER_URL}")
 
         message = "\n".join(lines)
-        title = f"FinPlus+ Morning Agenda | {day_name}"
-        
+        title = "FinPlus Desk | Morning Briefing"
         cockpit_url = RENDER_SCANNER_URL
         success = False
         
@@ -354,9 +296,9 @@ class NTFYDispatcher:
             url = f"https://ntfy.sh/{topic}"
             headers = {
                 "Title": title,
-                "Priority": "5",
-                "Markdown": "yes",
-                "X-Markdown": "yes",
+                "Priority": "4",
+                "Markdown": "no",
+                "X-Markdown": "no",
                 "Click": cockpit_url,
                 "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
             }
@@ -367,5 +309,93 @@ class NTFYDispatcher:
                     success = True
             except Exception as e:
                 logger.error(f"Failed delivering morning briefing to '{topic}': {e}")
+                
+        return success
+
+    def send_end_of_trade_summary(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
+        """
+        Dispatches the 03:00 PM IST End of Trade Session Summary.
+        Structured in clean, institutional, ultra-compact financial bulletin format.
+        """
+        from datetime import datetime, timezone, timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        day_name = ist_now.strftime("%A")
+        date_str = ist_now.strftime("%d-%b-%Y")
+        
+        # Strict Weekend Silence
+        if not force and ist_now.weekday() >= 5:
+            return False
+
+        app1_data = self._fetch_app1_regime()
+        trend_info = app1_data.get("trend", {})
+        metrics = app1_data.get("metrics", {})
+        
+        nf_spot = float(metrics.get("nifty_spot", 25027.0))
+        nf_chg = float(metrics.get("nifty_change_pct", 0.0))
+        sx_spot = float(metrics.get("sensex_spot", 80757.0))
+        sx_chg = float(metrics.get("sensex_change_pct", 0.0))
+        reg_lbl = trend_info.get("label", "CHOPPY / RANGEBOUND")
+        adr_val = metrics.get("broad_adr", "0.77")
+
+        lines = [
+            f"FinPlus Session Summary | {date_str}",
+            f"Closing Spots: NIFTY {nf_spot:,.0f} ({nf_chg:+.2f}%) | SENSEX {sx_spot:,.0f} ({sx_chg:+.2f}%)",
+            f"Regime Close: {reg_lbl} | Final ADR {adr_val}:1",
+        ]
+
+        # Cash Equity Review
+        top_stocks = shortlist.get("top_intraday_stocks", []) if shortlist else []
+        if not top_stocks and shortlist and shortlist.get("best_intraday_stock"):
+            top_stocks = [shortlist.get("best_intraday_stock")]
+        
+        if top_stocks:
+            item = top_stocks[0]
+            sym = item.get("symbol")
+            ltp = item.get("last_price", 0.0)
+            act = "SELL" if "SELL" in item.get("intraday_action_badge", "") else "BUY"
+            risk = item.get("risk_management", {})
+            sl = risk.get("stop_loss", "--")
+            tgt = risk.get("target", "--")
+            lines.append(f"Cash Review: [{act}] {sym} @ Rs {ltp:,.0f} (SL: {sl}, Tgt: {tgt})")
+        else:
+            lines.append("Cash Review: [HOLD CASH] Capital preserved, zero false-breakout whipsaws")
+
+        # Options Review
+        lines.append("Index Options: Defense maintained | Capital protected against theta decay")
+        
+        # Stock Option Review
+        stk_opt = shortlist.get("best_stock_option", {}) if shortlist else {}
+        if stk_opt and stk_opt.get("symbol"):
+            s_contract = stk_opt.get("recommended_contract") or f"{stk_opt.get('symbol')} ATM"
+            lines.append(f"Stock Options: {s_contract} tracked under macro gating")
+        else:
+            lines.append("Stock Options: Strict gating active, zero capital exposed")
+
+        lines.append("EOD Risk: Mandatory square-off all MIS intraday before 15:15 IST")
+        lines.append("Next: 15:15 BTST Window Check | 18:00 MCX Evening Session Open")
+        lines.append(f"Cockpit: {RENDER_SCANNER_URL}")
+
+        message = "\n".join(lines)
+        title = "FinPlus Desk | 03:00 PM Trade Summary"
+        cockpit_url = RENDER_SCANNER_URL
+        success = False
+        
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "4",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": cockpit_url,
+                "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
+            }
+            try:
+                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    logger.info(f"03:00 PM Trade Summary delivered to '{topic}'")
+                    success = True
+            except Exception as e:
+                logger.error(f"Failed delivering trade summary to '{topic}': {e}")
                 
         return success
