@@ -205,7 +205,11 @@ class ShortlistEngine:
                 "is_actionable": False
             }
             
-        last_price = item.get("last_price", 0.0)
+        regime_ctx = regime or {}
+        if default_sym == "NIFTY" and regime_ctx.get("metrics", {}).get("nifty_spot"):
+            last_price = float(regime_ctx.get("metrics", {}).get("nifty_spot"))
+        else:
+            last_price = item.get("last_price", 0.0)
         strike_step = item.get("strike_step", default_step)
         atm_strike = int(round(last_price / strike_step) * strike_step) if last_price > 0 else 0
         
