@@ -68,8 +68,8 @@
         <span>🔄 Refresh</span>
       </button>
 
-      <a href="http://127.0.0.1:8000" target="_blank" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition" title="Open App #1">
-        🏛️ Air Traffic (:8000)
+      <a id="nav-air-traffic-link" href="http://127.0.0.1:8000" target="_blank" class="bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition" title="Open App #1">
+        Air Traffic
       </a>
 
       <button onclick="triggerTestAlert()" class="bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs px-3 py-2 rounded-xl border border-slate-700 transition">
@@ -452,26 +452,36 @@
       }
     }
 
+    const isCloud = window.location.hostname.includes('render.com') || (window.location.hostname !== '127.0.0.1' && window.location.hostname !== 'localhost');
+    const navAirLink = document.getElementById('nav-air-traffic-link');
+    if (navAirLink) {
+      navAirLink.href = isCloud ? 'https://finplus-index-breadth.onrender.com' : 'http://127.0.0.1:8000';
+    }
+
     async function syncApp1() {
+      const endpoint = isCloud ? 'https://finplus-index-breadth.onrender.com/api/regime' : 'http://127.0.0.1:8000/api/regime';
       try {
-        const res = await fetch('http://127.0.0.1:8000/api/regime');
+        const res = await fetch(endpoint);
         if (res.ok) {
           const r = await res.json();
           document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
-          document.getElementById('app1-sync-pill').textContent = 'GATEWAY: SYNCED (:8000)';
+          document.getElementById('app1-sync-pill').textContent = isCloud ? 'GATEWAY: CLOUD SYNCED' : 'GATEWAY: SYNCED (:8000)';
+          return;
         }
       } catch (e) {
+        // Fallback to secondary if primary failed
+        const altEndpoint = isCloud ? 'http://127.0.0.1:8000/api/regime' : 'https://finplus-index-breadth.onrender.com/api/regime';
         try {
-          const res2 = await fetch('https://finplus-index-breadth.onrender.com/api/regime');
+          const res2 = await fetch(altEndpoint);
           if (res2.ok) {
             document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono';
-            document.getElementById('app1-sync-pill').textContent = 'GATEWAY: CLOUD SYNCED';
+            document.getElementById('app1-sync-pill').textContent = 'GATEWAY: SYNCED';
+            return;
           }
-        } catch (e2) {
-          document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-rose-950 border border-rose-500/40 text-rose-300 font-mono';
-          document.getElementById('app1-sync-pill').textContent = 'GATEWAY: OFFLINE (FAIL-CLOSED)';
-        }
+        } catch (e2) {}
       }
+      document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-rose-950 border border-rose-500/40 text-rose-300 font-mono';
+      document.getElementById('app1-sync-pill').textContent = 'GATEWAY: OFFLINE';
     }
 
     function renderShortlist(shortlist) {
