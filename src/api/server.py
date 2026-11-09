@@ -71,6 +71,14 @@ async def serve_index():
         return FileResponse(index_file)
     return HTMLResponse("<h1>FinPlus+ Stock Scanner API Online</h1>")
 
+
+@app.api_route("/cockpit", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def serve_cockpit():
+    cockpit_file = os.path.join(FRONTEND_DIR, "cockpit.html")
+    if os.path.exists(cockpit_file):
+        return FileResponse(cockpit_file)
+    return HTMLResponse("<h1>FinPlus+ Cockpit Not Found</h1>")
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     return {"status": "ok", "app": "FinPlus-Stock-Scanner"}

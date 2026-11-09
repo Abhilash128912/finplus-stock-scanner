@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FinPlus+ Institutional Cockpit | Multi-App HUD</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      background-color: #07090e;
+      color: #e2e8f0;
+      overflow: hidden;
+      height: 100vh;
+      width: 100vw;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .mono { font-family: 'JetBrains Mono', monospace; }
+    
+    /* Layout Containers */
+    #viewport-container {
+      flex: 1;
+      width: 100%;
+      height: calc(100vh - 54px);
+      position: relative;
+      background: #05070a;
+    }
+    
+    .pane-wrapper {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      background: #0b0f19;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+      transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    
+    .pane-wrapper:hover {
+      border-color: rgba(56, 189, 248, 0.3);
+    }
+
+    .pane-header {
+      height: 32px;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 10px;
+      background: rgba(15, 23, 42, 0.95);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      user-select: none;
+      z-index: 10;
+    }
+
+    .pane-iframe {
+      width: 100%;
+      height: calc(100% - 32px);
+      border: none;
+      background: #07090e;
+    }
+    
+    /* Quad Grid (2x2) */
+    .layout-quad {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      height: 100%;
+    }
+    
+    /* Dual Grid Side-by-Side */
+    .layout-dual-horizontal {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr;
+      gap: 4px;
+      padding: 4px;
+      height: 100%;
+    }
+
+    /* Dual Grid Stacked */
+    .layout-dual-vertical {
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      height: 100%;
+    }
+
+    /* Single Grid (Full) */
+    .layout-single {
+      display: grid;
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr;
+      padding: 0;
+      height: 100%;
+    }
+
+    /* Pulse animation */
+    .pulse-dot {
+      animation: pulse-glow 2s infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.3; transform: scale(0.8); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Master Cockpit Toolbar -->
+  <header class="h-[54px] min-h-[54px] w-full bg-[#0a0e17] border-b border-slate-800 flex items-center justify-between px-4 z-50">
+    
+    <!-- Left: Branding & Core Apps Navigation -->
+    <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2">
+        <svg class="w-7 h-7 text-cyan-400" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="50" cy="50" r="46" fill="#0c1829" stroke="#00F0FF" stroke-width="6"/>
+          <rect x="44" y="24" width="12" height="52" rx="6" fill="#00F0FF"/>
+          <rect x="24" y="44" width="52" height="12" rx="6" fill="#00F0FF"/>
+        </svg>
+        <span class="text-base font-extrabold tracking-tight text-white">
+          FinPlus<span class="text-cyan-400">+</span>
+        </span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 mono font-bold">
+          COCKPIT HUD
+        </span>
+      </div>
+
+      <!-- Environment Toggle: Local vs Cloud -->
+      <div class="flex items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 ml-2">
+        <button id="btn-env-local" onclick="setEnvironment('local')" class="px-2.5 py-1 text-xs font-semibold rounded-md transition bg-cyan-600 text-white shadow-sm flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-300 pulse-dot"></span>
+          <span>Local (:8000)</span>
+        </button>
+        <button id="btn-env-cloud" onclick="setEnvironment('cloud')" class="px-2.5 py-1 text-xs font-semibold rounded-md transition text-slate-400 hover:text-slate-200 flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
+          <span>Cloud (Render)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Center: Master View Mode Selector -->
+    <div class="flex items-center gap-2">
+      <div class="flex items-center bg-slate-900 border border-slate-800 rounded-xl p-1 gap-1">
+        
+        <!-- Quad View Button -->
+        <button id="view-btn-quad" onclick="setViewMode('quad')" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition bg-blue-600 text-white shadow">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="7" height="7" rx="1.5" stroke-width="2"/>
+            <rect x="14" y="3" width="7" height="7" rx="1.5" stroke-width="2"/>
+            <rect x="3" y="14" width="7" height="7" rx="1.5" stroke-width="2"/>
+            <rect x="14" y="14" width="7" height="7" rx="1.5" stroke-width="2"/>
+          </svg>
+          <span>Quad View (4)</span>
+          <span class="text-[9px] opacity-70 mono ml-0.5">[Q]</span>
+        </button>
+
+        <!-- Dual View Button -->
+        <button id="view-btn-dual" onclick="setViewMode('dual')" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition text-slate-300 hover:bg-slate-800">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="8" height="18" rx="1.5" stroke-width="2"/>
+            <rect x="13" y="3" width="8" height="18" rx="1.5" stroke-width="2"/>
+          </svg>
+          <span>Dual View (2)</span>
+          <span class="text-[9px] opacity-70 mono ml-0.5">[D]</span>
+        </button>
+
+        <!-- Single View Button -->
+        <button id="view-btn-single" onclick="setViewMode('single')" class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition text-slate-300 hover:bg-slate-800">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"/>
+          </svg>
+          <span>Single App (1)</span>
+          <span class="text-[9px] opacity-70 mono ml-0.5">[1-4]</span>
+        </button>
+      </div>
+
+      <!-- Context Sub-Selectors -->
+      <!-- Dual Presets Selector (Visible only in Dual Mode) -->
+      <div id="dual-subcontrols" class="hidden items-center gap-1 bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-xs">
+        <span class="text-[10px] text-slate-400 font-bold uppercase tracking-wider mr-1">Pair:</span>
+        <select id="dual-preset-select" onchange="applyDualPreset(this.value)" class="bg-slate-800 border border-slate-700 text-cyan-300 text-xs rounded px-2 py-0.5 outline-none font-mono">
+          <option value="1,2">App 1 (Breadth) + App 2 (Scanner)</option>
+          <option value="2,4">App 2 (Scanner) + App 4 (Journal)</option>
+          <option value="1,3">App 1 (Breadth) + App 3 (Commodity)</option>
+          <option value="3,4">App 3 (Commodity) + App 4 (Journal)</option>
+          <option value="1,4">App 1 (Breadth) + App 4 (Journal)</option>
+        </select>
+        <button onclick="toggleDualOrientation()" class="ml-1 px-1.5 py-0.5 text-[10px] bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700" title="Toggle Side-by-Side / Stacked">
+          ◫ Split
+        </button>
+      </div>
+
+      <!-- Single App Selector Pills (Visible only in Single Mode) -->
+      <div id="single-subcontrols" class="hidden items-center bg-slate-900 border border-slate-800 rounded-lg p-0.5 gap-0.5">
+        <button id="single-tab-1" onclick="setSingleApp(1)" class="px-2.5 py-1 text-xs font-bold rounded bg-emerald-600 text-white">App 1 (Breadth)</button>
+        <button id="single-tab-2" onclick="setSingleApp(2)" class="px-2.5 py-1 text-xs font-semibold rounded text-slate-400 hover:text-slate-200">App 2 (Scanner)</button>
+        <button id="single-tab-3" onclick="setSingleApp(3)" class="px-2.5 py-1 text-xs font-semibold rounded text-slate-400 hover:text-slate-200">App 3 (Commodity)</button>
+        <button id="single-tab-4" onclick="setSingleApp(4)" class="px-2.5 py-1 text-xs font-semibold rounded text-slate-400 hover:text-slate-200">App 4 (Journal)</button>
+      </div>
+    </div>
+
+    <!-- Right: Health Indicators & Global Controls -->
+    <div class="flex items-center gap-3">
+      <!-- Port Health Dots -->
+      <div class="flex items-center gap-2 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg text-[11px] mono">
+        <div class="flex items-center gap-1" title="App 1 (:8000)">
+          <span class="w-2 h-2 rounded-full bg-emerald-400" id="dot-app1"></span>
+          <span class="text-slate-400">8000</span>
+        </div>
+        <div class="flex items-center gap-1" title="App 2 (:8001)">
+          <span class="w-2 h-2 rounded-full bg-emerald-400" id="dot-app2"></span>
+          <span class="text-slate-400">8001</span>
+        </div>
+        <div class="flex items-center gap-1" title="App 3 (:8002)">
+          <span class="w-2 h-2 rounded-full bg-emerald-400" id="dot-app3"></span>
+          <span class="text-slate-400">8002</span>
+        </div>
+        <div class="flex items-center gap-1" title="App 4 (:8003)">
+          <span class="w-2 h-2 rounded-full bg-emerald-400" id="dot-app4"></span>
+          <span class="text-slate-400">8003</span>
+        </div>
+      </div>
+
+      <!-- Master Reload All -->
+      <button onclick="reloadAllFrames()" class="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Reload All Panes">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+        </svg>
+      </button>
+
+      <!-- Fullscreen Toggle -->
+      <button onclick="toggleFullScreen()" class="p-1.5 rounded-lg bg-slate-900 border border-slate-800 text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Toggle Fullscreen [F]">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/>
+        </svg>
+      </button>
+
+      <!-- IST Clock -->
+      <div id="cockpit-clock" class="text-xs mono font-bold text-cyan-400 bg-slate-900 border border-slate-800 px-2.5 py-1 rounded-lg">
+        --:--:-- IST
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Viewport Container (Hosts the 4 App Panes) -->
+  <div id="viewport-container" class="layout-quad">
+    
+    <!-- PANE 1: App #1 (Index Breadth & Macro Air Traffic) -->
+    <div id="pane-app1" class="pane-wrapper">
+      <div class="pane-header">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          <span class="text-xs font-bold text-white tracking-wide">APP 01 • INDEX BREADTH &amp; AIR TRAFFIC</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 mono" id="badge-app1">:8000</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button onclick="reloadPane(1)" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded" title="Reload Pane">
+            🔄
+          </button>
+          <button onclick="maximizePane(1)" class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded" title="Maximize App 1">
+            🗖
+          </button>
+          <button onclick="popoutPane(1)" class="p-1 text-slate-400 hover:text-emerald-300 hover:bg-slate-800 rounded" title="Open in New Tab">
+            ↗
+          </button>
+        </div>
+      </div>
+      <iframe id="iframe-app1" class="pane-iframe" src="http://127.0.0.1:8000"></iframe>
+    </div>
+
+    <!-- PANE 2: App #2 (Stock Scanner & 30m Matrix) -->
+    <div id="pane-app2" class="pane-wrapper">
+      <div class="pane-header">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-blue-400"></span>
+          <span class="text-xs font-bold text-white tracking-wide">APP 02 • 30M INSTITUTIONAL SCANNER</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 mono" id="badge-app2">:8001</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button onclick="reloadPane(2)" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded" title="Reload Pane">
+            🔄
+          </button>
+          <button onclick="maximizePane(2)" class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded" title="Maximize App 2">
+            🗖
+          </button>
+          <button onclick="popoutPane(2)" class="p-1 text-slate-400 hover:text-blue-300 hover:bg-slate-800 rounded" title="Open in New Tab">
+            ↗
+          </button>
+        </div>
+      </div>
+      <iframe id="iframe-app2" class="pane-iframe" src="http://127.0.0.1:8001"></iframe>
+    </div>
+
+    <!-- PANE 3: App #3 (Commodity Radar) -->
+    <div id="pane-app3" class="pane-wrapper">
+      <div class="pane-header">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span>
+          <span class="text-xs font-bold text-white tracking-wide">APP 03 • COMMODITY RADAR (MCX)</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 mono" id="badge-app3">:8002</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button onclick="reloadPane(3)" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded" title="Reload Pane">
+            🔄
+          </button>
+          <button onclick="maximizePane(3)" class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded" title="Maximize App 3">
+            🗖
+          </button>
+          <button onclick="popoutPane(3)" class="p-1 text-slate-400 hover:text-amber-300 hover:bg-slate-800 rounded" title="Open in New Tab">
+            ↗
+          </button>
+        </div>
+      </div>
+      <iframe id="iframe-app3" class="pane-iframe" src="http://127.0.0.1:8002"></iframe>
+    </div>
+
+    <!-- PANE 4: App #4 (Paper Trading Journal & Crucible) -->
+    <div id="pane-app4" class="pane-wrapper">
+      <div class="pane-header">
+        <div class="flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-purple-400"></span>
+          <span class="text-xs font-bold text-white tracking-wide">APP 04 • PAPER CRUCIBLE &amp; JOURNAL</span>
+          <span class="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-300 mono" id="badge-app4">:8003</span>
+        </div>
+        <div class="flex items-center gap-1">
+          <button onclick="reloadPane(4)" class="p-1 text-slate-400 hover:text-white hover:bg-slate-800 rounded" title="Reload Pane">
+            🔄
+          </button>
+          <button onclick="maximizePane(4)" class="p-1 text-slate-400 hover:text-cyan-300 hover:bg-slate-800 rounded" title="Maximize App 4">
+            🗖
+          </button>
+          <button onclick="popoutPane(4)" class="p-1 text-slate-400 hover:text-purple-300 hover:bg-slate-800 rounded" title="Open in New Tab">
+            ↗
+          </button>
+        </div>
+      </div>
+      <iframe id="iframe-app4" class="pane-iframe" src="http://127.0.0.1:8003"></iframe>
+    </div>
+
+  </div>
+
+  <script>
+    // Configuration URLs
+    const APP_CONFIG = {
+      local: {
+        1: { name: 'App 1 (Breadth)', url: 'http://127.0.0.1:8000', badge: ':8000', color: 'emerald' },
+        2: { name: 'App 2 (Scanner)', url: 'http://127.0.0.1:8001', badge: ':8001', color: 'blue' },
+        3: { name: 'App 3 (Commodity)', url: 'http://127.0.0.1:8002', badge: ':8002', color: 'amber' },
+        4: { name: 'App 4 (Journal)', url: 'http://127.0.0.1:8003', badge: ':8003', color: 'purple' }
+      },
+      cloud: {
+        1: { name: 'App 1 (Breadth)', url: 'https://finplus-index-breadth.onrender.com', badge: 'Cloud', color: 'emerald' },
+        2: { name: 'App 2 (Scanner)', url: 'https://finplus-stock-scanner.onrender.com', badge: 'Cloud', color: 'blue' },
+        3: { name: 'App 3 (Commodity)', url: 'https://finplus-commodity-radar.onrender.com', badge: 'Cloud', color: 'amber' },
+        4: { name: 'App 4 (Journal)', url: 'https://finplus-trading-journal.onrender.com', badge: 'Cloud', color: 'purple' }
+      }
+    };
+
+    let currentEnv = 'local';
+    let currentMode = 'quad'; // 'quad' | 'dual' | 'single'
+    let dualActiveApps = [1, 2];
+    let dualOrientation = 'horizontal'; // 'horizontal' (side-by-side) | 'vertical' (stacked)
+    let singleActiveApp = 1;
+
+    const container = document.getElementById('viewport-container');
+    const panes = {
+      1: document.getElementById('pane-app1'),
+      2: document.getElementById('pane-app2'),
+      3: document.getElementById('pane-app3'),
+      4: document.getElementById('pane-app4')
+    };
+    const iframes = {
+      1: document.getElementById('iframe-app1'),
+      2: document.getElementById('iframe-app2'),
+      3: document.getElementById('iframe-app3'),
+      4: document.getElementById('iframe-app4')
+    };
+
+    // Environment Switcher
+    function setEnvironment(env) {
+      currentEnv = env;
+      const btnLocal = document.getElementById('btn-env-local');
+      const btnCloud = document.getElementById('btn-env-cloud');
+
+      if (env === 'local') {
+        btnLocal.className = 'px-2.5 py-1 text-xs font-semibold rounded-md transition bg-cyan-600 text-white shadow-sm flex items-center gap-1.5';
+        btnCloud.className = 'px-2.5 py-1 text-xs font-semibold rounded-md transition text-slate-400 hover:text-slate-200 flex items-center gap-1.5';
+      } else {
+        btnCloud.className = 'px-2.5 py-1 text-xs font-semibold rounded-md transition bg-cyan-600 text-white shadow-sm flex items-center gap-1.5';
+        btnLocal.className = 'px-2.5 py-1 text-xs font-semibold rounded-md transition text-slate-400 hover:text-slate-200 flex items-center gap-1.5';
+      }
+
+      // Update iframe sources & badges
+      [1, 2, 3, 4].forEach(id => {
+        const conf = APP_CONFIG[currentEnv][id];
+        if (iframes[id].src !== conf.url) {
+          iframes[id].src = conf.url;
+        }
+        const badge = document.getElementById(`badge-app${id}`);
+        if (badge) badge.textContent = conf.badge;
+      });
+    }
+
+    // View Mode Switcher
+    function setViewMode(mode) {
+      currentMode = mode;
+      
+      const btnQuad = document.getElementById('view-btn-quad');
+      const btnDual = document.getElementById('view-btn-dual');
+      const btnSingle = document.getElementById('view-btn-single');
+      const dualControls = document.getElementById('dual-subcontrols');
+      const singleControls = document.getElementById('single-subcontrols');
+
+      // Reset button styles
+      [btnQuad, btnDual, btnSingle].forEach(b => {
+        b.className = 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition text-slate-300 hover:bg-slate-800';
+      });
+      dualControls.classList.add('hidden');
+      dualControls.classList.remove('flex');
+      singleControls.classList.add('hidden');
+      singleControls.classList.remove('flex');
+
+      if (mode === 'quad') {
+        btnQuad.className = 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition bg-blue-600 text-white shadow';
+        container.className = 'layout-quad';
+        // Show all 4 panes
+        [1, 2, 3, 4].forEach(id => panes[id].style.display = 'flex');
+      } 
+      else if (mode === 'dual') {
+        btnDual.className = 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition bg-cyan-600 text-white shadow';
+        dualControls.classList.remove('hidden');
+        dualControls.classList.add('flex');
+        applyDualLayout();
+      } 
+      else if (mode === 'single') {
+        btnSingle.className = 'flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition bg-emerald-600 text-white shadow';
+        singleControls.classList.remove('hidden');
+        singleControls.classList.add('flex');
+        applySingleLayout();
+      }
+    }
+
+    // Dual View Layout
+    function applyDualLayout() {
+      container.className = dualOrientation === 'horizontal' ? 'layout-dual-horizontal' : 'layout-dual-vertical';
+      [1, 2, 3, 4].forEach(id => {
+        if (dualActiveApps.includes(id)) {
+          panes[id].style.display = 'flex';
+        } else {
+          panes[id].style.display = 'none';
+        }
+      });
+    }
+
+    function applyDualPreset(presetStr) {
+      const parts = presetStr.split(',').map(Number);
+      dualActiveApps = [parts[0], parts[1]];
+      applyDualLayout();
+    }
+
+    function toggleDualOrientation() {
+      dualOrientation = dualOrientation === 'horizontal' ? 'vertical' : 'horizontal';
+      applyDualLayout();
+    }
+
+    // Single View Layout
+    function applySingleLayout() {
+      container.className = 'layout-single';
+      [1, 2, 3, 4].forEach(id => {
+        if (id === singleActiveApp) {
+          panes[id].style.display = 'flex';
+        } else {
+          panes[id].style.display = 'none';
+        }
+      });
+
+      // Update single navigation pills
+      [1, 2, 3, 4].forEach(id => {
+        const tab = document.getElementById(`single-tab-${id}`);
+        if (tab) {
+          if (id === singleActiveApp) {
+            tab.className = 'px-2.5 py-1 text-xs font-bold rounded bg-emerald-600 text-white shadow';
+          } else {
+            tab.className = 'px-2.5 py-1 text-xs font-semibold rounded text-slate-400 hover:text-slate-200';
+          }
+        }
+      });
+    }
+
+    function setSingleApp(appId) {
+      singleActiveApp = appId;
+      if (currentMode !== 'single') {
+        setViewMode('single');
+      } else {
+        applySingleLayout();
+      }
+    }
+
+    function maximizePane(appId) {
+      setSingleApp(appId);
+    }
+
+    // Individual Pane Actions
+    function reloadPane(appId) {
+      if (iframes[appId]) {
+        iframes[appId].src = iframes[appId].src;
+      }
+    }
+
+    function popoutPane(appId) {
+      const conf = APP_CONFIG[currentEnv][appId];
+      if (conf) {
+        window.open(conf.url, '_blank');
+      }
+    }
+
+    function reloadAllFrames() {
+      [1, 2, 3, 4].forEach(id => reloadPane(id));
+    }
+
+    // Fullscreen Toggle
+    function toggleFullScreen() {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } else {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    }
+
+    // Real-Time IST Clock
+    function updateClock() {
+      const now = new Date();
+      const options = {
+        timeZone: 'Asia/Kolkata',
+        hour12: true,
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      };
+      const timeStr = now.toLocaleTimeString('en-IN', options);
+      const clockEl = document.getElementById('cockpit-clock');
+      if (clockEl) clockEl.textContent = `${timeStr} IST`;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
+    // Health Check Prober
+    async function checkEngineHealth() {
+      const ports = [
+        { id: 'dot-app1', url: 'http://127.0.0.1:8000/api/status' },
+        { id: 'dot-app2', url: 'http://127.0.0.1:8001/api/shortlist' },
+        { id: 'dot-app3', url: 'http://127.0.0.1:8002/api/status' },
+        { id: 'dot-app4', url: 'http://127.0.0.1:8003/api/wallets' }
+      ];
+
+      ports.forEach(async p => {
+        const dot = document.getElementById(p.id);
+        if (!dot) return;
+        try {
+          const res = await fetch(p.url, { method: 'GET', mode: 'no-cors' });
+          dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
+        } catch (e) {
+          dot.className = 'w-2 h-2 rounded-full bg-rose-500';
+        }
+      });
+    }
+    setInterval(checkEngineHealth, 10000);
+    checkEngineHealth();
+
+    // Global Keyboard Shortcuts
+    window.addEventListener('keydown', (e) => {
+      // Avoid hotkeys when typing in select or inputs
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+
+      if (e.key === 'q' || e.key === 'Q') {
+        setViewMode('quad');
+      } else if (e.key === 'd' || e.key === 'D') {
+        setViewMode('dual');
+      } else if (e.key === 's' || e.key === 'S') {
+        setViewMode('single');
+      } else if (e.key === '1') {
+        setSingleApp(1);
+      } else if (e.key === '2') {
+        setSingleApp(2);
+      } else if (e.key === '3') {
+        setSingleApp(3);
+      } else if (e.key === '4') {
+        setSingleApp(4);
+      } else if (e.key === 'f' || e.key === 'F') {
+        toggleFullScreen();
+      } else if (e.key === 'l' || e.key === 'L') {
+        setEnvironment(currentEnv === 'local' ? 'cloud' : 'local');
+      }
+    });
+  </script>
+</body>
+</html>
