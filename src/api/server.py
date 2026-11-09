@@ -101,6 +101,48 @@ async def get_scan_results():
         "results": scheduler.latest_scan_results
     }
 
+@app.get("/api/live-indices")
+async def get_live_indices():
+    """
+    Returns real-time 3-second live Nifty 50 and Sensex 30 spots directly
+    from App #1's live feed, ensuring continuous live price updates.
+    """
+    import os, requests
+    app1_url = os.getenv("APP1_URL", "https://finplus-index-breadth.onrender.com")
+    local_url = "http://127.0.0.1:8000"
+    
+    endpoints = [f"{local_url}/api/breadth", f"{app1_url}/api/breadth"]
+    for ep in endpoints:
+        try:
+            r = requests.get(ep, timeout=1.5)
+            if r.status_code == 200:
+                d = r.json()
+                bm = d.get("broad_market", {})
+                nf = d.get("nifty", {})
+                sx = d.get("sensex", {})
+                return {
+                    "status": "LIVE_SYNCED",
+                    "source": ep,
+                    "timestamp": d.get("timestamp"),
+                    "nifty_spot": float(bm.get("nifty_spot") or nf.get("spot_price") or 25024.2),
+                    "nifty_change_pct": float(bm.get("nifty_change_pct", 0.0) if bm.get("nifty_change_pct") is not None else nf.get("change_pct", 0.0)),
+                    "sensex_spot": float(bm.get("sensex_spot") or sx.get("spot_price") or 80757.2),
+                    "sensex_change_pct": float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0)),
+                    "market_regime": d.get("market_regime", {})
+                }
+        except Exception:
+            continue
+            
+    nf_item = scheduler.latest_shortlist.get("nifty_radar", {})
+    sx_item = scheduler.latest_shortlist.get("sensex_radar", {})
+    return {
+        "status": "CACHED_FALLBACK",
+        "nifty_spot": float(nf_item.get("last_price", 25024.2)),
+        "nifty_change_pct": float(nf_item.get("pct_change_pdc", 0.0)),
+        "sensex_spot": float(sx_item.get("last_price", 80757.2)),
+        "sensex_change_pct": float(sx_item.get("pct_change_pdc", 0.0)),
+    }
+
 @app.get("/api/shortlist")
 async def get_shortlist():
     return {

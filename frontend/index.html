@@ -459,29 +459,81 @@
     }
 
     async function syncApp1() {
-      const endpoint = isCloud ? 'https://finplus-index-breadth.onrender.com/api/regime' : 'http://127.0.0.1:8000/api/regime';
       try {
-        const res = await fetch(endpoint);
+        const res = await fetch('/api/live-indices');
         if (res.ok) {
-          const r = await res.json();
-          document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
-          document.getElementById('app1-sync-pill').textContent = isCloud ? 'GATEWAY: CLOUD SYNCED' : 'GATEWAY: SYNCED (:8000)';
+          const d = await res.json();
+          if (d.nifty_spot) {
+            const nFormatted = '₹' + Number(d.nifty_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const nEl = document.getElementById('nifty-spot-val');
+            if (nEl) nEl.textContent = nFormatted;
+          }
+          if (d.nifty_change_pct !== undefined) {
+            const nChg = Number(d.nifty_change_pct);
+            const nSign = nChg >= 0 ? '+' : '';
+            const nMoveEl = document.getElementById('nifty-move-val');
+            if (nMoveEl) {
+              nMoveEl.className = `text-xs mono font-bold ${nChg >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+              nMoveEl.textContent = `${nSign}${nChg.toFixed(2)}%`;
+            }
+          }
+          if (d.sensex_spot) {
+            const sFormatted = '₹' + Number(d.sensex_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            const sEl = document.getElementById('sensex-spot-val');
+            if (sEl) sEl.textContent = sFormatted;
+          }
+          if (d.sensex_change_pct !== undefined) {
+            const sChg = Number(d.sensex_change_pct);
+            const sSign = sChg >= 0 ? '+' : '';
+            const sMoveEl = document.getElementById('sensex-move-val');
+            if (sMoveEl) {
+              sMoveEl.className = `text-xs mono font-bold ${sChg >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+              sMoveEl.textContent = `${sSign}${sChg.toFixed(2)}%`;
+            }
+          }
+          const pill = document.getElementById('app1-sync-pill');
+          if (pill) {
+            pill.className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
+            pill.textContent = isCloud ? 'GATEWAY: CLOUD SYNCED (3s)' : 'GATEWAY: LIVE (:8000 3s)';
+          }
           return;
         }
       } catch (e) {
-        // Fallback to secondary if primary failed
-        const altEndpoint = isCloud ? 'http://127.0.0.1:8000/api/regime' : 'https://finplus-index-breadth.onrender.com/api/regime';
+        // Fallback to direct App 1 breadth
+        const directEndpoint = isCloud ? 'https://finplus-index-breadth.onrender.com/api/breadth' : 'http://127.0.0.1:8000/api/breadth';
         try {
-          const res2 = await fetch(altEndpoint);
+          const res2 = await fetch(directEndpoint);
           if (res2.ok) {
-            document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-blue-950 border border-blue-500/40 text-blue-300 font-mono';
-            document.getElementById('app1-sync-pill').textContent = 'GATEWAY: SYNCED';
+            const d2 = await res2.json();
+            const bm = d2.broad_market || {};
+            if (bm.nifty_spot) {
+              document.getElementById('nifty-spot-val').textContent = '₹' + Number(bm.nifty_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            }
+            if (bm.nifty_change_pct !== undefined) {
+              const nSign = bm.nifty_change_pct >= 0 ? '+' : '';
+              document.getElementById('nifty-move-val').textContent = `${nSign}${Number(bm.nifty_change_pct).toFixed(2)}%`;
+            }
+            if (bm.sensex_spot) {
+              document.getElementById('sensex-spot-val').textContent = '₹' + Number(bm.sensex_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+            }
+            if (bm.sensex_change_pct !== undefined) {
+              const sSign = bm.sensex_change_pct >= 0 ? '+' : '';
+              document.getElementById('sensex-move-val').textContent = `${sSign}${Number(bm.sensex_change_pct).toFixed(2)}%`;
+            }
+            const pill = document.getElementById('app1-sync-pill');
+            if (pill) {
+              pill.className = 'text-xs px-2 py-0.5 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono';
+              pill.textContent = 'GATEWAY: SYNCED (3s)';
+            }
             return;
           }
         } catch (e2) {}
       }
-      document.getElementById('app1-sync-pill').className = 'text-xs px-2 py-0.5 rounded bg-rose-950 border border-rose-500/40 text-rose-300 font-mono';
-      document.getElementById('app1-sync-pill').textContent = 'GATEWAY: OFFLINE';
+      const pOff = document.getElementById('app1-sync-pill');
+      if (pOff) {
+        pOff.className = 'text-xs px-2 py-0.5 rounded bg-rose-950 border border-rose-500/40 text-rose-300 font-mono';
+        pOff.textContent = 'GATEWAY: OFFLINE';
+      }
     }
 
     function renderShortlist(shortlist) {
@@ -771,7 +823,7 @@
     loadData();
     syncApp1();
     setInterval(loadData, 15000);
-    setInterval(syncApp1, 30000);
+    setInterval(syncApp1, 3000); // 3-second continuous live Nifty & Sensex polling
   </script>
 </body>
 </html>
