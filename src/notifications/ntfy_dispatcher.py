@@ -117,53 +117,52 @@ class NTFYDispatcher:
             f"Trend: {reg_lbl} | ADR {adr_val}:1"
         ]
         
-        # 2. Intraday Cash
-        top_stocks = shortlist.get("top_intraday_stocks", [])
-        if not top_stocks and shortlist.get("best_intraday_stock"):
-            top_stocks = [shortlist.get("best_intraday_stock")]
-
-        if top_stocks:
-            item = top_stocks[0]
-            sym = item.get("symbol")
-            ltp = item.get("last_price", 0.0)
-            act = "SELL" if "SELL" in item.get("intraday_action_badge", "") else "BUY"
-            risk = item.get("risk_management", {})
+        # 2. Intraday Cash (Strict 100% correlation with Dashboard)
+        best_cash = shortlist.get("best_intraday_stock")
+        if best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
+            sym = best_cash.get("symbol")
+            ltp = best_cash.get("last_price", 0.0)
+            act = "SELL" if "SELL" in best_cash.get("intraday_action_badge", "") else "BUY"
+            risk = best_cash.get("risk_management", {})
             sl = risk.get("stop_loss", "--")
             tgt = risk.get("target", "--")
-            lines.append(f"Cash: [{act}] {sym} @ Rs {ltp:,.0f} (SL: {sl}, Tgt: {tgt})")
+            lines.append(f"Cash: [QUALIFIED {act}] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
+        elif best_cash:
+            sym = best_cash.get("symbol")
+            ltp = best_cash.get("last_price", 0.0)
+            lines.append(f"Cash: [ON WATCH] {sym} @ Rs {ltp:,.1f} (Gated: CTI Choppy | Hold Cash)")
         else:
-            lines.append("Cash: [HOLD CASH] Bear distribution defense")
+            lines.append("Cash: [NO BREAKOUT ACTIVE] All 750 equities coiling | Hold Cash")
 
-        # 3. Nifty & Sensex Options Suggestions
-        atm_nifty = int(round(nf_spot / 50.0) * 50) if nf_spot > 0 else 24850
-        atm_sx = int(round(sx_spot / 100.0) * 100) if sx_spot > 0 else 80700
-        
-        is_bearish = "DOWNTREND" in reg_lbl or "BEAR" in reg_lbl
-        is_bullish = "UPTREND" in reg_lbl or "BULL" in reg_lbl
-        
-        if is_bearish:
-            lines.append(f"Nifty Opt: [BUY PUT] NIFTY {atm_nifty} PE | SL: -30% | Tgt: +60% (Outlay < 5K)")
-            lines.append(f"Sensex Opt: [BUY PUT] SENSEX {atm_sx} PE | SL: -35% | Tgt: +70% (Lot 20)")
-        elif is_bullish:
-            lines.append(f"Nifty Opt: [BUY CALL] NIFTY {atm_nifty} CE | SL: -30% | Tgt: +60% (Outlay < 5K)")
-            lines.append(f"Sensex Opt: [BUY CALL] SENSEX {atm_sx} CE | SL: -35% | Tgt: +70% (Lot 20)")
+        # 3. Nifty & Sensex Options (Strict 100% correlation with Dashboard)
+        nf_radar = shortlist.get("nifty_radar", {})
+        if nf_radar.get("is_actionable") and nf_radar.get("recommended_strike"):
+            lines.append(f"Nifty Opt: [ACTIONABLE] {nf_radar['recommended_strike']} | Outlay < 5K | SL: -30%")
         else:
-            lines.append(f"Nifty Opt: [STANDBY] Range consolidation (Theta risk)")
-            lines.append(f"Sensex Opt: [STANDBY] Range consolidation (Theta risk)")
+            lines.append("Nifty Opt: [HOLD CASH] Standby (Market Choppy | Confirmed Strike: NONE)")
 
-        # 4. Stock Option Suggestion
-        stk_opt = shortlist.get("best_stock_option", {})
-        if stk_opt and stk_opt.get("symbol"):
+        sx_radar = shortlist.get("sensex_radar", {})
+        if sx_radar.get("is_actionable") and sx_radar.get("recommended_strike"):
+            lines.append(f"Sensex Opt: [ACTIONABLE] {sx_radar['recommended_strike']} | Lot 20 | SL: -35%")
+        else:
+            lines.append("Sensex Opt: [HOLD CASH] Standby (Market Choppy | Confirmed Strike: NONE)")
+
+        # 4. Stock Option (Strict 100% correlation with Dashboard)
+        stk_opt = shortlist.get("best_stock_option")
+        if stk_opt and stk_opt.get("confluence_score", 0) >= 80 and "APPROVED" in stk_opt.get("regime_confluence", ""):
             s_sym = stk_opt.get("symbol")
-            rec_contract = stk_opt.get("recommended_contract") or (stk_opt.get("put_strike") if is_bearish else stk_opt.get("call_strike")) or f"{s_sym} ATM"
+            rec_contract = stk_opt.get("recommended_contract") or f"{s_sym} ATM"
             opt_act = "BUY" if "BUY" in stk_opt.get("option_action_badge", "BUY") else "BUY"
             o_risk = stk_opt.get("risk_management", {})
             u_entry = o_risk.get("underlying_entry", stk_opt.get("last_price", 0))
             u_sl = o_risk.get("underlying_sl", "--")
             u_tgt = o_risk.get("underlying_target", "--")
-            lines.append(f"Stock Opt: [{opt_act}] {rec_contract} | Under: {u_entry:,.0f} | SL: {u_sl} | Tgt: {u_tgt}")
+            lines.append(f"Stock Opt: [QUALIFIED] {rec_contract} | Under: {u_entry:,.0f} | SL: {u_sl} | Tgt: {u_tgt}")
+        elif shortlist.get("top_watch_option"):
+            w = shortlist.get("top_watch_option")
+            lines.append(f"Stock Opt: [ON WATCH] {w.get('symbol')} (Score: {w.get('confluence_score')}/100 | Macro Gated)")
         else:
-            lines.append("Stock Opt: [HOLD CASH] No 100/100 compression breakouts")
+            lines.append("Stock Opt: [HOLD CASH] No 100/100 breakouts active | Preserving premium")
 
         # 5. Penny / 4H Check
         lines.append("Penny/4H: [ACCUMULATING] Stage-2 (< Rs 50, Zero Debt) 13:15 check")
