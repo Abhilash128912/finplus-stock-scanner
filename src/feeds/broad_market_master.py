@@ -24,6 +24,19 @@ MIN_CLOSE_PRICE = 50.0       # Anti-penny stock filter
 MIN_DAILY_VOLUME = 200_000   # Deep order book threshold
 MIN_TURNOVER_CR = 15.0       # Minimum ₹15 Crores traded value to prevent circuit lockouts
 
+# NIFTY 50 / Large-Cap Universe - COMPLETELY EXCLUDED from Intraday Cash
+# High-momentum, clean trending Midcaps and Smallcaps only
+LARGE_CAP_SYMBOLS = {
+    "RELIANCE", "TCS", "HDFCBANK", "ICICIBANK", "INFY", "ITC", "LT", "SBIN",
+    "BHARTIARTL", "AXISBANK", "KOTAKBANK", "HINDUNILVR", "TATAMOTORS", "SUNPHARMA",
+    "BAJFINANCE", "MARUTI", "TITAN", "ADANIENT", "ADANIPORTS", "NTPC", "ONGC",
+    "POWERGRID", "ULTRACEMCO", "TATASTEEL", "M&M", "BAJAJFINSV", "COALINDIA",
+    "ASIANPAINT", "HINDALCO", "GRASIM", "TECHM", "JSWSTEEL", "WIPRO", "INDUSINDBK",
+    "BPCL", "CIPLA", "DRREDDY", "BRITANNIA", "EICHERMOT", "APOLLOHOSP", "HEROMOTOCO",
+    "BAJAJ-AUTO", "DIVISLAB", "SBILIFE", "HDFCLIFE", "TATACONSUM", "LTIM", "SHRIRAMFIN",
+    "NESTLEIND", "BEL", "HCLTECH"
+}
+
 
 class BroadMarketMaster:
     """
@@ -104,14 +117,19 @@ class BroadMarketMaster:
             # 1. Close >= min_price (e.g. ₹50)
             # 2. Volume >= min_volume (e.g. 200,000 shares)
             # 3. Turnover >= min_turnover_cr (e.g. ₹15 Cr)
+            # 4. EXCLUDE LARGE CAPS: Pure high-momentum Midcaps & Smallcaps only
             valid = df.dropna(subset=["Symbol", "close", "volume"]).copy()
+            # Clean symbol string
+            valid["clean_sym"] = valid["Symbol"].astype(str).str.strip().str.upper()
+            valid = valid[~valid["clean_sym"].isin(LARGE_CAP_SYMBOLS)].copy()
+
             quality_df = valid[
                 (valid["close"] >= self.min_price) &
                 (valid["volume"] >= self.min_volume) &
                 (valid["turnover_cr"] >= self.min_turnover_cr)
             ].copy()
 
-            logger.info(f"Anti-Circuit Filter: {len(quality_df)} stocks qualify out of {len(df)} total rows.")
+            logger.info(f"Mid/Smallcap Quality Filter: {len(quality_df)} stocks qualify (Large caps eliminated).")
 
             # Rank by institutional traded turnover (highest liquidity first)
             quality_df.sort_values(by="turnover_cr", ascending=False, inplace=True)

@@ -204,28 +204,28 @@ class RangeDetectorEngine:
                 reason = f"Breakout overextended: Price is +{ema50_dist_pct}% above 50 EMA (Max safe: +{max_dist_pct}%). Mean reversion risk high."
             else:
                 signal_direction = 1
-                pts_range = 30
-                pts_ema50 = 25  # Confirmed above 50 EMA within safe proximity
-                if above_pdh:
-                    pts_pdh_pdl = 25
+                pts_range = 35  # Range Top breakout
+                pts_ema50 = 30  # Confirmed above 50 EMA within safe proximity
                 if above_vwap:
-                    pts_vwap = 10
-                if has_volume:
+                    pts_vwap = 20
+                if rvol >= 1.25:
+                    pts_volume = 15
+                elif rvol >= 1.0:
                     pts_volume = 10
                     
-                total_pts = pts_range + pts_ema50 + pts_pdh_pdl + pts_vwap + pts_volume
-                if total_pts >= 65:
+                total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                if total_pts >= 85:
                     ignition_state = "BULLISH_IGNITION"
                     tier_label = "TIER-1 HIGH CONVICTION"
-                    reason = f"Closed above Range Top (₹{range_top_val:.2f}) + 50 EMA confirmed (+{ema50_dist_pct}%)" + (" & PDH" if above_pdh else " + VWAP")
-                elif total_pts >= 50:
+                    reason = f"Closed above Range Top (₹{range_top_val:.2f}) + 50 EMA confirmed (+{ema50_dist_pct}%) + VWAP confluence"
+                elif total_pts >= 65:
                     ignition_state = "RANGE_BREAKOUT_LONG"
                     tier_label = "TIER-2 EARLY SCALP"
                     reason = f"Closed above Range Top with 50 EMA (+{ema50_dist_pct}%) & VWAP confluence"
                 else:
                     ignition_state = "MILD_BREAKOUT_LONG"
                     tier_label = "WATCHLIST ONLY"
-                    reason = f"Range broke with weak volume/PDH support"
+                    reason = f"Range broke with weak volume support"
 
         elif broke_bot:
             # DOWNTREND CONFIRMATION GATE: Must be below 50 EMA (and not so far)
@@ -241,38 +241,37 @@ class RangeDetectorEngine:
                 reason = f"Breakdown overextended: Price is {ema50_dist_pct}% below 50 EMA (Max safe: -{max_dist_pct}%). Oversold bounce risk."
             else:
                 signal_direction = -1
-                pts_range = 30
-                pts_ema50 = 25  # Confirmed below 50 EMA within safe proximity
-                if below_pdl:
-                    pts_pdh_pdl = 25
+                pts_range = 35  # Range Bottom breakdown
+                pts_ema50 = 30  # Confirmed below 50 EMA within safe proximity
                 if below_vwap:
-                    pts_vwap = 10
-                if has_volume:
+                    pts_vwap = 20
+                if rvol >= 1.25:
+                    pts_volume = 15
+                elif rvol >= 1.0:
                     pts_volume = 10
                     
-                total_pts = pts_range + pts_ema50 + pts_pdh_pdl + pts_vwap + pts_volume
-                if total_pts >= 65:
+                total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                if total_pts >= 85:
                     ignition_state = "BEARISH_IGNITION"
                     tier_label = "TIER-1 HIGH CONVICTION"
-                    reason = f"Closed below Range Bottom (₹{range_bot_val:.2f}) + 50 EMA confirmed ({ema50_dist_pct}%)" + (" & PDL" if below_pdl else " - VWAP")
-                elif total_pts >= 50:
+                    reason = f"Closed below Range Bottom (₹{range_bot_val:.2f}) + 50 EMA confirmed ({ema50_dist_pct}%) - VWAP confluence"
+                elif total_pts >= 65:
                     ignition_state = "RANGE_BREAKDOWN_SHORT"
                     tier_label = "TIER-2 EARLY SCALP"
-                    reason = f"Closed below Range Bottom with 50 EMA ({ema50_dist_pct}%) & VWAP confluence"
+                    reason = f"Closed below Range Bottom with 50 EMA ({ema50_dist_pct}%) - VWAP confluence"
                 else:
                     ignition_state = "MILD_BREAKDOWN_SHORT"
                     tier_label = "WATCHLIST ONLY"
-                    reason = f"Range breakdown with weak volume/PDL support"
+                    reason = f"Range breakdown with weak volume support"
         else:
             reason = "Inside Range / Normal Consolidation"
 
         points_breakdown = {
             "range_breakout_pts": pts_range,
             "ema50_pts": pts_ema50,
-            "pdh_pdl_pts": pts_pdh_pdl,
             "vwap_pts": pts_vwap,
             "volume_pts": pts_volume,
-            "total_score": pts_range + pts_ema50 + pts_pdh_pdl + pts_vwap + pts_volume
+            "total_score": pts_range + pts_ema50 + pts_vwap + pts_volume
         }
         confluence_score = points_breakdown["total_score"]
 
