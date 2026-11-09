@@ -52,6 +52,19 @@ class BroadMarketMaster:
         """
         stocks = self._load_quality_from_excel(top_n_liquid)
 
+        # Fallback 1: Bundled verified JSON configuration (for Cloud / Render deployment)
+        if not stocks:
+            config_json = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config", "cash_stocks_master.json")
+            if os.path.exists(config_json):
+                try:
+                    import json
+                    with open(config_json, "r", encoding="utf-8") as f:
+                        stocks = json.load(f)[:top_n_liquid]
+                    logger.info(f"Loaded {len(stocks)} cash stocks from bundled {config_json}")
+                except Exception as e:
+                    logger.error(f"Error loading bundled cash master JSON: {e}")
+
+        # Fallback 2: Online NSE Nifty 500 list
         if not stocks:
             logger.warning(f"Could not load quality stocks from {self.excel_path}, falling back to online NSE...")
             stocks = self._load_from_online_nse(top_n_liquid)

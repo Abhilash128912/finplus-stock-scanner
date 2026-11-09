@@ -63,6 +63,12 @@ class ScannerScheduler:
                 eval_res["regime_badge"] = conf_badge
                 eval_res["regime_data"] = regime_data
                 results.append(eval_res)
+
+                # Progressive update: Keep dashboard and shortlist fresh every 10 instruments
+                if len(results) % 10 == 0:
+                    current_sorted = sorted(results, key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
+                    self.latest_scan_results = current_sorted
+                    self.latest_shortlist = self.shortlist_engine.select_best_candidates(current_sorted)
                 
             except Exception as e:
                 logger.error(f"Error evaluating {sym} ({ticker}): {e}")
