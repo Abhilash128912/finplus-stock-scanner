@@ -134,40 +134,55 @@ class NTFYDispatcher:
         else:
             lines.append("Cash: [HOLD CASH] Bear distribution defense")
 
-        # 3. Nifty & Sensex Options
+        # 3. Nifty & Sensex Options Suggestions
         atm_nifty = int(round(nf_spot / 50.0) * 50) if nf_spot > 0 else 24850
-        if "DOWNTREND" in reg_lbl or "BEAR" in reg_lbl:
-            lines.append(f"Nifty Opt: [BUY PUT] NIFTY {atm_nifty} PE (Outlay < 5K, 30% SL)")
-        elif "UPTREND" in reg_lbl or "BULL" in reg_lbl:
-            lines.append(f"Nifty Opt: [BUY CALL] NIFTY {atm_nifty} CE (Outlay < 5K, 30% SL)")
+        atm_sx = int(round(sx_spot / 100.0) * 100) if sx_spot > 0 else 80700
+        
+        is_bearish = "DOWNTREND" in reg_lbl or "BEAR" in reg_lbl
+        is_bullish = "UPTREND" in reg_lbl or "BULL" in reg_lbl
+        
+        if is_bearish:
+            lines.append(f"Nifty Opt: [BUY PUT] NIFTY {atm_nifty} PE | SL: -30% | Tgt: +60% (Outlay < 5K)")
+            lines.append(f"Sensex Opt: [BUY PUT] SENSEX {atm_sx} PE | SL: -35% | Tgt: +70% (Lot 20)")
+        elif is_bullish:
+            lines.append(f"Nifty Opt: [BUY CALL] NIFTY {atm_nifty} CE | SL: -30% | Tgt: +60% (Outlay < 5K)")
+            lines.append(f"Sensex Opt: [BUY CALL] SENSEX {atm_sx} CE | SL: -35% | Tgt: +70% (Lot 20)")
         else:
             lines.append(f"Nifty Opt: [STANDBY] Range consolidation (Theta risk)")
+            lines.append(f"Sensex Opt: [STANDBY] Range consolidation (Theta risk)")
 
-        if is_sensex_day:
-            atm_sx = int(round(sx_spot / 100.0) * 100) if sx_spot > 0 else 80800
-            s_act = "PE" if ("DOWNTREND" in reg_lbl or "BEAR" in reg_lbl) else "CE"
-            lines.append(f"Sensex Opt: [BUY {s_act}] SENSEX {atm_sx} {s_act} (Lot 20)")
+        # 4. Stock Option Suggestion
+        stk_opt = shortlist.get("best_stock_option", {})
+        if stk_opt and stk_opt.get("symbol"):
+            s_sym = stk_opt.get("symbol")
+            rec_contract = stk_opt.get("recommended_contract") or (stk_opt.get("put_strike") if is_bearish else stk_opt.get("call_strike")) or f"{s_sym} ATM"
+            opt_act = "BUY" if "BUY" in stk_opt.get("option_action_badge", "BUY") else "BUY"
+            o_risk = stk_opt.get("risk_management", {})
+            u_entry = o_risk.get("underlying_entry", stk_opt.get("last_price", 0))
+            u_sl = o_risk.get("underlying_sl", "--")
+            u_tgt = o_risk.get("underlying_target", "--")
+            lines.append(f"Stock Opt: [{opt_act}] {rec_contract} | Under: {u_entry:,.0f} | SL: {u_sl} | Tgt: {u_tgt}")
         else:
-            lines.append("Sensex Opt: [STANDBY] (Active Wed/Thu)")
+            lines.append("Stock Opt: [HOLD CASH] No 100/100 compression breakouts")
 
-        # 4. Penny / 4H Check
-        lines.append("Penny/4H: [ACCUMULATING] (Wallet Rs 20/200 • 13:15 IST checkpoint)")
+        # 5. Penny / 4H Check
+        lines.append("Penny/4H: [ACCUMULATING] Stage-2 (< Rs 50, Zero Debt) 13:15 check")
 
-        # 5. MCX Commodities
+        # 6. MCX Commodities
         app3_data = self._fetch_app3_commodity()
         if app3_data:
             comms = app3_data.get("commodities", {})
             crude = comms.get("CRUDEOILM", {})
             natgas = comms.get("NATGASMINI", {})
             gold = comms.get("GOLDPETAL", {})
-            lines.append(f"MCX: Crude {crude.get('ltp', 0):,.0f} | NatGas {natgas.get('ltp', 0):,.1f} | Gold {gold.get('ltp', 0):,.0f}")
+            lines.append(f"MCX: Crude {crude.get('ltp', 0):,.0f} | NatGas {natgas.get('ltp', 0):,.1f} | Gold {gold.get('ltp', 0):,.0f} (18:00 US Open)")
         else:
-            lines.append("MCX: Crude, NatGas, Gold Petal (18:00 US Open Focus)")
+            lines.append("MCX: Crude, NatGas, Gold Petal (18:00 US Open)")
 
         lines.append(f"Cockpit: {RENDER_SCANNER_URL}")
 
         message = "\n".join(lines)
-        title = f"FinPlus Desk • {ist_time}"
+        title = f"FinPlus Desk | {ist_time}"
         
         success = False
         cockpit_url = RENDER_SCANNER_URL
