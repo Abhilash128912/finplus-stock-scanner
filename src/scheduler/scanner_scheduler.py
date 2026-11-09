@@ -35,6 +35,7 @@ class ScannerScheduler:
         self.last_scan_utc: str = get_utc_iso()
         self.is_running: bool = False
         self._last_briefing_date: str = ""
+        self._last_opening_pulse_date: str = ""
 
     def scan_universe_now(self) -> List[Dict[str, Any]]:
         """Scans all dynamic universe items synchronously (runs in worker pool)."""
@@ -99,6 +100,12 @@ class ScannerScheduler:
                     self._last_briefing_date = today_str
                     logger.info("Triggering 09:00 AM IST Daily Tactical Morning Briefing...")
                     self.dispatcher.send_morning_tactical_briefing(shortlist=self.latest_shortlist)
+
+                # 09:15 AM Market Open Ignition Pulse (Fires immediately upon market open with live stock suggestions)
+                if ist_now.hour == 9 and 15 <= ist_now.minute <= 30 and self._last_opening_pulse_date != today_str:
+                    self._last_opening_pulse_date = today_str
+                    logger.info("Triggering 09:15 AM Market Open Ignition Pulse with live stock suggestions...")
+                    self.dispatcher.send_30m_shortlist_pulse(self.latest_shortlist, force=True)
 
                 sleep_secs = 60 if is_market_open_ist() else 180
                 await asyncio.sleep(sleep_secs)

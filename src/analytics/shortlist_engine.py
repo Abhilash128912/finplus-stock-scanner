@@ -92,6 +92,7 @@ class ShortlistEngine:
         # Sort by highest confluence score
         approved_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
         best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
+        top_intraday_stocks = approved_cash_stocks[:3]
         
         # Find top cash candidate on watch if gated by score < 80 or market conditions
         coiled_cash_stocks = [
@@ -102,6 +103,7 @@ class ShortlistEngine:
         ]
         coiled_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
         top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
+        top_watch_stocks = coiled_cash_stocks[:3]
         
         if top_watch_cash:
             top_score = top_watch_cash.get('confluence_score', 0)
@@ -146,9 +148,11 @@ class ShortlistEngine:
             "best_index_option": best_index_option,
             "best_stock_option": best_stock_option,
             "best_intraday_stock": best_intraday_stock,
+            "top_intraday_stocks": top_intraday_stocks,
             "top_watch_option": top_watch_option,
             "stock_option_standby_reason": stock_option_standby_reason,
             "top_watch_cash": top_watch_cash,
+            "top_watch_stocks": top_watch_stocks,
             "cash_standby_reason": cash_standby_reason,
             "market_diagnostic": {
                 "status": "CHOPPY_STANDBY" if "VETOED" in sensex_radar.get("regime_confluence", "") else "ACTIVE",

@@ -108,21 +108,37 @@ class NTFYDispatcher:
             lines.append(f"• **Gate Clearance:** `{diag.get('status', 'ACTIVE')}`")
         lines.append("")
         
-        # 2) BEST INTRADAY TRADE (750 Broad Market #1 Crown Hero)
-        lines.append("⚡ **2. BEST INTRADAY TRADE (750 Broad Market Quality):**")
-        if cash and cash.get("confluence_score", 0) >= 80:
-            lines.append(f"• **HERO:** `{cash.get('intraday_action_badge')}` on `{cash.get('symbol')}` @ `₹{cash.get('last_price')}`")
-            lines.append(f"• **Score:** `{cash.get('confluence_score')}/100` | 50 EMA: `₹{cash.get('ema50')}` ({cash.get('ema50_dist_pct', 0):+0.2f}%)")
-            lines.append(f"• **Setup:** {cash.get('intraday_directive')}")
-            lines.append(f"• **Capital Pool:** ₹7,750 with 5x MIS leverage | Anti-Circuit Verified")
+        # 2) BEST INTRADAY TRADE (750 Broad Market Quality)
+        lines.append("⚡ **2. SPECIFIC INTRADAY EQUITY SUGGESTIONS (750 Broad Market):**")
+        top_stocks = shortlist.get("top_intraday_stocks", [])
+        if not top_stocks and shortlist.get("best_intraday_stock"):
+            top_stocks = [shortlist.get("best_intraday_stock")]
+
+        if top_stocks:
+            for idx, stk in enumerate(top_stocks, 1):
+                sym = stk.get("symbol")
+                ltp = stk.get("last_price")
+                act = stk.get("intraday_action_badge", "BUY")
+                score = stk.get("confluence_score", 0)
+                risk = stk.get("risk_management", {})
+                sl = risk.get("stop_loss", stk.get("range_bottom", "--"))
+                tgt = risk.get("target", "--")
+                lines.append(f"• **#{idx} {act}: `{sym}` @ `₹{ltp}`**")
+                lines.append(f"  🎯 **Target:** `₹{tgt}` | 🛑 **SL:** `₹{sl}` | Score: `{score}/100`")
+                lines.append(f"  📊 **50 EMA:** `₹{stk.get('ema50')}` ({stk.get('ema50_dist_pct', 0):+0.2f}%) | Anti-Circuit: `{stk.get('anti_circuit_status', 'SAFE')}`")
         else:
             top_w = shortlist.get("top_watch_cash")
-            if top_w:
-                lines.append(f"• **Recommendation:** `HOLD CASH (Capital Safeguard Active)`")
-                lines.append(f"• **Reason:** Top candidate `{top_w.get('symbol')}` scored `{top_w.get('confluence_score')}/100` (< 80 threshold). No trade taken.")
+            watch_list = shortlist.get("top_watch_stocks", [])
+            if watch_list:
+                lines.append("• ⚠️ **NO HEROS CLEARED 80/100 THRESHOLD (HOLD CASH RULE)**")
+                lines.append("• **Watched Equities (Awaiting Breakout Confirmation):**")
+                for idx, stk in enumerate(watch_list[:2], 1):
+                    sym = stk.get("symbol")
+                    ltp = stk.get("last_price")
+                    trigger = stk.get("range_top") if stk.get("signal_direction", 1) >= 0 else stk.get("range_bottom")
+                    lines.append(f"  {idx}. `{sym}` @ ₹{ltp} — Needs 15m candle close above ₹{trigger} (Score: {stk.get('confluence_score')}/100)")
             else:
-                lines.append(f"• **Recommendation:** `HOLD CASH (Capital Safeguard Active)`")
-                lines.append("• **Reason:** No broad market equity meets strict 80/100 conviction threshold.")
+                lines.append("• **Recommendation:** `HOLD CASH (All 750 scrips inside range bands)`")
         lines.append("")
 
         # 3) BEST SENSEX OPTION (Active on Wednesday & Thursday)
@@ -264,17 +280,33 @@ class NTFYDispatcher:
         
         # 1. Intraday Core (Every Day)
         lines.append("⚡ **1. INTRADAY CORE (750 Broad Market):** `ACTIVE TODAY`")
-        lines.append("• **Focus:** Single #1 Crown Hero breakout (Conviction score ≥ 80/100).")
+        lines.append("• **Focus:** High-conviction breakout equities (Conviction score ≥ 80/100).")
         lines.append("• **Capital:** Deploy full ₹7,750 pool with 5x MIS leverage (~₹38,750 buying power).")
         lines.append("• **Rule:** If no stock scores ≥ 80, system orders HOLD CASH.")
         if shortlist:
-            best_cash = shortlist.get("best_intraday_stock", {})
-            if best_cash and best_cash.get("symbol") and best_cash.get("symbol") != "NONE":
-                score = best_cash.get("confluence_score", 0)
-                status_txt = "🔥 QUALIFIED" if score >= 80 else "⚠️ WATCH ONLY (Score < 80)"
-                lines.append(f"• **Top Candidate:** `{best_cash.get('symbol')}` | Score: `{score}/100` ({status_txt})")
+            top_stocks = shortlist.get("top_intraday_stocks", [])
+            if not top_stocks and shortlist.get("best_intraday_stock"):
+                top_stocks = [shortlist.get("best_intraday_stock")]
+            
+            if top_stocks:
+                lines.append("• **Specific Intraday Equity Breakouts:**")
+                for idx, stk in enumerate(top_stocks, 1):
+                    sym = stk.get("symbol")
+                    ltp = stk.get("last_price")
+                    act = stk.get("intraday_action_badge", "BUY")
+                    risk = stk.get("risk_management", {})
+                    sl = risk.get("stop_loss", "--")
+                    tgt = risk.get("target", "--")
+                    score = stk.get("confluence_score", 0)
+                    lines.append(f"  #{idx} **{act}: `{sym}` @ `₹{ltp}`** (SL: ₹{sl} | Target: ₹{tgt} | Score: {score}/100)")
             else:
-                lines.append("• **Status:** Scanning 750 broad market candidates at 09:15 open.")
+                watch_stocks = shortlist.get("top_watch_stocks", [])
+                if watch_stocks:
+                    lines.append("• **Top Pre-Market Watch Equities (Key Levels):**")
+                    for idx, stk in enumerate(watch_stocks[:3], 1):
+                        lines.append(f"  #{idx} `{stk.get('symbol')}` @ ₹{stk.get('last_price')} | Trigger: Needs 15m close above ₹{stk.get('range_top')} (Score: {stk.get('confluence_score')}/100)")
+                else:
+                    lines.append("• **Status:** Scanning 750 broad market candidates at 09:15 open.")
         lines.append("")
         
         # 2. Midcap Nifty Swing (Mondays & Tuesdays: Before Expiry & On Expiry)
