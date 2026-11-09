@@ -43,6 +43,17 @@ class NTFYDispatcher:
             pass
         return {}
 
+    def _fetch_app3_commodity(self) -> Dict[str, Any]:
+        """Queries App #3 MCX Commodity Radar."""
+        try:
+            app3_url = os.getenv("APP3_URL", "http://127.0.0.1:8002")
+            resp = requests.get(f"{app3_url}/api/scan", timeout=1.5)
+            if resp.status_code == 200:
+                return resp.json()
+        except Exception:
+            pass
+        return {}
+
     def _fetch_morning_macro_news(self) -> Dict[str, str]:
         """Generates crisp morning news brief and global cues."""
         return {
@@ -195,6 +206,24 @@ class NTFYDispatcher:
                 lines.append(f"• **Stance:** `HOLD CASH / STANDBY` ({mid.get('directive', 'Awaiting breakout')})")
         else:
             lines.append(f"• **Status:** ⏸️ `STANDBY` (Midcap scheduled for Monday & Tuesday).")
+        lines.append("")
+
+        # 7) MCX COMMODITIES (Crude Mini, NatGas Mini, Gold Petal)
+        app3_data = self._fetch_app3_commodity()
+        lines.append("### 🛢️ 7. MCX COMMODITY RADAR (Evening Prime 18:00 - 21:30)")
+        if app3_data:
+            p = app3_data.get("priority_trade", {})
+            comms = app3_data.get("commodities", {})
+            crude = comms.get("CRUDEOILM", {})
+            natgas = comms.get("NATGASMINI", {})
+            gold = comms.get("GOLDPETAL", {})
+            
+            lines.append(f"• **LTP:** Crude: `₹{crude.get('ltp', 0):,.0f}` | NatGas: `₹{natgas.get('ltp', 0):,.1f}` | Gold: `₹{gold.get('ltp', 0):,.0f}`")
+            if p and p.get("symbol"):
+                lines.append(f"• **Priority Asset:** `{p.get('display_name')}` ({p.get('futures_directive')})")
+                lines.append(f"• **Status:** {p.get('reason', 'Awaiting breakout')} | Score: `{p.get('confluence_score', 0)}/100`")
+        else:
+            lines.append("• **Status:** Tracking Crude Mini, NatGas Mini, and Gold Petal for 18:00 US session open.")
         lines.append("")
 
         lines.append("---")
