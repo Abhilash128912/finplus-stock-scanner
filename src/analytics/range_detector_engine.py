@@ -57,6 +57,33 @@ class RangeDetectorEngine:
                 "status": "INSUFFICIENT_DATA",
                 "timestamp_utc": get_utc_iso()
             }
+
+        # Market Holiday & Freshness Gate: Prevent stale yesterday candles from triggering on holidays
+        try:
+            from src.utils.indian_market_calendar import get_current_ist_datetime, is_nse_holiday
+            today_date = get_current_ist_datetime().date()
+            last_candle_date = pd.to_datetime(raw_df.index[-1]).date()
+            is_hol, hol_name = is_nse_holiday(today_date)
+
+            if is_hol or last_candle_date < today_date:
+                status_desc = f"Exchange Closed ({hol_name})" if is_hol else "Market Closed / Awaiting First Live Candle"
+                last_price = float(raw_df['Close'].iloc[-1])
+                return {
+                    "symbol": symbol,
+                    "category": meta.get("category", "STOCK"),
+                    "status": "MARKET_CLOSED_HOLIDAY",
+                    "signal_direction": 0,
+                    "confluence_score": 0,
+                    "ignition_state": "MARKET_CLOSED",
+                    "tier_label": "STANDBY (MARKET CLOSED)",
+                    "reason": status_desc,
+                    "last_price": round(last_price, 2),
+                    "timestamp_utc": get_utc_iso(),
+                    "intraday_action_badge": "HOLD CASH",
+                    "option_directive_badge": "MARKET CLOSED"
+                }
+        except Exception:
+            pass
             
         df = raw_df.copy()
         if isinstance(df.columns, pd.MultiIndex):

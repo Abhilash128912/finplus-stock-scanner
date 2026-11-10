@@ -220,6 +220,40 @@ class NTFYDispatcher:
                 
         return success
 
+    def send_holiday_notice(self, holiday_name: str) -> bool:
+        """Sends an informative announcement that the National Stock Exchange is closed for an official holiday."""
+        title = f"FinPlus Desk | Market Closed: {holiday_name}"
+        lines = [
+            f"National Stock Exchange (NSE) & BSE are CLOSED today for {holiday_name}.",
+            "",
+            "Status: STANDBY (Zero capital exposure)",
+            "Scanner: Background equity & derivative scanning paused",
+            "Execution: Paper trade auto-execution locked",
+            "MCX Commodities: Morning session closed (Evening opens 17:00 IST if scheduled)",
+            "",
+            f"Cockpit: {RENDER_SCANNER_URL}"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": RENDER_SCANNER_URL
+            }
+            try:
+                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    logger.info(f"Holiday notice delivered to '{topic}'")
+                    success = True
+            except Exception as e:
+                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
+        return success
+
     def send_morning_tactical_briefing(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
         """
         Dispatches the 09:00 AM IST Daily Tactical Morning Briefing.
@@ -311,6 +345,40 @@ class NTFYDispatcher:
                 
         return success
 
+    def send_holiday_notice(self, holiday_name: str) -> bool:
+        """Sends an informative announcement that the National Stock Exchange is closed for an official holiday."""
+        title = f"FinPlus Desk | Market Closed: {holiday_name}"
+        lines = [
+            f"National Stock Exchange (NSE) & BSE are CLOSED today for {holiday_name}.",
+            "",
+            "Status: STANDBY (Zero capital exposure)",
+            "Scanner: Background equity & derivative scanning paused",
+            "Execution: Paper trade auto-execution locked",
+            "MCX Commodities: Morning session closed (Evening opens 17:00 IST if scheduled)",
+            "",
+            f"Cockpit: {RENDER_SCANNER_URL}"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": RENDER_SCANNER_URL
+            }
+            try:
+                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    logger.info(f"Holiday notice delivered to '{topic}'")
+                    success = True
+            except Exception as e:
+                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
+        return success
+
     def send_end_of_trade_summary(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
         """
         Dispatches the 03:00 PM IST End of Trade Session Summary.
@@ -397,4 +465,38 @@ class NTFYDispatcher:
             except Exception as e:
                 logger.error(f"Failed delivering trade summary to '{topic}': {e}")
                 
+        return success
+
+    def send_holiday_notice(self, holiday_name: str) -> bool:
+        """Sends an informative announcement that the National Stock Exchange is closed for an official holiday."""
+        title = f"FinPlus Desk | Market Closed: {holiday_name}"
+        lines = [
+            f"National Stock Exchange (NSE) & BSE are CLOSED today for {holiday_name}.",
+            "",
+            "Status: STANDBY (Zero capital exposure)",
+            "Scanner: Background equity & derivative scanning paused",
+            "Execution: Paper trade auto-execution locked",
+            "MCX Commodities: Morning session closed (Evening opens 17:00 IST if scheduled)",
+            "",
+            f"Cockpit: {RENDER_SCANNER_URL}"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": RENDER_SCANNER_URL
+            }
+            try:
+                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+                if resp.status_code == 200:
+                    logger.info(f"Holiday notice delivered to '{topic}'")
+                    success = True
+            except Exception as e:
+                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
         return success

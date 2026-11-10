@@ -33,27 +33,31 @@ def get_ist_time_str() -> str:
     return get_ist_now().strftime("%I:%M %p IST")
 
 def is_market_open_ist() -> bool:
-    """Checks whether current IST time is within active market hours (09:15 to 15:30 IST, Mon-Fri)."""
-    now_ist = get_ist_now()
-    if now_ist.weekday() >= 5: # Saturday or Sunday
-        return False
-    curr_time = now_ist.time()
-    return time(9, 15) <= curr_time <= time(15, 30)
+    """Checks whether current IST time is within active market hours and not an official NSE holiday."""
+    from src.utils.indian_market_calendar import is_equity_market_open_ist
+    is_open, _ = is_equity_market_open_ist()
+    return is_open
 
 def is_pulse_window_ist() -> bool:
-    """Checks whether current IST time is within 30-minute pulse window (09:15 to 15:00 IST, Mon-Fri).
-    Stops 30 minutes before 15:30 closing.
-    """
-    now_ist = get_ist_now()
-    if now_ist.weekday() >= 5: # Saturday or Sunday
+    """Checks whether current IST time is within 30-minute pulse window (09:15 to 15:00 IST) on an active market day."""
+    from src.utils.indian_market_calendar import is_nse_holiday, get_current_ist_datetime
+    now_ist = get_current_ist_datetime()
+    if now_ist.weekday() >= 5:
+        return False
+    is_hol, _ = is_nse_holiday(now_ist.date())
+    if is_hol:
         return False
     curr_time = now_ist.time()
     return time(9, 15) <= curr_time <= time(15, 0)
 
 def is_ignition_window_ist() -> bool:
-    """Checks whether current IST time is in active ignition scan window (09:30 to 14:45 IST, Mon-Fri)."""
-    now_ist = get_ist_now()
+    """Checks whether current IST time is in active ignition scan window (09:30 to 14:45 IST) on an active market day."""
+    from src.utils.indian_market_calendar import is_nse_holiday, get_current_ist_datetime
+    now_ist = get_current_ist_datetime()
     if now_ist.weekday() >= 5:
+        return False
+    is_hol, _ = is_nse_holiday(now_ist.date())
+    if is_hol:
         return False
     curr_time = now_ist.time()
     return time(9, 30) <= curr_time <= time(14, 45)

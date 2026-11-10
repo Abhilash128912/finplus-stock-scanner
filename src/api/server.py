@@ -153,6 +153,25 @@ async def get_live_indices():
 
 @app.get("/api/shortlist")
 async def get_shortlist():
+    from src.utils.indian_market_calendar import is_nse_holiday
+    is_hol, hol_name = is_nse_holiday()
+    if is_hol:
+        return {
+            "timestamp_utc": scheduler.last_scan_utc,
+            "ist_time": get_ist_time_str(),
+            "market_status": "CLOSED_HOLIDAY",
+            "holiday_name": hol_name,
+            "shortlist": {
+                "market_status": f"EXCHANGE_CLOSED ({hol_name})",
+                "best_intraday_stock": None,
+                "best_stock_option": None,
+                "sensex_radar": {"is_actionable": False, "reason": f"Exchange Closed ({hol_name})"},
+                "nifty_radar": {"is_actionable": False, "reason": f"Exchange Closed ({hol_name})"},
+                "midcap_radar": {"is_actionable": False, "reason": f"Exchange Closed ({hol_name})"},
+                "standby_reason": f"National Stock Exchange (NSE) & BSE are CLOSED today for {hol_name}. Zero capital exposed."
+            }
+        }
+
     return {
         "timestamp_utc": scheduler.last_scan_utc,
         "ist_time": get_ist_time_str(),

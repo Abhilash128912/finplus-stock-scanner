@@ -14,6 +14,7 @@ from src.analytics.regime_interceptor import App1RegimeInterceptor
 from src.analytics.shortlist_engine import ShortlistEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
+from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
 
 logger = setup_logger("ScannerScheduler")
 
@@ -38,6 +39,11 @@ class ScannerScheduler:
 
     def scan_universe_now(self) -> List[Dict[str, Any]]:
         """Scans all dynamic universe items synchronously (runs in worker pool)."""
+        is_open, open_reason = is_equity_market_open_ist()
+        if not is_open:
+            logger.info(f"Market Closed Gate Active: {open_reason}. Scanning skipped.")
+            return self.latest_scan_results
+
         universe = self.feed.get_all_universe_items()
         results = []
         
@@ -108,6 +114,18 @@ class ScannerScheduler:
                     date_str = ist_now.strftime("%Y-%m-%d")
                     hh = ist_now.hour
                     mm = ist_now.minute
+
+                    # Check for official NSE Holiday
+                    is_hol, hol_name = is_nse_holiday(ist_now.date())
+                    if is_hol:
+                        slot_hol = f"{date_str}_holiday_alert"
+                        if hh >= 9 and slot_hol not in self._dispatched_slots:
+                            self._dispatched_slots.add(slot_hol)
+                            logger.info(f"NSE Holiday Gate: Today is {hol_name}. Dispatching holiday notice...")
+                            # Send single informational alert that exchange is closed
+                            self.dispatcher.send_holiday_notice(hol_name)
+                        await asyncio.sleep(60)
+                        continue
 
                     # 1. 09:00 AM IST: Today's Agenda
                     slot_0900 = f"{date_str}_09:00"
