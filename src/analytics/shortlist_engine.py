@@ -79,7 +79,21 @@ class ShortlistEngine:
         # -------------------------------------------------------------
         # 2. INTRADAY CASH: 750 BROAD MARKET CROWN HERO FILTER (SCORE >= 80)
         # Must be: High turnover (> ₹15 Cr), anti-circuit safe, score >= 80 + APPROVED by App #1
+        # CRITICAL PROTECTION: Strictly exclude any stock that is already overextended (> 1.2% past breakout or > 2.5% move)
         # -------------------------------------------------------------
+        from src.analytics.multi_horizon_engine import MultiHorizonScorer
+        
+        # Calculate Multi-Horizon Intraday VCP & Orderflow score for all cash candidates
+        for r in scan_results:
+            if r.get("category") == "INTRADAY_CASH":
+                try:
+                    vcp_eval = MultiHorizonScorer.score_intraday_vcp_orderflow(r, nifty_change_pct=trend_score)
+                    r["vcp_score"] = vcp_eval.get("score", 0)
+                    r["is_launchpad"] = vcp_eval.get("is_launchpad", False)
+                    r["vcp_reasons"] = vcp_eval.get("reasons", [])
+                except Exception:
+                    pass
+
         approved_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
@@ -87,27 +101,42 @@ class ShortlistEngine:
             and r.get("confluence_score", 0) >= 80
             and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
             and r.get("anti_circuit_status") == "SAFE"
+            and not r.get("is_overextended", False)           # NO LATE CHASES
+            and r.get("move_from_breakout_pct", 0.0) <= 1.2   # Strict 1.2% maximum past breakout
+            and abs(r.get("pct_change_pdc", 0.0)) <= 3.0      # Disqualify already +3% extended runners
         ]
         
-        # Sort by highest confluence score
-        approved_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+        # Sort by highest combined Confluence + VCP Launchpad Score
+        approved_cash_stocks.sort(
+            key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
+            reverse=True
+        )
         best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
         top_intraday_stocks = approved_cash_stocks[:3]
         
-        # Find top cash candidate on watch if gated by score < 80 or market conditions
+        # Find top cash candidate on watch (un-extended coiling scrips only)
         coiled_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
             and r.get("signal_direction", 0) != 0
             and r.get("anti_circuit_status") == "SAFE"
+            and not r.get("is_overextended", False)
+            and r.get("move_from_breakout_pct", 0.0) <= 1.2
+            and abs(r.get("pct_change_pdc", 0.0)) <= 3.0
         ]
-        coiled_cash_stocks.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+        coiled_cash_stocks.sort(
+            key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
+            reverse=True
+        )
         top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
         top_watch_stocks = coiled_cash_stocks[:3]
 
-        # Ensure top_intraday_stocks always contains the highest-conviction scrips with clear triggers
-        if not top_intraday_stocks and coiled_cash_stocks:
-            best_intraday_stock = coiled_cash_stocks[0]
+        # Do NOT force an unapproved stock to be qualified buy; if not approved, keep as watchlist standby
+        if not best_intraday_stock and top_watch_cash:
+            # Candidate is on watch/coiling, NOT an active buy signal
+            best_intraday_stock = dict(top_watch_cash)
+            best_intraday_stock["is_standby_watch"] = True
+            best_intraday_stock["intraday_action_badge"] = "⚡ ON WATCH (COILING AT LAUNCHPAD)"
             top_intraday_stocks = coiled_cash_stocks[:3]
         
         if top_watch_cash:

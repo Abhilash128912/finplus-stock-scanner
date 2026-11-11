@@ -55,12 +55,16 @@ class MultiHorizonScorer:
         if 0.0 <= dist_to_top_pct <= 0.8:
             pts += 30
             reasons.append(f"Launchpad Squeeze ({dist_to_top_pct}% to breakout)")
-        elif dist_to_top_pct < 0.0 and abs(dist_to_top_pct) <= 1.5:
+        elif dist_to_top_pct < 0.0 and abs(dist_to_top_pct) <= 1.2:
             pts += 25
             reasons.append(f"Fresh Breakout (+{abs(dist_to_top_pct)}%)")
         elif is_coiling:
             pts += 20
             reasons.append("Spring Coiled (ATR Band Pinch)")
+        elif dist_to_top_pct < -1.2 or pct_change >= 3.0:
+            # Overextended chase penalty
+            pts -= 40
+            reasons.append(f"⚠️ Overextended (+{abs(dist_to_top_pct)}% past breakout, {pct_change:+.2f}% day) - Chasing Forbidden")
 
         # 2. Intraday Relative Strength vs Nifty (25 pts)
         rs_spread = round(pct_change - nifty_change_pct, 2)
@@ -102,7 +106,7 @@ class MultiHorizonScorer:
                 pts += 7
 
         return {
-            "score": min(100, pts),
+            "score": max(0, min(100, pts)),
             "rs_spread": rs_spread,
             "dist_to_top_pct": dist_to_top_pct,
             "reasons": reasons,

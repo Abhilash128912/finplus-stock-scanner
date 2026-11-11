@@ -251,6 +251,7 @@ class RangeDetectorEngine:
             reason = "Spring coiled: 20 closed candles compressed within ±1 ATR band."
             
         elif broke_top:
+            breakout_dist_pct = round(((last_closed_price - range_top_val) / range_top_val) * 100.0, 2)
             # UPTREND CONFIRMATION GATE: Must be above 50 EMA (and not so far)
             if not above_ema50:
                 signal_direction = 0
@@ -262,9 +263,16 @@ class RangeDetectorEngine:
                 ignition_state = "OVEREXTENDED_FROM_EMA50"
                 tier_label = "OVEREXTENDED (> 50 EMA)"
                 reason = f"Breakout overextended: Price is +{ema50_dist_pct}% above 50 EMA (Max safe: +{max_dist_pct}%). Mean reversion risk high."
+            elif breakout_dist_pct > 1.2 or (pct_change_pdc >= 2.5 and breakout_dist_pct > 0.6):
+                # 🚫 EXTENDED RUNNER: Strictly prevent chasing late breakouts!
+                signal_direction = 0
+                confluence_score = 45
+                ignition_state = "OVEREXTENDED_RUNNER"
+                tier_label = "⚠️ EXTENDED (DO NOT CHASE)"
+                reason = f"Overextended runner: Price (₹{last_closed_price:.2f}) is +{breakout_dist_pct}% past Breakout (₹{range_top_val:.2f}) & +{pct_change_pdc:+.2f}% from PDC. DO NOT CHASE. Wait for pullback to VWAP (₹{last_vwap:.2f}) or Range Top."
             else:
                 signal_direction = 1
-                pts_range = 35  # Range Top breakout
+                pts_range = 35  # Range Top breakout (fresh within 0.0% - 1.2% of pivot)
                 pts_ema50 = 30  # Confirmed above 50 EMA within safe proximity
                 if above_vwap:
                     pts_vwap = 20
@@ -274,10 +282,11 @@ class RangeDetectorEngine:
                     pts_volume = 10
                     
                 total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                confluence_score = total_pts
                 if total_pts >= 85:
                     ignition_state = "BULLISH_IGNITION"
                     tier_label = "TIER-1 HIGH CONVICTION"
-                    reason = f"Closed above Range Top (₹{range_top_val:.2f}) + 50 EMA confirmed (+{ema50_dist_pct}%) + VWAP confluence"
+                    reason = f"Closed above Range Top (₹{range_top_val:.2f}) [+{breakout_dist_pct}%] + 50 EMA confirmed (+{ema50_dist_pct}%) + VWAP confluence"
                 elif total_pts >= 65:
                     ignition_state = "RANGE_BREAKOUT_LONG"
                     tier_label = "TIER-2 EARLY SCALP"
@@ -288,6 +297,7 @@ class RangeDetectorEngine:
                     reason = f"Range broke with weak volume support"
 
         elif broke_bot:
+            breakdown_dist_pct = round(((range_bot_val - last_closed_price) / range_bot_val) * 100.0, 2)
             # DOWNTREND CONFIRMATION GATE: Must be below 50 EMA (and not so far)
             if not below_ema50:
                 signal_direction = 0
@@ -299,9 +309,16 @@ class RangeDetectorEngine:
                 ignition_state = "OVEREXTENDED_BELOW_EMA50"
                 tier_label = "OVEREXTENDED (< 50 EMA)"
                 reason = f"Breakdown overextended: Price is {ema50_dist_pct}% below 50 EMA (Max safe: -{max_dist_pct}%). Oversold bounce risk."
+            elif breakdown_dist_pct > 1.2 or (pct_change_pdc <= -2.5 and breakdown_dist_pct > 0.6):
+                # 🚫 EXTENDED BREAKDOWN: Strictly prevent chasing late breakdowns!
+                signal_direction = 0
+                confluence_score = 45
+                ignition_state = "OVEREXTENDED_SHORT"
+                tier_label = "⚠️ EXTENDED (DO NOT CHASE)"
+                reason = f"Overextended breakdown: Price (₹{last_closed_price:.2f}) is -{breakdown_dist_pct}% past Breakdown (₹{range_bot_val:.2f}) & {pct_change_pdc:+.2f}% from PDC. DO NOT CHASE. Wait for bounce to VWAP (₹{last_vwap:.2f})."
             else:
                 signal_direction = -1
-                pts_range = 35  # Range Bottom breakdown
+                pts_range = 35  # Range Bottom breakdown (fresh within 0.0% - 1.2% of pivot)
                 pts_ema50 = 30  # Confirmed below 50 EMA within safe proximity
                 if below_vwap:
                     pts_vwap = 20
@@ -311,10 +328,11 @@ class RangeDetectorEngine:
                     pts_volume = 10
                     
                 total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                confluence_score = total_pts
                 if total_pts >= 85:
                     ignition_state = "BEARISH_IGNITION"
                     tier_label = "TIER-1 HIGH CONVICTION"
-                    reason = f"Closed below Range Bottom (₹{range_bot_val:.2f}) + 50 EMA confirmed ({ema50_dist_pct}%) - VWAP confluence"
+                    reason = f"Closed below Range Bottom (₹{range_bot_val:.2f}) [-{breakdown_dist_pct}%] + 50 EMA confirmed ({ema50_dist_pct}%) - VWAP confluence"
                 elif total_pts >= 65:
                     ignition_state = "RANGE_BREAKDOWN_SHORT"
                     tier_label = "TIER-2 EARLY SCALP"
@@ -479,6 +497,14 @@ class RangeDetectorEngine:
                 "put_strike_watch": put_strike_name if not is_cash_segment else "-"
             }
 
+        is_overextended_flag = ignition_state in ("OVEREXTENDED_RUNNER", "OVEREXTENDED_SHORT")
+        if last_closed_price > range_top_val:
+            move_pct_val = round(((last_closed_price - range_top_val) / range_top_val) * 100.0, 2)
+        elif last_closed_price < range_bot_val:
+            move_pct_val = round(((last_closed_price - range_bot_val) / range_bot_val) * 100.0, 2)
+        else:
+            move_pct_val = 0.0
+
         return {
             "symbol": symbol,
             "name": meta.get("name", symbol),
@@ -500,6 +526,8 @@ class RangeDetectorEngine:
             "range_bottom": round(range_bot_val, 2),
             "range_mid": round(range_mid_val, 2),
             "is_coiling": is_coiling,
+            "is_overextended": is_overextended_flag,
+            "move_from_breakout_pct": move_pct_val,
             "ignition_state": ignition_state,
             "tier_label": tier_label,
             "confluence_score": confluence_score,

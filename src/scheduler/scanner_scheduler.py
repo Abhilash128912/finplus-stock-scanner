@@ -62,8 +62,8 @@ class ScannerScheduler:
                 # Fetch instantaneous live tick to prevent stale prices and buying at the top
                 try:
                     live_ticker = self.feed._get_ticker(ticker) if hasattr(self.feed, '_get_ticker') else None
-                    if live_ticker:
-                        fast_p = getattr(live_ticker.fast_info, 'last_price', None) or live_ticker.fast_info.get('lastPrice')
+                    if live_ticker and hasattr(live_ticker, 'fast_info'):
+                        fast_p = getattr(live_ticker.fast_info, 'last_price', None)
                         if fast_p and fast_p > 0:
                             live_p = round(float(fast_p), 2)
                             eval_res["live_ltp"] = live_p
@@ -71,12 +71,14 @@ class ScannerScheduler:
                             eval_res["last_price"] = live_p # update primary price to instantaneous live LTP
                             
                             # Overextended / Chasing Protection Guard
-                            if eval_res.get("signal_direction") == 1 and eval_res.get("range_top"):
+                            if eval_res.get("range_top"):
                                 r_top = eval_res["range_top"]
-                                move_from_top_pct = round(((live_p - r_top) / r_top) * 100.0, 2)
+                                move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
                                 eval_res["move_from_breakout_pct"] = move_from_top_pct
-                                if move_from_top_pct > 1.8:
+                                if move_from_top_pct > 1.2 or (eval_res.get("pct_change_pdc", 0.0) >= 2.5 and move_from_top_pct > 0.6):
                                     eval_res["is_overextended"] = True
+                                    eval_res["signal_direction"] = 0 # Disqualify from fresh buy signals
+                                    eval_res["confluence_score"] = min(eval_res.get("confluence_score", 45), 45)
                                     eval_res["overextended_warning"] = f"⚠️ EXTENDED (+{move_from_top_pct}% > Breakout). DO NOT CHASE."
                                     if eval_res.get("category") == "INTRADAY_CASH":
                                         eval_res["intraday_action_badge"] = "⚠️ EXTENDED (DO NOT CHASE)"

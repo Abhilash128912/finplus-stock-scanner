@@ -32,14 +32,23 @@ class NTFYDispatcher:
 
     def _fetch_app1_regime(self) -> Dict[str, Any]:
         """Queries App #1 Macro Trend & Air Traffic Control locally or in cloud."""
-        try:
-            app1_url = os.getenv("APP1_URL", "http://127.0.0.1:8000")
-            resp = requests.get(f"{app1_url}/api/regime", timeout=1.5)
-            if resp.status_code == 200:
-                return resp.json()
-        except Exception:
-            pass
-        return {}
+        urls = [
+            os.getenv("APP1_URL", "http://127.0.0.1:8000"),
+            "https://finplus-index-breadth.onrender.com"
+        ]
+        for base in urls:
+            try:
+                resp = requests.get(f"{base.rstrip('/')}/api/regime", timeout=2.0)
+                if resp.status_code == 200:
+                    d = resp.json()
+                    if d.get("metrics", {}).get("sensex_spot"):
+                        return d
+                    elif d.get("trend"):
+                        # Keep as candidate if no better found
+                        candidate = d
+            except Exception:
+                continue
+        return candidate if 'candidate' in locals() else {}
 
     def _fetch_app3_commodity(self) -> Dict[str, Any]:
         """Queries App #3 MCX Commodity Radar."""
@@ -116,11 +125,25 @@ class NTFYDispatcher:
         nf_chg = float(metrics.get("nifty_change_pct", -0.56))
         
         # Real-time Sensex resolution directly from metrics or live feed
-        sx_spot = float(metrics.get("sensex_spot") or sx.get("last_price") or 82300.0)
+        sx_spot = float(metrics.get("sensex_spot") or sx.get("last_price") or 0.0)
         sx_chg = float(metrics.get("sensex_change_pct", 0.0))
-        if sx_spot < 81500.0 and sx.get("last_price") and sx.get("last_price") > 81500.0:
-            sx_spot = float(sx.get("last_price"))
-            sx_chg = float(sx.get("pct_change_pdc", 0.0))
+        if sx_spot < 81500.0:
+            if sx.get("last_price") and float(sx.get("last_price")) > 81500.0:
+                sx_spot = float(sx.get("last_price"))
+                sx_chg = float(sx.get("pct_change_pdc", 0.0))
+            else:
+                try:
+                    import yfinance as yf
+                    fp = getattr(yf.Ticker("^BSESN").fast_info, 'last_price', None)
+                    if fp and fp > 80000:
+                        sx_spot = float(fp)
+                        prev_c = getattr(yf.Ticker("^BSESN").fast_info, 'previous_close', None)
+                        if prev_c and prev_c > 0:
+                            sx_chg = round(((sx_spot - prev_c) / prev_c) * 100.0, 2)
+                except Exception:
+                    pass
+        if sx_spot == 0.0:
+            sx_spot = 82300.0
         
         reg_lbl = trend_info.get("label", "DOWNTREND (BEAR DISTRIBUTION)")
         adr_val = metrics.get('broad_adr', '0.49')
@@ -130,19 +153,32 @@ class NTFYDispatcher:
             f"Trend: {reg_lbl} | ADR {adr_val}:1"
         ]
         
-        # 2. Intraday Cash (Strict 100% correlation with Dashboard)
+        # 2. Intraday Cash (Strict Institutional Entry & Chasing Protection)
         best_cash = shortlist.get("best_intraday_stock")
-        if best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
+        if best_cash and best_cash.get("is_overextended"):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
-            if best_cash.get("is_overextended"):
-                lines.append(f"Cash: [DO NOT CHASE] {sym} @ Rs {ltp:,.1f} (+{best_cash.get('move_from_breakout_pct')}% > Breakout). Wait for pullback!")
+            m_pct = best_cash.get("move_from_breakout_pct", 0.0)
+            chg = best_cash.get("pct_change_pdc", 0.0)
+            lines.append(f"Cash: [DO NOT CHASE] {sym} @ Rs {ltp:,.1f} (+{m_pct}% > Breakout, {chg:+.2f}% day). Wait for pullback!")
+        elif best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
+            sym = best_cash.get("symbol")
+            ltp = best_cash.get("last_price", 0.0)
+            ign = best_cash.get("ignition_state", "")
+            r_top = best_cash.get("range_top", ltp)
+            risk = best_cash.get("risk_management", {})
+            sl = risk.get("stop_loss", "--")
+            tgt = risk.get("target", "--")
+            if ign == "PRE_IGNITION_LONG":
+                lines.append(f"Cash: [PRE-IGNITION BUY] {sym} @ Rs {ltp:,.1f} | Trigger: > {r_top:,.1f} | SL: {sl} | Tgt: {tgt}")
             else:
-                act = "SELL" if "SELL" in best_cash.get("intraday_action_badge", "") else "BUY"
-                risk = best_cash.get("risk_management", {})
-                sl = risk.get("stop_loss", "--")
-                tgt = risk.get("target", "--")
-                lines.append(f"Cash: [QUALIFIED {act}] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
+                m_pct = best_cash.get("move_from_breakout_pct", 0.0)
+                lines.append(f"Cash: [QUALIFIED BUY] {sym} @ Rs {ltp:,.1f} (+{m_pct}% from {r_top:,.1f}) | SL: {sl} | Tgt: {tgt}")
+        elif best_cash and best_cash.get("is_standby_watch"):
+            sym = best_cash.get("symbol")
+            ltp = best_cash.get("last_price", 0.0)
+            r_top = best_cash.get("range_top", ltp)
+            lines.append(f"Cash: [ON WATCH / COILING] {sym} @ Rs {ltp:,.1f} (Awaiting trigger > {r_top:,.1f}) | Hold Cash")
         elif best_cash:
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
@@ -434,9 +470,9 @@ class NTFYDispatcher:
         trend_info = app1_data.get("trend", {})
         metrics = app1_data.get("metrics", {})
         
-        nf_spot = float(metrics.get("nifty_spot", 25027.0))
+        nf_spot = float(metrics.get("nifty_spot", 25380.0))
         nf_chg = float(metrics.get("nifty_change_pct", 0.0))
-        sx_spot = float(metrics.get("sensex_spot", 80757.0))
+        sx_spot = float(metrics.get("sensex_spot") or 82300.0)
         sx_chg = float(metrics.get("sensex_change_pct", 0.0))
         reg_lbl = trend_info.get("label", "CHOPPY / RANGEBOUND")
         adr_val = metrics.get("broad_adr", "0.77")
