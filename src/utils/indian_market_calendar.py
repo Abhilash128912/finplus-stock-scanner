@@ -198,3 +198,4 @@ def is_candle_fresh_today(candle_timestamp: Any, max_stale_hours: float = 24.0) 
         return c_date == now_ist.date()
     except Exception:
         return False
+

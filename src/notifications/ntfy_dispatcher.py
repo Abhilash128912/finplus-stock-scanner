@@ -106,8 +106,13 @@ class NTFYDispatcher:
         # Clean, ultra-compact institutional format (fits mobile without truncation)
         nf_spot = float(metrics.get("nifty_spot") or nf.get("last_price") or 24847.2)
         nf_chg = float(metrics.get("nifty_change_pct", -0.56))
-        sx_spot = float(metrics.get("sensex_spot", 80757.2))
-        sx_chg = float(metrics.get("sensex_change_pct", -0.33))
+        
+        # Real-time Sensex resolution directly from metrics or live feed
+        sx_spot = float(metrics.get("sensex_spot") or sx.get("last_price") or 82300.0)
+        sx_chg = float(metrics.get("sensex_change_pct", 0.0))
+        if sx_spot < 81500.0 and sx.get("last_price") and sx.get("last_price") > 81500.0:
+            sx_spot = float(sx.get("last_price"))
+            sx_chg = float(sx.get("pct_change_pdc", 0.0))
         
         reg_lbl = trend_info.get("label", "DOWNTREND (BEAR DISTRIBUTION)")
         adr_val = metrics.get('broad_adr', '0.49')
@@ -122,11 +127,14 @@ class NTFYDispatcher:
         if best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
-            act = "SELL" if "SELL" in best_cash.get("intraday_action_badge", "") else "BUY"
-            risk = best_cash.get("risk_management", {})
-            sl = risk.get("stop_loss", "--")
-            tgt = risk.get("target", "--")
-            lines.append(f"Cash: [QUALIFIED {act}] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
+            if best_cash.get("is_overextended"):
+                lines.append(f"Cash: [DO NOT CHASE] {sym} @ Rs {ltp:,.1f} (+{best_cash.get('move_from_breakout_pct')}% > Breakout). Wait for pullback!")
+            else:
+                act = "SELL" if "SELL" in best_cash.get("intraday_action_badge", "") else "BUY"
+                risk = best_cash.get("risk_management", {})
+                sl = risk.get("stop_loss", "--")
+                tgt = risk.get("target", "--")
+                lines.append(f"Cash: [QUALIFIED {act}] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
         elif best_cash:
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)

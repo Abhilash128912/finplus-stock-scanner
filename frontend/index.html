@@ -751,6 +751,8 @@
           cashActionHtml = `<span class="text-slate-500 text-[10px]">Index Derivative Only</span>`;
         } else if (isOpt) {
           cashActionHtml = `<span class="text-slate-500 text-[10px]">F&O Derivative Only</span>`;
+        } else if (r.is_overextended) {
+          cashActionHtml = `<div class="text-amber-400 font-extrabold text-xs">⚠️ DO NOT CHASE</div><div class="text-[10px] text-amber-300">+${r.move_from_breakout_pct}% > Breakout (Wait for Pullback)</div>`;
         } else if (isVetoed) {
           cashActionHtml = `<div class="text-amber-400 font-semibold text-[11px]">⏸️ STANDBY (CHOPPY)</div><div class="text-[9px] text-slate-400">Awaiting market thrust</div>`;
         } else if (isApproved && isBull) {
@@ -822,8 +824,8 @@
 
     loadData();
     syncApp1();
-    setInterval(loadData, 15000);
-    setInterval(syncApp1, 3000); // 3-second continuous live Nifty & Sensex polling
+    setInterval(loadData, 5000); // 5-second rapid live polling for real-time stock prices & directives
+    setInterval(syncApp1, 2000); // 2-second continuous live Nifty & Sensex polling
   </script>
 </body>
 </html>

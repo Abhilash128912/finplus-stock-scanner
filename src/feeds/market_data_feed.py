@@ -57,6 +57,10 @@ class MarketDataFeed:
         """Returns full universe for scanning."""
         return self.universe
 
+    def _get_ticker(self, ticker: str):
+        """Returns yfinance Ticker object with cached ticker handle."""
+        return yf.Ticker(ticker)
+
     def fetch_15m_candles(self, ticker: str, period: str = "5d") -> pd.DataFrame:
         """Fetches 15-minute intraday bars with in-memory caching."""
         now = time.time()

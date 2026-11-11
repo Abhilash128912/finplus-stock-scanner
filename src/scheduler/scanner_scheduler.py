@@ -59,6 +59,31 @@ class ScannerScheduler:
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
                 
+                # Fetch instantaneous live tick to prevent stale prices and buying at the top
+                try:
+                    live_ticker = self.feed._get_ticker(ticker) if hasattr(self.feed, '_get_ticker') else None
+                    if live_ticker:
+                        fast_p = getattr(live_ticker.fast_info, 'last_price', None) or live_ticker.fast_info.get('lastPrice')
+                        if fast_p and fast_p > 0:
+                            live_p = round(float(fast_p), 2)
+                            eval_res["live_ltp"] = live_p
+                            eval_res["candle_close"] = eval_res["last_price"]
+                            eval_res["last_price"] = live_p # update primary price to instantaneous live LTP
+                            
+                            # Overextended / Chasing Protection Guard
+                            if eval_res.get("signal_direction") == 1 and eval_res.get("range_top"):
+                                r_top = eval_res["range_top"]
+                                move_from_top_pct = round(((live_p - r_top) / r_top) * 100.0, 2)
+                                eval_res["move_from_breakout_pct"] = move_from_top_pct
+                                if move_from_top_pct > 1.8:
+                                    eval_res["is_overextended"] = True
+                                    eval_res["overextended_warning"] = f"⚠️ EXTENDED (+{move_from_top_pct}% > Breakout). DO NOT CHASE."
+                                    if eval_res.get("category") == "INTRADAY_CASH":
+                                        eval_res["intraday_action_badge"] = "⚠️ EXTENDED (DO NOT CHASE)"
+                                        eval_res["intraday_directive"] = f"EXTENDED RUNNER @ ₹{live_p} (+{move_from_top_pct}% from breakout ₹{r_top}). Wait for pullback to VWAP/Range Top before entering."
+                except Exception:
+                    pass
+                
                 # Cross-reference with App #1 (Fail-Closed 2s Timeout)
                 sig_dir = eval_res.get("signal_direction", 0)
                 conf_status, conf_badge, regime_data = self.interceptor.evaluate_confluence(
