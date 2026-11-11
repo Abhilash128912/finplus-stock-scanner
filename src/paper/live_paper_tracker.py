@@ -105,14 +105,20 @@ class LivePaperTracker:
             conn.commit()
 
     def _load_open_positions(self):
-        """Loads open positions from database on server startup."""
+        """Loads open positions from database on server startup and computes initial tick."""
         try:
             with self._get_connection() as conn:
                 rows = conn.execute("SELECT * FROM active_paper_positions WHERE status = 'OPEN'").fetchall()
                 for r in rows:
                     pos = dict(r)
+                    pos["unrealized_pnl"] = 0.0
+                    pos["pnl_pct"] = 0.0
                     self.active_positions[pos["position_id"]] = pos
                 logger.info(f"Loaded {len(self.active_positions)} active open paper positions from DB.")
+            
+            # Immediately evaluate live tick so positions don't stay at 0.0 on boot
+            if self.active_positions:
+                self.update_and_trail_positions()
         except Exception as e:
             logger.error(f"Error loading open positions: {e}")
 
