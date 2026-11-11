@@ -351,9 +351,71 @@ class LivePaperTracker:
                 notes="Midcap Nifty Radar Ticket"
             )
 
+    def ingest_commodities(self):
+        """Polls App #3 (Commodities) locally or in cloud and auto-ingests qualified commodity trades."""
+        endpoints = [
+            "http://127.0.0.1:8002/api/scan",
+            "https://finplus-commodity-radar.onrender.com/api/scan"
+        ]
+        for ep in endpoints:
+            try:
+                r = requests.get(ep, timeout=2.0)
+                if r.status_code == 200:
+                    data = r.json()
+                    pt = data.get("priority_trade")
+                    if pt and pt.get("confluence_score", 0) >= 80:
+                        sym = pt.get("symbol")
+                        ltp = float(pt.get("ltp", 0.0))
+                        sl = float(pt.get("stop_loss", ltp * 0.99))
+                        tgt = float(pt.get("target_1", ltp * 1.015))
+                        act = "SELL" if "SHORT" in pt.get("futures_directive", "") or "SELL" in pt.get("futures_directive", "") else "BUY"
+                        
+                        # Official MCX Mini Contract Multipliers
+                        qty_map = {
+                            "NATGASMINI": 250,
+                            "CRUDEOILM": 10,
+                            "GOLDPETAL": 5,
+                            "SILVERMIC": 1
+                        }
+                        qty = qty_map.get(sym, 1)
+                        
+                        self.open_position(
+                            source_app="APP_03_COMMODITY_RADAR",
+                            sector="COMMODITIES",
+                            symbol=sym,
+                            action=act,
+                            entry_price=ltp,
+                            stop_loss=sl,
+                            target=tgt,
+                            quantity=qty,
+                            notes=f"MCX Priority Setup: {pt.get('reason', '')}"
+                        )
+                    break
+            except Exception:
+                continue
+
     def _fetch_live_price(self, symbol: str, sector: str) -> Optional[float]:
         """Fetches live market price for trailing stop and P&L calculation."""
         clean_sym = symbol.split(" ")[0].upper()
+
+        # Commodity Price resolution from App #3
+        if sector == "COMMODITIES" or any(k in clean_sym for k in ["CRUDE", "NATGAS", "GOLD", "SILVER"]):
+            endpoints = [
+                "http://127.0.0.1:8002/api/scan",
+                "https://finplus-commodity-radar.onrender.com/api/scan"
+            ]
+            for ep in endpoints:
+                try:
+                    rc = requests.get(ep, timeout=1.5)
+                    if rc.status_code == 200:
+                        comm_dict = rc.json().get("commodities", {})
+                        for csym, cdata in comm_dict.items():
+                            if csym in clean_sym or clean_sym in csym:
+                                val = float(cdata.get("ltp", 0.0))
+                                if val > 0:
+                                    return round(val, 2)
+                except Exception:
+                    continue
 
         # Index Ticker resolution
         if "NIFTY" in clean_sym or "SENSEX" in clean_sym or "MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym:
@@ -641,12 +703,16 @@ class LivePaperTracker:
         }
 
     async def start_polling_loop(self):
-        """Asynchronous background loop for continuous live price trailing."""
+        """Asynchronous background loop for continuous live price trailing and commodity signal ingestion."""
         self.is_running = True
         logger.info("LivePaperTracker continuous polling loop started (3-second tick).")
+        tick_count = 0
         while self.is_running:
             try:
                 await asyncio.to_thread(self.update_and_trail_positions)
+                tick_count += 1
+                if tick_count % 10 == 0:  # Every 30 seconds, sync commodities
+                    await asyncio.to_thread(self.ingest_commodities)
                 await asyncio.sleep(3)
             except asyncio.CancelledError:
                 break
@@ -656,3 +722,4 @@ class LivePaperTracker:
 
     def stop_polling_loop(self):
         self.is_running = False
+
