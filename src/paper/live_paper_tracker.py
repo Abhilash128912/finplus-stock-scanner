@@ -772,7 +772,7 @@ class LivePaperTracker:
                     "Tags": f"{action_tag},receipt",
                     "Markdown": "yes",
                     "Click": "https://finplus-stock-scanner.onrender.com/live",
-                    "Actions": "view, 📈 Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+                    "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
                 },
                 timeout=5
             )
@@ -806,7 +806,7 @@ class LivePaperTracker:
                     "Tags": status_tag,
                     "Markdown": "yes",
                     "Click": "https://finplus-stock-scanner.onrender.com/live",
-                    "Actions": "view, 📈 Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+                    "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
                 },
                 timeout=5
             )
