@@ -234,3 +234,4 @@ class MultiHorizonScorer:
             "score": max(0, min(100, pts)),
             "reasons": reasons
         }
+
