@@ -268,8 +268,8 @@ class NTFYDispatcher:
                 "Priority": "4",
                 "Markdown": "yes",
                 "X-Markdown": "yes",
-                "Click": cockpit_url,
-                "Actions": f"view, Open Cockpit, {cockpit_url}"
+                "Click": f"{RENDER_SCANNER_URL}/live",
+                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
             
             for attempt in range(2):
@@ -404,8 +404,8 @@ class NTFYDispatcher:
                 "Priority": "4",
                 "Markdown": "no",
                 "X-Markdown": "no",
-                "Click": cockpit_url,
-                "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
+                "Click": f"{RENDER_SCANNER_URL}/live",
+                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
             try:
                 resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
@@ -526,8 +526,8 @@ class NTFYDispatcher:
                 "Priority": "4",
                 "Markdown": "yes",
                 "X-Markdown": "yes",
-                "Click": cockpit_url,
-                "Actions": f"view, Open Scanner Cockpit, {cockpit_url}"
+                "Click": f"{RENDER_SCANNER_URL}/live",
+                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
             try:
                 resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
