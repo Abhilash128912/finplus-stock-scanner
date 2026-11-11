@@ -163,7 +163,11 @@ class BroadMarketMaster:
                     "lot_size": 1,
                     "base_close": price,
                     "turnover_cr": turnover,
-                    "anti_circuit_cleared": True
+                    "anti_circuit_cleared": True,
+                    "durability": float(row.get("DURABILITY", 50.0) if pd.notna(row.get("DURABILITY")) else 50.0),
+                    "valuation": float(row.get("VALUATION", 50.0) if pd.notna(row.get("VALUATION")) else 50.0),
+                    "momentum_score": float(row.get("MOMENTUM", 50.0) if pd.notna(row.get("MOMENTUM")) else 50.0),
+                    "rank_total": float(row.get("TOTAL", 50.0) if pd.notna(row.get("TOTAL")) else 50.0)
                 })
             return items
         except Exception as e:

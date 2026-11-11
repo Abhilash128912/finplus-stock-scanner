@@ -180,8 +180,29 @@ class NTFYDispatcher:
         else:
             lines.append("Stock Opt: [HOLD CASH] No 100/100 breakouts active | Preserving premium")
 
-        # 5. Penny / 4H Check
-        lines.append("Penny/4H: [ACCUMULATING] Stage-2 (< Rs 50, Zero Debt) 13:15 check")
+        # 5. Multi-Horizon Directives (Swing, Long-Term, Penny Runner)
+        swing_stk = shortlist.get("best_swing_stock")
+        if swing_stk:
+            sw_sym = swing_stk.get("symbol")
+            sw_ltp = swing_stk.get("last_price", 0.0)
+            sw_sl = round(sw_ltp * 0.94, 1) # -6% standard swing SL
+            sw_tgt = round(sw_ltp * 1.15, 1) # +15% swing target
+            lines.append(f"Swing (3-15d): [STAGE-2] {sw_sym} @ Rs {sw_ltp:,.1f} | SL: {sw_sl} | Tgt: {sw_tgt}")
+
+        lt_stk = shortlist.get("best_longterm_stock")
+        if lt_stk:
+            lt_sym = lt_stk.get("symbol")
+            lt_ltp = lt_stk.get("last_price", 0.0)
+            lines.append(f"Long-Term: [COMPOUNDER] {lt_sym} @ Rs {lt_ltp:,.1f} | Quality Durability & Value")
+
+        penny_stk = shortlist.get("best_penny_stock")
+        if penny_stk:
+            p_sym = penny_stk.get("symbol")
+            p_ltp = penny_stk.get("last_price", 0.0)
+            p_rvol = penny_stk.get("rvol", 1.0)
+            lines.append(f"Penny / Micro: [RUNNER] {p_sym} @ Rs {p_ltp:,.1f} | Surge {p_rvol}x RVOL")
+        else:
+            lines.append("Penny / Micro: [STANDBY] Coiling bases (< Rs 100) under tracking")
 
         # 6. MCX Commodities
         app3_data = self._fetch_app3_commodity()

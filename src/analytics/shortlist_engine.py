@@ -144,6 +144,50 @@ class ShortlistEngine:
                 index_continuation = True
                 best_index_option["is_continuation"] = True
 
+        # -------------------------------------------------------------
+        # 3. MULTI-HORIZON SELECTIONS (INTRADAY, SWING, LONG-TERM, PENNY)
+        # -------------------------------------------------------------
+        from src.analytics.multi_horizon_engine import MultiHorizonScorer
+        
+        # A. SWING TRADING SELECTION (Stage-2 Mark Minervini Trend)
+        swing_candidates = []
+        for r in scan_results:
+            if r.get("category") == "INTRADAY_CASH" and r.get("last_price", 0) >= 50.0:
+                s_eval = MultiHorizonScorer.score_swing_stage2(r, r)
+                if s_eval["score"] >= 65:
+                    item_copy = dict(r)
+                    item_copy["horizon_score"] = s_eval["score"]
+                    item_copy["horizon_reasons"] = s_eval["reasons"]
+                    swing_candidates.append(item_copy)
+        swing_candidates.sort(key=lambda x: x["horizon_score"], reverse=True)
+        best_swing_stock = swing_candidates[0] if swing_candidates else None
+
+        # B. LONG-TERM WEALTH COMPOUNDER SELECTION (Durability + Valuation)
+        lt_candidates = []
+        for r in scan_results:
+            if r.get("category") == "INTRADAY_CASH":
+                lt_eval = MultiHorizonScorer.score_long_term_compounder(r)
+                if lt_eval["score"] >= 70:
+                    item_copy = dict(r)
+                    item_copy["horizon_score"] = lt_eval["score"]
+                    item_copy["horizon_reasons"] = lt_eval["reasons"]
+                    lt_candidates.append(item_copy)
+        lt_candidates.sort(key=lambda x: x["horizon_score"], reverse=True)
+        best_longterm_stock = lt_candidates[0] if lt_candidates else None
+
+        # C. PENNY / HIGH-BETA RUNNER SELECTION (< Rs 120 + High RVOL)
+        penny_candidates = []
+        for r in scan_results:
+            if r.get("category") == "INTRADAY_CASH":
+                p_eval = MultiHorizonScorer.score_penny_runner(r, r)
+                if p_eval["score"] >= 50:
+                    item_copy = dict(r)
+                    item_copy["horizon_score"] = p_eval["score"]
+                    item_copy["horizon_reasons"] = p_eval["reasons"]
+                    penny_candidates.append(item_copy)
+        penny_candidates.sort(key=lambda x: x["horizon_score"], reverse=True)
+        best_penny_stock = penny_candidates[0] if penny_candidates else None
+
         selection_payload = {
             "timestamp_utc": get_utc_iso(),
             "ist_time": get_ist_time_str(),
@@ -153,6 +197,9 @@ class ShortlistEngine:
             "best_index_option": best_index_option,
             "best_stock_option": best_stock_option,
             "best_intraday_stock": best_intraday_stock,
+            "best_swing_stock": best_swing_stock,
+            "best_longterm_stock": best_longterm_stock,
+            "best_penny_stock": best_penny_stock,
             "top_intraday_stocks": top_intraday_stocks,
             "top_watch_option": top_watch_option,
             "stock_option_standby_reason": stock_option_standby_reason,
