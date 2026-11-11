@@ -75,6 +75,14 @@ class UTCFormatter(logging.Formatter):
             return dt.strftime(datefmt)
         return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+class SafeRotatingFileHandler(RotatingFileHandler):
+    """Windows-safe rotating file handler that catches and ignores file lock rollover conflicts."""
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except (PermissionError, OSError):
+            pass
+
 def setup_logger(name: str = "FinPlus_StockScanner") -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
@@ -87,12 +95,12 @@ def setup_logger(name: str = "FinPlus_StockScanner") -> logging.Logger:
         ch.setFormatter(formatter)
         logger.addHandler(ch)
         
-        # Rotating File Handler in logs/
+        # Safe Rotating File Handler in logs/
         log_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "logs"))
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "stock_scanner_utc.log")
         
-        fh = RotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8")
+        fh = SafeRotatingFileHandler(log_file, maxBytes=10*1024*1024, backupCount=5, encoding="utf-8", delay=True)
         fh.setFormatter(formatter)
         logger.addHandler(fh)
         
