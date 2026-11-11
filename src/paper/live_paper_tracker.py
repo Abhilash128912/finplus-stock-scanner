@@ -398,8 +398,9 @@ class LivePaperTracker:
         """Fetches live market price for trailing stop and P&L calculation."""
         clean_sym = symbol.split(" ")[0].upper()
 
-        # Commodity Price resolution from App #3
+        # 1. Commodity Price resolution
         if sector == "COMMODITIES" or any(k in clean_sym for k in ["CRUDE", "NATGAS", "GOLD", "SILVER"]):
+            # Try App #3 first
             endpoints = [
                 "http://127.0.0.1:8002/api/scan",
                 "https://finplus-commodity-radar.onrender.com/api/scan"
@@ -412,28 +413,61 @@ class LivePaperTracker:
                         for csym, cdata in comm_dict.items():
                             if csym in clean_sym or clean_sym in csym:
                                 val = float(cdata.get("ltp", 0.0))
-                                if val > 0:
+                                if val > 0 and val != 8100.0:
                                     return round(val, 2)
                 except Exception:
                     continue
 
-        # Index Ticker resolution
-        if "NIFTY" in clean_sym or "SENSEX" in clean_sym or "MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym:
+            # Real-Time Benchmark Calculation (WTI Crude, Henry Hub NatGas, COMEX Gold)
             try:
-                # App 1 regime check
-                rc = requests.get("http://127.0.0.1:8000/api/regime", timeout=1.0)
-                if rc.status_code == 200:
-                    metrics = rc.json().get("metrics", {})
-                    if "SENSEX" in clean_sym:
-                        val = metrics.get("sensex_spot")
-                        if val and float(val) > 0:
-                            return round(float(val), 2)
-                    elif clean_sym == "NIFTY":
-                        val = metrics.get("nifty_spot")
-                        if val and float(val) > 0:
-                            return round(float(val), 2)
+                usdinr = 88.50
+                try:
+                    usd_fi = getattr(yf.Ticker("USDINR=X"), "fast_info", None)
+                    usd_val = getattr(usd_fi, "last_price", None)
+                    if usd_val and float(usd_val) > 70:
+                        usdinr = float(usd_val)
+                except Exception:
+                    pass
+
+                if "CRUDE" in clean_sym:
+                    cl_fi = getattr(yf.Ticker("CL=F"), "fast_info", None)
+                    cl_val = getattr(cl_fi, "last_price", None)
+                    if cl_val and float(cl_val) > 0:
+                        return round(float(cl_val) * usdinr, 2)
+                elif "NATGAS" in clean_sym:
+                    ng_fi = getattr(yf.Ticker("NG=F"), "fast_info", None)
+                    ng_val = getattr(ng_fi, "last_price", None)
+                    if ng_val and float(ng_val) > 0:
+                        return round(float(ng_val) * usdinr, 2)
+                elif "GOLD" in clean_sym:
+                    gc_fi = getattr(yf.Ticker("GC=F"), "fast_info", None)
+                    gc_val = getattr(gc_fi, "last_price", None)
+                    if gc_val and float(gc_val) > 0:
+                        return round((float(gc_val) * usdinr / 31.1034768) * 1.15, 2)
             except Exception:
                 pass
+
+        # 2. Index Ticker resolution
+        if "NIFTY" in clean_sym or "SENSEX" in clean_sym or "MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym:
+            endpoints = [
+                "http://127.0.0.1:8000/api/regime",
+                "https://finplus-index-breadth.onrender.com/api/regime"
+            ]
+            for ep in endpoints:
+                try:
+                    rc = requests.get(ep, timeout=1.5)
+                    if rc.status_code == 200:
+                        metrics = rc.json().get("metrics", {})
+                        if "SENSEX" in clean_sym:
+                            val = metrics.get("sensex_spot")
+                            if val and float(val) > 0:
+                                return round(float(val), 2)
+                        elif clean_sym == "NIFTY":
+                            val = metrics.get("nifty_spot")
+                            if val and float(val) > 0:
+                                return round(float(val), 2)
+                except Exception:
+                    continue
 
         index_map = {
             "NIFTY": "^NSEI",
@@ -442,14 +476,21 @@ class LivePaperTracker:
             "MIDCPNIFTY": "^NSEI",
         }
 
+        # 3. Yahoo Finance Live Quote for Equities & Underlying Stocks
         try:
             yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
             t = yf.Ticker(yf_ticker)
             fi = getattr(t, "fast_info", None)
             if fi:
-                lp = fi.get("last_price")
+                lp = getattr(fi, "last_price", None)
                 if lp and float(lp) > 0:
                     return round(float(lp), 2)
+
+            hist = t.history(period="1d", interval="1m")
+            if not hist.empty:
+                val = float(hist["Close"].dropna().iloc[-1])
+                if val > 0:
+                    return round(val, 2)
         except Exception:
             pass
 
