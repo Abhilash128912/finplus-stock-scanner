@@ -42,6 +42,7 @@ class LivePaperTracker:
 
         self.virtual_capital = VIRTUAL_STARTING_CAPITAL
         self.active_positions: Dict[str, Dict[str, Any]] = {}
+        self.symbol_last_close_time: Dict[str, float] = {}
         self.is_running = False
         self.indmoney_feed = INDMoneyLiveFeed()
         self._init_db()
@@ -161,6 +162,12 @@ class LivePaperTracker:
         for p in self.active_positions.values():
             if p["symbol"].split(" ")[0].upper() == clean_base and p["status"] == "OPEN":
                 return None
+
+        # Mandatory 45-minute re-entry cooldown on same symbol
+        last_closed = self.symbol_last_close_time.get(clean_base, 0)
+        if (time.time() - last_closed) < (45 * 60):
+            logger.info(f"Cooldown Active: {clean_base} closed {int(time.time() - last_closed)}s ago (45m cooldown required).")
+            return None
 
         pos_id = f"{clean_base}_{action}_{sector}_{now_ist.strftime('%Y%m%d_%H%M%S')}"
         is_option = sector in ("STOCK_OPTIONS", "INDEX_OPTIONS", "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC")
@@ -374,9 +381,17 @@ class LivePaperTracker:
                     if pt and pt.get("confluence_score", 0) >= 80:
                         sym = pt.get("symbol")
                         ltp = float(pt.get("ltp", 0.0))
-                        sl = float(pt.get("stop_loss", ltp * 0.99))
-                        tgt = float(pt.get("target_1", ltp * 1.015))
                         act = "SELL" if "SHORT" in pt.get("futures_directive", "") or "SELL" in pt.get("futures_directive", "") else "BUY"
+                        if act == "SELL":
+                            raw_sl = float(pt.get("stop_loss") or 0.0)
+                            raw_tgt = float(pt.get("target_1") or 0.0)
+                            sl = raw_sl if raw_sl > ltp else round(ltp * 1.01, 2)
+                            tgt = raw_tgt if (raw_tgt > 0 and raw_tgt < ltp) else round(ltp * 0.985, 2)
+                        else:
+                            raw_sl = float(pt.get("stop_loss") or 0.0)
+                            raw_tgt = float(pt.get("target_1") or 0.0)
+                            sl = raw_sl if (raw_sl > 0 and raw_sl < ltp) else round(ltp * 0.99, 2)
+                            tgt = raw_tgt if raw_tgt > ltp else round(ltp * 1.015, 2)
                         
                         # Official MCX Mini Contract Multipliers
                         qty_map = {
@@ -719,6 +734,8 @@ class LivePaperTracker:
             conn.commit()
 
         del self.active_positions[pos_id]
+        clean_base = pos["symbol"].split(" ")[0].upper()
+        self.symbol_last_close_time[clean_base] = time.time()
         logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f}")
 
     def get_status_dict(self) -> Dict[str, Any]:

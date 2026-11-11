@@ -29,6 +29,45 @@ class NTFYDispatcher:
             
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
+        self.daily_message_count = 0
+        self.last_count_reset_day = time.strftime("%Y-%m-%d")
+        self.recent_dispatch_times: List[float] = []
+
+    def _safe_post(self, url: str, message: str, headers: Dict[str, str]) -> bool:
+        """Circuit breaker: Protects NTFY free tier quota (max 250/day).
+        Caps at 30 messages/day and max 2 messages per 5 minutes to prevent floods."""
+        now = time.time()
+        today = time.strftime("%Y-%m-%d")
+
+        # Reset daily counter on date rollover
+        if today != self.last_count_reset_day:
+            self.daily_message_count = 0
+            self.last_count_reset_day = today
+
+        # 1. Hard daily cap
+        if self.daily_message_count >= 30:
+            logger.warning(f"NTFY Circuit Breaker: Daily quota safe limit reached ({self.daily_message_count}/30). Suppressing push.")
+            return False
+
+        # 2. Burst limiter: At most 2 pushes in 5 minutes
+        self.recent_dispatch_times = [t for t in self.recent_dispatch_times if (now - t) < 300]
+        if len(self.recent_dispatch_times) >= 2:
+            logger.warning("NTFY Circuit Breaker: Burst limit reached (max 2 per 5 min). Suppressing push.")
+            return False
+
+        try:
+            resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+            if resp.status_code == 200:
+                self.daily_message_count += 1
+                self.recent_dispatch_times.append(now)
+                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/30)")
+                return True
+            else:
+                logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code}")
+                return False
+        except Exception as e:
+            logger.error(f"Failed delivering push to '{url}': {e}")
+            return False
 
     def _fetch_app1_regime(self) -> Dict[str, Any]:
         """Queries App #1 Macro Trend & Air Traffic Control locally or in cloud."""
@@ -271,24 +310,8 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
-            
-            for attempt in range(2):
-                try:
-                    resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        logger.info(f"30m pulse delivered to '{topic}'")
-                        success = True
-                        break
-                    elif resp.status_code == 429 and attempt == 0:
-                        logger.warning(f"ntfy.sh rate limit (429) on '{topic}'. Waiting 2s before retry...")
-                        time.sleep(2.0)
-                        continue
-                    else:
-                        logger.error(f"Failed delivering pulse to '{topic}': HTTP {resp.status_code}")
-                        break
-                except Exception as e:
-                    logger.error(f"Failed delivering pulse to '{topic}': {e}")
-                    break
+            if self._safe_post(url, message, headers):
+                success = True
                 
         return success
 
@@ -407,13 +430,8 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
-            try:
-                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(f"09:00 AM Tactical Briefing delivered to '{topic}'")
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed delivering morning briefing to '{topic}': {e}")
+            if self._safe_post(url, message, headers):
+                success = True
                 
         return success
 
@@ -529,46 +547,7 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
             }
-            try:
-                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(f"03:00 PM Trade Summary delivered to '{topic}'")
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed delivering trade summary to '{topic}': {e}")
+            if self._safe_post(url, message, headers):
+                success = True
                 
-        return success
-
-    def send_holiday_notice(self, holiday_name: str) -> bool:
-        """Sends an informative announcement that the National Stock Exchange is closed for an official holiday."""
-        title = f"FinPlus Desk | Market Closed: {holiday_name}"
-        lines = [
-            f"National Stock Exchange (NSE) & BSE are CLOSED today for {holiday_name}.",
-            "",
-            "Status: STANDBY (Zero capital exposure)",
-            "Scanner: Background equity & derivative scanning paused",
-            "Execution: Paper trade auto-execution locked",
-            "MCX Commodities: Morning session closed (Evening opens 17:00 IST if scheduled)",
-            "",
-            f"Cockpit: {RENDER_SCANNER_URL}"
-        ]
-        message = "\n".join(lines)
-        success = False
-
-        for topic in self.topics:
-            url = f"https://ntfy.sh/{topic}"
-            headers = {
-                "Title": title,
-                "Priority": "3",
-                "Markdown": "yes",
-                "X-Markdown": "yes",
-                "Click": RENDER_SCANNER_URL
-            }
-            try:
-                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(f"Holiday notice delivered to '{topic}'")
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
         return success
