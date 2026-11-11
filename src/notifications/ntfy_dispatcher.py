@@ -31,12 +31,9 @@ class NTFYDispatcher:
         self.last_pulse_timestamp = 0.0
         self.daily_message_count = 0
         self.last_count_reset_day = time.strftime("%Y-%m-%d")
-        self.recent_dispatch_times: List[float] = []
 
     def _safe_post(self, url: str, message: str, headers: Dict[str, str]) -> bool:
-        """Circuit breaker: Protects NTFY free tier quota (max 250/day).
-        Caps at 30 messages/day and max 2 messages per 5 minutes to prevent floods."""
-        now = time.time()
+        """Dispatches NTFY notification with daily cap (up to 100/day). No burst throttling."""
         today = time.strftime("%Y-%m-%d")
 
         # Reset daily counter on date rollover
@@ -44,23 +41,16 @@ class NTFYDispatcher:
             self.daily_message_count = 0
             self.last_count_reset_day = today
 
-        # 1. Hard daily cap
-        if self.daily_message_count >= 30:
-            logger.warning(f"NTFY Circuit Breaker: Daily quota safe limit reached ({self.daily_message_count}/30). Suppressing push.")
-            return False
-
-        # 2. Burst limiter: At most 2 pushes in 5 minutes
-        self.recent_dispatch_times = [t for t in self.recent_dispatch_times if (now - t) < 300]
-        if len(self.recent_dispatch_times) >= 2:
-            logger.warning("NTFY Circuit Breaker: Burst limit reached (max 2 per 5 min). Suppressing push.")
+        # 1. Daily cap (100 messages/day)
+        if self.daily_message_count >= 100:
+            logger.warning(f"NTFY Daily Limit reached ({self.daily_message_count}/100). Suppressing push.")
             return False
 
         try:
             resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
             if resp.status_code == 200:
                 self.daily_message_count += 1
-                self.recent_dispatch_times.append(now)
-                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/30)")
+                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/100)")
                 return True
             else:
                 logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code}")

@@ -163,10 +163,10 @@ class LivePaperTracker:
             if p["symbol"].split(" ")[0].upper() == clean_base and p["status"] == "OPEN":
                 return None
 
-        # Mandatory 45-minute re-entry cooldown on same symbol
+        # Mandatory 20-minute re-entry cooldown on same symbol
         last_closed = self.symbol_last_close_time.get(clean_base, 0)
-        if (time.time() - last_closed) < (45 * 60):
-            logger.info(f"Cooldown Active: {clean_base} closed {int(time.time() - last_closed)}s ago (45m cooldown required).")
+        if (time.time() - last_closed) < (20 * 60):
+            logger.info(f"Cooldown Active: {clean_base} closed {int(time.time() - last_closed)}s ago (20m cooldown required).")
             return None
 
         pos_id = f"{clean_base}_{action}_{sector}_{now_ist.strftime('%Y%m%d_%H%M%S')}"
@@ -229,6 +229,9 @@ class LivePaperTracker:
             "pnl_pct": 0.0,
             "notes": notes
         }
+
+        # Dispatch instant NTFY alert FIRST
+        self._dispatch_ntfy_trade_opened(position)
 
         with self._get_connection() as conn:
             conn.execute("""
@@ -737,6 +740,79 @@ class LivePaperTracker:
         clean_base = pos["symbol"].split(" ")[0].upper()
         self.symbol_last_close_time[clean_base] = time.time()
         logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f}")
+
+        # Dispatch instant NTFY alert for closed trade
+        self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
+
+    def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
+        """Dispatches instant NTFY push notification FIRST before populating into paper app."""
+        try:
+            topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
+            action_tag = "chart_with_upwards_trend" if pos["action"] == "BUY" else "chart_with_downwards_trend"
+            title = f"FinPlus Paper Exec | [{pos['action']}] {pos['symbol']}"
+            is_opt = bool(pos.get("is_option"))
+            entry_disp = pos.get("opt_entry_premium", pos["entry_price"]) if is_opt else pos["entry_price"]
+            sl_disp = pos.get("opt_initial_sl", pos["initial_sl"]) if is_opt else pos["initial_sl"]
+            tgt_disp = pos.get("opt_target", pos["target"]) if is_opt else pos["target"]
+
+            lines = [
+                f"Action: [{pos['action']}] {pos['symbol']}",
+                f"Sector: {pos['sector']} | Qty: {pos['quantity']}",
+                f"Entry: Rs {entry_disp:,.2f}",
+                f"SL: Rs {sl_disp:,.2f} | Target: Rs {tgt_disp:,.2f}",
+                f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
+            ]
+            msg = "\n".join(lines)
+            requests.post(
+                f"https://ntfy.sh/{topic}",
+                data=msg.encode("utf-8"),
+                headers={
+                    "Title": title,
+                    "Priority": "4",
+                    "Tags": f"{action_tag},receipt",
+                    "Markdown": "yes",
+                    "Click": "https://finplus-stock-scanner.onrender.com/live",
+                    "Actions": "view, 📈 Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+                },
+                timeout=5
+            )
+            logger.info(f"NTFY Trade Opened push sent for {pos['symbol']}")
+        except Exception as e:
+            logger.warning(f"Failed sending trade opened alert to NTFY: {e}")
+
+    def _dispatch_ntfy_trade_closed(self, pos: Dict[str, Any], net_pnl: float, exit_price: float, exit_reason: str):
+        """Dispatches instant NTFY push notification on trade closed."""
+        try:
+            topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
+            status_tag = "tada" if net_pnl >= 0 else "x"
+            pnl_sign = "+" if net_pnl >= 0 else ""
+            title = f"FinPlus Paper Closed | {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})"
+
+            lines = [
+                f"Closed: [{pos['action']}] {pos['symbol']}",
+                f"Entry: Rs {pos['entry_price']:,.2f} | Exit: Rs {exit_price:,.2f}",
+                f"Reason: {exit_reason}",
+                f"Net In-Hand P&L: {pnl_sign}Rs {net_pnl:,.2f}",
+                f"Final Stage: {pos.get('stage', 'CLOSED')}",
+                f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
+            ]
+            msg = "\n".join(lines)
+            requests.post(
+                f"https://ntfy.sh/{topic}",
+                data=msg.encode("utf-8"),
+                headers={
+                    "Title": title,
+                    "Priority": "4",
+                    "Tags": status_tag,
+                    "Markdown": "yes",
+                    "Click": "https://finplus-stock-scanner.onrender.com/live",
+                    "Actions": "view, 📈 Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+                },
+                timeout=5
+            )
+            logger.info(f"NTFY Trade Closed push sent for {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})")
+        except Exception as e:
+            logger.warning(f"Failed sending trade closed alert to NTFY: {e}")
 
     def get_status_dict(self) -> Dict[str, Any]:
         """Returns the complete payload expected by the FrontPage live.html cockpit."""
