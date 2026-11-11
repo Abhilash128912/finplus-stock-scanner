@@ -247,6 +247,11 @@ async def trigger_briefing_test():
 @app.get("/api/paper/status")
 async def get_paper_status():
     """Returns real-time status of all active and recent paper positions."""
+    if not scheduler.paper_tracker.active_positions:
+        if scheduler.latest_shortlist:
+            scheduler.paper_tracker.ingest_shortlist(scheduler.latest_shortlist)
+        scheduler.paper_tracker.ingest_commodities()
+        scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
 
 @app.post("/api/paper/close-position/{pos_id}")
@@ -262,6 +267,9 @@ async def close_paper_position(pos_id: str):
 @app.post("/api/paper/sync-now")
 async def sync_paper_positions():
     """Forces an immediate tick update and trailing evaluation."""
+    if scheduler.latest_shortlist:
+        scheduler.paper_tracker.ingest_shortlist(scheduler.latest_shortlist)
+    scheduler.paper_tracker.ingest_commodities()
     scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
 

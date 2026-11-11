@@ -96,6 +96,10 @@ class ScannerScheduler:
                     current_sorted = sorted(results, key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
                     self.latest_scan_results = current_sorted
                     self.latest_shortlist = self.shortlist_engine.select_best_candidates(current_sorted)
+                    try:
+                        self.paper_tracker.ingest_shortlist(self.latest_shortlist)
+                    except Exception:
+                        pass
                 
             except Exception as e:
                 logger.error(f"Error evaluating {sym} ({ticker}): {e}")
