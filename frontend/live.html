@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>FinPlus Live Paper Positions | FrontPage Style</title>
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#0B0E14">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <link rel="icon" type="image/png" href="/static/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-base: #0B0E14;
+      --bg-surface: #141824;
+      --bg-card: #1A2030;
+      --bg-subtle: #232B40;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(0, 240, 255, 0.3);
+      --text-main: #FFFFFF;
+      --text-muted: #8E9BAE;
+      --text-dim: #5A6679;
+      --green: #00F0A8;
+      --green-bg: rgba(0, 240, 168, 0.12);
+      --red: #FF3366;
+      --red-bg: rgba(255, 51, 102, 0.12);
+      --amber: #FFB800;
+      --amber-bg: rgba(255, 184, 0, 0.12);
+      --cyan: #00F0FF;
+      --cyan-bg: rgba(0, 240, 255, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    body {
+      background: var(--bg-base);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      min-height: 100vh;
+      padding-bottom: 70px;
+    }
+
+    /* Top App Bar */
+    .app-header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(12px);
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-group { display: flex; align-items: center; gap: 10px; }
+    .brand-logo {
+      width: 32px; height: 32px;
+      background: linear-gradient(135deg, var(--cyan) 0%, var(--green) 100%);
+      border-radius: 8px;
+      display: grid; place-items: center;
+      font-weight: 800; font-size: 15px; color: #000;
+    }
+    .brand-title { font-size: 15px; font-weight: 800; letter-spacing: -0.3px; color: #FFF; }
+    .brand-subtitle { font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+    .live-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(0, 240, 168, 0.1);
+      border: 1px solid rgba(0, 240, 168, 0.3);
+      padding: 4px 10px; border-radius: 20px;
+      font-size: 11px; font-weight: 700; color: var(--green);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .pulse-dot {
+      width: 7px; height: 7px; border-radius: 50%;
+      background: var(--green);
+      animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 10px var(--green); }
+      100% { transform: scale(0.95); opacity: 0.8; }
+    }
+
+    /* Summary Hero */
+    .hero-summary {
+      padding: 16px;
+      background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
+    }
+    .summary-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+    }
+    .summary-top-row {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 8px;
+    }
+    .summary-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary-pnl-main {
+      font-size: 28px; font-weight: 800; font-family: 'JetBrains Mono', monospace;
+      letter-spacing: -0.5px;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .pnl-pct-badge {
+      font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .summary-stats-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 10px; margin-top: 14px; padding-top: 12px;
+      border-top: 1px solid var(--border);
+    }
+    .stat-item { display: flex; flex-direction: column; }
+    .stat-lbl { font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
+    .stat-val { font-size: 13px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; }
+
+    /* Segment Navigation Tabs */
+    .nav-tabs-wrapper {
+      padding: 0 16px 12px 16px;
+      display: flex; gap: 8px; overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .nav-tabs-wrapper::-webkit-scrollbar { display: none; }
+    .nav-tab {
+      background: var(--bg-surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      padding: 8px 14px; border-radius: 20px;
+      font-size: 12px; font-weight: 700; white-space: nowrap;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .nav-tab.active {
+      background: var(--cyan);
+      color: #000;
+      border-color: var(--cyan);
+    }
+
+    /* Positions Feed */
+    .positions-feed {
+      padding: 0 16px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+
+    /* FrontPage-style Position Card */
+    .position-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px;
+      transition: all 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+    .position-card::before {
+      content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+      background: var(--text-dim);
+    }
+    .position-card.profit::before { background: var(--green); }
+    .position-card.loss::before { background: var(--red); }
+
+    .card-head {
+      display: flex; justify-content: space-between; align-items: flex-start;
+      margin-bottom: 12px;
+    }
+    .sym-title-grp { display: flex; flex-direction: column; }
+    .sym-name { font-size: 16px; font-weight: 800; color: #FFF; letter-spacing: -0.2px; }
+    .sym-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; margin-top: 3px; }
+    .badge-action {
+      font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .badge-action.buy { background: var(--green-bg); color: var(--green); }
+    .badge-action.sell { background: var(--red-bg); color: var(--red); }
+
+    .card-pnl-block { text-align: right; }
+    .card-pnl-val { font-size: 18px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+    .card-pnl-pct { font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+    /* Prices Grid */
+    .prices-grid {
+      background: var(--bg-subtle);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: grid; grid-template-columns: repeat(3, 1fr);
+      gap: 8px; margin-bottom: 12px;
+    }
+    .price-col { display: flex; flex-direction: column; }
+    .price-lbl { font-size: 10px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; }
+    .price-val { font-size: 13px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+
+    /* Trailing & Target Bar */
+    .target-bar-wrap {
+      display: flex; flex-direction: column; gap: 6px;
+      margin-bottom: 12px;
+    }
+    .target-labels {
+      display: flex; justify-content: space-between;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+    }
+    .sl-lbl { color: var(--red); }
+    .tgt-lbl { color: var(--green); }
+    .progress-track {
+      width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08);
+      border-radius: 3px; overflow: hidden; position: relative;
+    }
+    .progress-fill {
+      height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green));
+      border-radius: 3px; transition: width 0.3s;
+    }
+
+    /* Footer & Actions */
+    .card-footer {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-top: 10px; border-top: 1px solid var(--border);
+    }
+    .stage-pill {
+      font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
+      background: var(--bg-surface); color: var(--cyan); border: 1px solid var(--border);
+    }
+    .btn-close-pos {
+      background: rgba(255, 51, 102, 0.15);
+      border: 1px solid rgba(255, 51, 102, 0.4);
+      color: var(--red);
+      font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 6px;
+      cursor: pointer; transition: all 0.2s;
+    }
+    .btn-close-pos:active { transform: scale(0.96); background: var(--red); color: #FFF; }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center; padding: 48px 16px;
+      color: var(--text-muted);
+    }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.6; }
+
+    /* Floating Bottom Action */
+    .bottom-bar {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex; justify-content: space-between; align-items: center;
+      z-index: 100;
+    }
+    .btn-action-primary {
+      background: linear-gradient(135deg, var(--cyan), var(--green));
+      color: #000; font-weight: 800; font-size: 12px;
+      padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header class="app-header">
+    <div class="brand-group">
+      <div class="brand-logo">FP</div>
+      <div>
+        <div class="brand-title">FinPlus Live Positions</div>
+        <div class="brand-subtitle">FrontPage Mobile Edition</div>
+      </div>
+    </div>
+    <div class="live-badge">
+      <span class="pulse-dot"></span>
+      <span id="refreshTimer">2s</span>
+    </div>
+  </header>
+
+  <!-- Summary Hero -->
+  <section class="hero-summary">
+    <div class="summary-card">
+      <div class="summary-top-row">
+        <span class="summary-label">Live Unrealized P&L</span>
+        <span class="pnl-pct-badge" id="totalPnlPctBadge">+0.00%</span>
+      </div>
+      <div class="summary-pnl-main" id="totalUnrealizedPnl">
+        ₹0.00
+      </div>
+      <div class="summary-stats-grid">
+        <div class="stat-item">
+          <span class="stat-lbl">Virtual Capital</span>
+          <span class="stat-val" id="capitalVal">₹1,00,000</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-lbl">Realized Net</span>
+          <span class="stat-val" id="realizedNetVal">₹0.00</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-lbl">Active Trades</span>
+          <span class="stat-val" id="activeCountVal">0 Open</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Navigation Filters -->
+  <div class="nav-tabs-wrapper">
+    <button class="nav-tab active" onclick="setFilter('ALL', this)">All Open (<span id="cntAll">0</span>)</button>
+    <button class="nav-tab" onclick="setFilter('STOCK_OPTIONS', this)">Options (<span id="cntOpt">0</span>)</button>
+    <button class="nav-tab" onclick="setFilter('COMMODITIES', this)">Commodities (<span id="cntComm">0</span>)</button>
+    <button class="nav-tab" onclick="setFilter('INTRADAY_CASH', this)">Cash (<span id="cntCash">0</span>)</button>
+    <button class="nav-tab" onclick="setFilter('CLOSED', this)">Closed Today (<span id="cntClosed">0</span>)</button>
+  </div>
+
+  <!-- Positions Feed -->
+  <main class="positions-feed" id="positionsContainer">
+    <div class="empty-state">
+      <div class="empty-icon">⏳</div>
+      <h3>Scanning Market...</h3>
+      <p style="font-size: 12px; margin-top: 4px;">Awaiting 100/100 confluence setups from Stock Scanner & MCX Radar.</p>
+    </div>
+  </main>
+
+  <!-- Bottom Navigation / Quick Sync -->
+  <div class="bottom-bar">
+    <div style="font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">
+      Auto-polling: <span style="color: var(--green);">Active (Every 2s)</span>
+    </div>
+    <button class="btn-action-primary" onclick="forceSync()">⚡ SYNC NOW</button>
+  </div>
+
+  <script>
+    let activeFilter = 'ALL';
+    let rawData = null;
+
+    function setFilter(filter, el) {
+      activeFilter = filter;
+      document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+      el.classList.add('active');
+      renderPositions();
+    }
+
+    async function fetchLivePositions() {
+      try {
+        const res = await fetch('/api/paper/status');
+        if (!res.ok) return;
+        rawData = await res.json();
+        updateSummaryHeader();
+        renderPositions();
+      } catch (e) {
+        console.error("Failed fetching live positions:", e);
+      }
+    }
+
+    function updateSummaryHeader() {
+      if (!rawData) return;
+      const unPnl = rawData.total_unrealized_pnl || 0.0;
+      const capital = rawData.virtual_starting_capital || 100000.0;
+      const unPct = ((unPnl / capital) * 100).toFixed(2);
+      const isPositive = unPnl >= 0;
+
+      const pnlEl = document.getElementById('totalUnrealizedPnl');
+      pnlEl.innerText = `${isPositive ? '+' : ''}₹${unPnl.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+      pnlEl.style.color = isPositive ? 'var(--green)' : 'var(--red)';
+
+      const badge = document.getElementById('totalPnlPctBadge');
+      badge.innerText = `${isPositive ? '+' : ''}${unPct}%`;
+      badge.style.background = isPositive ? 'var(--green-bg)' : 'var(--red-bg)';
+      badge.style.color = isPositive ? 'var(--green)' : 'var(--red)';
+
+      document.getElementById('capitalVal').innerText = `₹${(rawData.current_equity || capital).toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+      document.getElementById('realizedNetVal').innerText = `₹${(rawData.net_realized_pnl || 0).toLocaleString('en-IN', {maximumFractionDigits: 2})}`;
+      document.getElementById('activeCountVal').innerText = `${rawData.active_positions_count || 0} Open`;
+
+      // Update Tab Counts
+      const active = rawData.active_positions || [];
+      document.getElementById('cntAll').innerText = active.length;
+      document.getElementById('cntOpt').innerText = active.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC')).length;
+      document.getElementById('cntComm').innerText = active.filter(p => (p.sector || '') === 'COMMODITIES').length;
+      document.getElementById('cntCash').innerText = active.filter(p => (p.sector || '') === 'INTRADAY_CASH').length;
+      document.getElementById('cntClosed').innerText = (rawData.recent_closed_trades || []).length;
+    }
+
+    function renderPositions() {
+      const container = document.getElementById('positionsContainer');
+      if (!rawData) return;
+
+      if (activeFilter === 'CLOSED') {
+        renderClosedTrades(container);
+        return;
+      }
+
+      let list = rawData.active_positions || [];
+      if (activeFilter === 'STOCK_OPTIONS') {
+        list = list.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC'));
+      } else if (activeFilter === 'COMMODITIES') {
+        list = list.filter(p => (p.sector || '') === 'COMMODITIES');
+      } else if (activeFilter === 'INTRADAY_CASH') {
+        list = list.filter(p => (p.sector || '') === 'INTRADAY_CASH');
+      }
+
+      if (list.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">🎯</div>
+            <h3>No Active Positions</h3>
+            <p style="font-size: 12px; margin-top: 4px;">Zero trades matching filter. Next setup will auto-populate here.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = '';
+      list.forEach(pos => {
+        const isOpt = Boolean(pos.is_option);
+        const avgLtp = isOpt ? (pos.opt_entry_premium || pos.entry_price) : pos.entry_price;
+        const currLtp = isOpt ? (pos.opt_current_premium || pos.current_price) : pos.current_price;
+        const pnl = pos.unrealized_pnl || 0.0;
+        const pnlPct = pos.pnl_pct !== undefined ? pos.pnl_pct : (avgLtp > 0 ? (((currLtp - avgLtp) / avgLtp) * 100) : 0.0);
+        const isPos = pnl >= 0;
+
+        // Progress calculation between Trailing SL and Target
+        const sl = isOpt ? (pos.opt_trailing_sl || pos.opt_initial_sl || (avgLtp * 0.70)) : (pos.trailing_sl || pos.initial_sl);
+        const tgt = isOpt ? (pos.opt_target || (avgLtp * 1.60)) : pos.target;
+        let progressPct = 50;
+        if (tgt !== sl) {
+          const totalDist = Math.abs(tgt - sl);
+          const currentDist = Math.abs(currLtp - sl);
+          progressPct = Math.min(100, Math.max(0, (currentDist / totalDist) * 100));
+        }
+
+        const card = document.createElement('div');
+        card.className = `position-card ${isPos ? 'profit' : 'loss'}`;
+        card.innerHTML = `
+          <div class="card-head">
+            <div class="sym-title-grp">
+              <span class="sym-name">${pos.symbol}</span>
+              <div class="sym-meta">
+                <span class="badge-action ${pos.action === 'BUY' ? 'buy' : 'sell'}">${pos.action}</span>
+                <span>•</span>
+                <span>${pos.sector}</span>
+                <span>•</span>
+                <span style="color:#FFF; font-weight:700;">Qty: ${pos.quantity}</span>
+              </div>
+            </div>
+            <div class="card-pnl-block">
+              <div class="card-pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+                ${isPos ? '+' : ''}₹${pnl.toFixed(2)}
+              </div>
+              <div class="card-pnl-pct" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+                ${isPos ? '+' : ''}${pnlPct.toFixed(2)}%
+              </div>
+            </div>
+          </div>
+
+          <div class="prices-grid">
+            <div class="price-col">
+              <span class="price-lbl">Avg Price</span>
+              <span class="price-val">₹${avgLtp.toFixed(2)}</span>
+            </div>
+            <div class="price-col">
+              <span class="price-lbl">Current LTP</span>
+              <span class="price-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">₹${currLtp.toFixed(2)}</span>
+            </div>
+            <div class="price-col">
+              <span class="price-lbl">Points Δ</span>
+              <span class="price-val">${isPos ? '+' : ''}${(currLtp - avgLtp).toFixed(2)}</span>
+            </div>
+          </div>
+
+          <div class="target-bar-wrap">
+            <div class="target-labels">
+              <span class="sl-lbl">SL: ₹${sl.toFixed(2)}</span>
+              <span class="tgt-lbl">Target: ₹${tgt.toFixed(2)}</span>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" style="width: ${progressPct}%;"></div>
+            </div>
+          </div>
+
+          <div class="card-footer">
+            <div style="display: flex; gap: 6px; align-items: center;">
+              <span class="stage-pill">${pos.stage || 'ACTIVE'}</span>
+              ${pnlPct >= 1.0 ? `<span style="background: rgba(0, 240, 168, 0.2); color: var(--green); border: 1px solid var(--green); font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; animation: pulse 1.5s infinite;">🔥 TURNING GREEN (READY FOR REAL TRADE)</span>` : ''}
+            </div>
+            <div style="display: flex; gap: 6px;">
+              <button class="btn-action-primary" style="padding: 5px 10px; font-size: 11px;" onclick="copyTicket('${pos.symbol}', '${pos.action}', ${currLtp}, ${sl}, ${tgt})">📋 Copy Ticket</button>
+              <button class="btn-close-pos" onclick="closePosition('${pos.position_id}')">Square Off</button>
+            </div>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function renderClosedTrades(container) {
+      const closed = rawData.recent_closed_trades || [];
+      if (closed.length === 0) {
+        container.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-icon">📁</div>
+            <h3>No Closed Trades Today</h3>
+            <p style="font-size: 12px; margin-top: 4px;">Completed trades and net profits will appear here.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = '';
+      closed.forEach(t => {
+        const isPos = t.net_pnl >= 0;
+        const card = document.createElement('div');
+        card.className = `position-card ${isPos ? 'profit' : 'loss'}`;
+        card.innerHTML = `
+          <div class="card-head">
+            <div class="sym-title-grp">
+              <span class="sym-name">${t.symbol}</span>
+              <div class="sym-meta">
+                <span class="badge-action ${t.action === 'BUY' ? 'buy' : 'sell'}">${t.action}</span>
+                <span>•</span>
+                <span>${t.sector}</span>
+                <span>•</span>
+                <span>${t.trade_time}</span>
+              </div>
+            </div>
+            <div class="card-pnl-block">
+              <div class="card-pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+                ${isPos ? '+' : ''}₹${(t.net_pnl || 0).toFixed(2)}
+              </div>
+              <div style="font-size: 11px; color: var(--text-dim);">Net In-Hand</div>
+            </div>
+          </div>
+          <div class="prices-grid">
+            <div class="price-col">
+              <span class="price-lbl">Entry</span>
+              <span class="price-val">₹${(t.entry_price || 0).toFixed(2)}</span>
+            </div>
+            <div class="price-col">
+              <span class="price-lbl">Exit</span>
+              <span class="price-val">₹${(t.exit_price || 0).toFixed(2)}</span>
+            </div>
+            <div class="price-col">
+              <span class="price-lbl">Charges</span>
+              <span class="price-val" style="color: var(--amber);">₹${(t.total_charges || 0).toFixed(2)}</span>
+            </div>
+          </div>
+          <div class="card-footer">
+            <span class="stage-pill" style="color: var(--text-muted);">${t.exit_reason || 'CLOSED'}</span>
+            <span style="font-size: 11px; font-weight:700; color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+              Gross: ₹${(t.gross_pnl || 0).toFixed(2)}
+            </span>
+          </div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function copyTicket(symbol, action, ltp, sl, tgt) {
+      const text = `${action} ${symbol} @ ₹${ltp.toFixed(2)} | SL: ₹${sl.toFixed(2)} | Tgt: ₹${tgt.toFixed(2)}`;
+      navigator.clipboard.writeText(text).then(() => {
+        alert(`📋 Ticket Copied to Clipboard!\n\n${text}\n\nYou can now paste or place this directly in your broker (INDmoney / Zerodha).`);
+      }).catch(() => {
+        prompt("Copy this trade ticket:", text);
+      });
+    }
+
+    async function closePosition(posId) {
+      if (!confirm(`Are you sure you want to manually square off this paper position?`)) return;
+      try {
+        const res = await fetch(`/api/paper/close-position/${posId}`, { method: 'POST' });
+        await fetchLivePositions();
+      } catch (e) {
+        alert("Failed squaring off position: " + e);
+      }
+    }
+
+    async function forceSync() {
+      await fetch('/api/paper/sync-now', { method: 'POST' });
+      await fetchLivePositions();
+    }
+
+    // Initialize & Poll every 2 seconds
+    fetchLivePositions();
+    setInterval(fetchLivePositions, 2000);
+  </script>
+</body>
+</html>

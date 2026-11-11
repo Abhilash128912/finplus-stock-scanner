@@ -13,6 +13,7 @@ from src.analytics.range_detector_engine import RangeDetectorEngine
 from src.analytics.regime_interceptor import App1RegimeInterceptor
 from src.analytics.shortlist_engine import ShortlistEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
+from src.paper.live_paper_tracker import LivePaperTracker
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
 
@@ -30,6 +31,7 @@ class ScannerScheduler:
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
         self.shortlist_engine = ShortlistEngine()
         self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
+        self.paper_tracker = LivePaperTracker()
         
         self.latest_scan_results: List[Dict[str, Any]] = []
         self.latest_shortlist: Dict[str, Any] = {}
@@ -107,6 +109,12 @@ class ScannerScheduler:
         shortlist = self.shortlist_engine.select_best_candidates(results)
         self.latest_shortlist = shortlist
         
+        # Auto-ingest candidates into 24/7 Live Paper Tracker
+        try:
+            self.paper_tracker.ingest_shortlist(shortlist)
+        except Exception as e:
+            logger.error(f"Error auto-ingesting shortlist to paper tracker: {e}")
+
         # Dispatch 30m pulse (enforcing 30m cooldown)
         self.dispatcher.send_30m_shortlist_pulse(shortlist)
         
@@ -196,18 +204,20 @@ class ScannerScheduler:
                 await asyncio.sleep(30)
 
     async def start_loop(self):
-        """Launches both precision clock dispatcher and background universe scanner concurrently."""
+        """Launches clock dispatcher, background scanner, and live paper tracking loop concurrently."""
         self.is_running = True
         logger.info("ScannerScheduler background daemon starting...")
         
         # Initial scan boot
         await asyncio.to_thread(self.scan_universe_now)
         
-        # Run both loops concurrently without blocking each other
+        # Run loops concurrently without blocking each other
         await asyncio.gather(
             self._clock_dispatcher_loop(),
-            self._scanner_worker_loop()
+            self._scanner_worker_loop(),
+            self.paper_tracker.start_polling_loop()
         )
 
     def stop_loop(self):
         self.is_running = False
+        self.paper_tracker.stop_polling_loop()

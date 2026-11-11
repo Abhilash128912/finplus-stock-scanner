@@ -79,6 +79,13 @@ async def serve_cockpit():
         return FileResponse(cockpit_file)
     return HTMLResponse("<h1>FinPlus+ Cockpit Not Found</h1>")
 
+@app.api_route("/live", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def serve_live():
+    live_file = os.path.join(FRONTEND_DIR, "live.html")
+    if os.path.exists(live_file):
+        return FileResponse(live_file)
+    return HTMLResponse("<h1>FinPlus+ Live Positions Cockpit Not Found</h1>")
+
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     return {"status": "ok", "app": "FinPlus-Stock-Scanner"}
@@ -233,3 +240,28 @@ async def trigger_briefing_test():
         "topics": scheduler.dispatcher.topics,
         "timestamp_utc": get_utc_iso()
     }
+
+# -------------------------------------------------------------
+# 24/7 FrontPage Live Paper Positions API
+# -------------------------------------------------------------
+@app.get("/api/paper/status")
+async def get_paper_status():
+    """Returns real-time status of all active and recent paper positions."""
+    return scheduler.paper_tracker.get_status_dict()
+
+@app.post("/api/paper/close-position/{pos_id}")
+async def close_paper_position(pos_id: str):
+    """Manually squares off an active open paper position."""
+    pos = scheduler.paper_tracker.active_positions.get(pos_id)
+    if not pos:
+        return JSONResponse(status_code=404, content={"status": "ERROR", "message": "Position not found"})
+    live_price = pos.get("current_price") or pos.get("entry_price")
+    scheduler.paper_tracker.close_position(pos_id, exit_price=live_price, exit_reason="MANUAL_SQUARE_OFF")
+    return {"status": "SUCCESS", "message": f"Position {pos_id} squared off"}
+
+@app.post("/api/paper/sync-now")
+async def sync_paper_positions():
+    """Forces an immediate tick update and trailing evaluation."""
+    scheduler.paper_tracker.update_and_trail_positions()
+    return scheduler.paper_tracker.get_status_dict()
+
