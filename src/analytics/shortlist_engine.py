@@ -79,7 +79,10 @@ class ShortlistEngine:
         # -------------------------------------------------------------
         # 2. INTRADAY CASH: 750 BROAD MARKET CROWN HERO FILTER (SCORE >= 80)
         # Must be: High turnover (> ₹15 Cr), anti-circuit safe, score >= 80 + APPROVED by App #1
-        # CRITICAL PROTECTION: Strictly exclude any stock that is already overextended (> 1.2% past breakout or > 2.5% move)
+        # INSTITUTIONAL LAUNCHPAD LOGIC:
+        # - Prioritizes Tight Base Coiling near Resistance (PRE_IGNITION_LONG)
+        # - Supports High-Momentum Continuations (STAGE2_CONTINUATION_LAUNCHPAD, e.g. NETWEB)
+        # - Never bars a stock simply because it grew, as long as it has formed a tight base above VWAP
         # -------------------------------------------------------------
         from src.analytics.multi_horizon_engine import MultiHorizonScorer
         
@@ -91,9 +94,25 @@ class ShortlistEngine:
                     r["vcp_score"] = vcp_eval.get("score", 0)
                     r["is_launchpad"] = vcp_eval.get("is_launchpad", False)
                     r["vcp_reasons"] = vcp_eval.get("reasons", [])
+                    if vcp_eval.get("trigger_price"):
+                        r["trigger_price"] = vcp_eval.get("trigger_price")
+                    if vcp_eval.get("tight_sl"):
+                        r["tight_sl"] = vcp_eval.get("tight_sl")
+                    if vcp_eval.get("target_price"):
+                        r["target_price"] = vcp_eval.get("target_price")
+                    r["base_high"] = vcp_eval.get("base_high")
+                    r["base_low"] = vcp_eval.get("base_low")
+                    r["base_width_pct"] = vcp_eval.get("base_width_pct")
+                    r["dist_to_pivot_pct"] = vcp_eval.get("dist_to_pivot_pct")
                 except Exception:
                     pass
 
+        valid_launchpad_states = (
+            "PRE_IGNITION_LONG", 
+            "STAGE2_CONTINUATION_LAUNCHPAD", 
+            "FRESH_BREAKOUT", 
+            "BULLISH_IGNITION"
+        )
         approved_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
@@ -101,9 +120,7 @@ class ShortlistEngine:
             and r.get("confluence_score", 0) >= 80
             and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
             and r.get("anti_circuit_status") == "SAFE"
-            and not r.get("is_overextended", False)           # NO LATE CHASES
-            and r.get("move_from_breakout_pct", 0.0) <= 1.2   # Strict 1.2% maximum past breakout
-            and abs(r.get("pct_change_pdc", 0.0)) <= 3.0      # Disqualify already +3% extended runners
+            and r.get("ignition_state") in valid_launchpad_states
         ]
         
         # Sort by highest combined Confluence + VCP Launchpad Score
@@ -120,9 +137,7 @@ class ShortlistEngine:
             if r.get("category") == "INTRADAY_CASH" 
             and r.get("signal_direction", 0) != 0
             and r.get("anti_circuit_status") == "SAFE"
-            and not r.get("is_overextended", False)
-            and r.get("move_from_breakout_pct", 0.0) <= 1.2
-            and abs(r.get("pct_change_pdc", 0.0)) <= 3.0
+            and r.get("ignition_state") in valid_launchpad_states
         ]
         coiled_cash_stocks.sort(
             key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),

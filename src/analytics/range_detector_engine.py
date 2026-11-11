@@ -181,6 +181,26 @@ class RangeDetectorEngine:
         range_bot_val = float(bx_bottom) if not np.isnan(bx_bottom) else (last_closed_price - (last_closed_price * 0.005))
         range_mid_val = (range_top_val + range_bot_val) / 2.0
         
+        # -------------------------------------------------------------
+        # Institutional Micro-Base & Resistance Pivot Analysis (Last 3 to 6 bars)
+        # Identifies tight consolidation bases (< 1.2% width) near HOD/Resistance
+        # Enables Early Pre-Breakout Detection and Stage-2 Continuations (e.g. NETWEB)
+        # -------------------------------------------------------------
+        recent_bars = closed_df.iloc[-min(6, len(closed_df)):]
+        mb_high = float(recent_bars['High'].max())
+        mb_low = float(recent_bars['Low'].min())
+        mb_width_pct = round(((mb_high - mb_low) / max(1.0, mb_high)) * 100.0, 2)
+        
+        # If micro-base is tight (<= 1.2%), use it as the high-fidelity institutional breakout level
+        if mb_width_pct <= 1.2 and mb_high > 0:
+            effective_resistance = mb_high
+            effective_support = mb_low
+            has_tight_base = True
+        else:
+            effective_resistance = range_top_val
+            effective_support = range_bot_val
+            has_tight_base = False
+
         # 50 EMA Trend Confirmation & Proximity Metrics
         ema50_vals = closed_df['ema50'].values
         last_ema50 = float(ema50_vals[-1]) if not np.isnan(ema50_vals[-1]) else last_closed_price
@@ -204,8 +224,8 @@ class RangeDetectorEngine:
         ignition_state = "NEUTRAL"
         tier_label = "CONSOLIDATION"
         
-        broke_top = last_closed_price > range_top_val
-        broke_bot = last_closed_price < range_bot_val
+        broke_top = last_closed_price > effective_resistance
+        broke_bot = last_closed_price < effective_support
         above_pdh = last_closed_price > pdh
         below_pdl = last_closed_price < pdl
         above_vwap = last_closed_price > last_vwap
@@ -213,28 +233,33 @@ class RangeDetectorEngine:
         has_volume = rvol >= 1.25
         
         # Early Breakout / Coiling Proximity Calculation
-        # Distance to Range Top: positive means still below top, negative means broke above
-        dist_to_top_pct = round(((range_top_val - last_closed_price) / range_top_val) * 100.0, 2)
-        dist_to_bot_pct = round(((last_closed_price - range_bot_val) / range_bot_val) * 100.0, 2)
+        # Distance to Resistance: positive means still below pivot (pre-ignition coiling), negative means broke above
+        dist_to_top_pct = round(((effective_resistance - last_closed_price) / effective_resistance) * 100.0, 2)
+        dist_to_bot_pct = round(((last_closed_price - effective_support) / effective_support) * 100.0, 2)
         
-        # Pre-Ignition Launchpad: Price coiled within 0.1% to 0.8% of Range Top, above 50 EMA and Day VWAP
-        is_pre_ignition_long = (0.0 <= dist_to_top_pct <= 0.8) and above_ema50 and above_vwap
-        is_pre_ignition_short = (0.0 <= dist_to_bot_pct <= 0.8) and below_ema50 and below_vwap
+        # Pre-Ignition Launchpad: Price coiled within 0.0% to 0.7% of Resistance, above 50 EMA and Day VWAP
+        is_pre_ignition_long = (0.0 <= dist_to_top_pct <= 0.7) and above_ema50 and above_vwap and has_tight_base
+        is_pre_ignition_short = (0.0 <= dist_to_bot_pct <= 0.7) and below_ema50 and below_vwap and has_tight_base
 
         if is_pre_ignition_long:
-            # ⚡ EARLY LAUNCHPAD LONG: Triggered at 0.3% - 0.8% before the 2.5% breakout happens!
             signal_direction = 1
             pts_range = 35 # Coiled at immediate breakout edge
             pts_ema50 = 30 # Trend aligned
             pts_vwap = 20  # Buyers in control
             pts_volume = 15 if rvol >= 1.25 else 10
             confluence_score = pts_range + pts_ema50 + pts_vwap + pts_volume
-            ignition_state = "PRE_IGNITION_LONG"
-            tier_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY ENTRY)"
-            reason = f"Coiled at Breakout Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_top_pct}% below Range Top (₹{range_top_val:.2f}) with VWAP & 50 EMA momentum."
+            
+            # High-Momentum Continuation Handling (e.g., NETWEB, TRENT): Never bar runners that form a tight base
+            if pct_change_pdc >= 2.5:
+                ignition_state = "STAGE2_CONTINUATION_LAUNCHPAD"
+                tier_label = "⚡ HIGH-TIGHT BASE (STAGE-2 CONTINUATION)"
+                reason = f"High-Tight Continuation Base: Stock (+{pct_change_pdc:+.2f}%) consolidated in tight {mb_width_pct}% base above VWAP. Coiled {dist_to_top_pct}% below pivot ₹{effective_resistance:.2f}."
+            else:
+                ignition_state = "PRE_IGNITION_LONG"
+                tier_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY ENTRY)"
+                reason = f"Coiled at Breakout Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_top_pct}% below Resistance (₹{effective_resistance:.2f}) in tight {mb_width_pct}% base."
 
         elif is_pre_ignition_short:
-            # ⚡ EARLY LAUNCHPAD SHORT: Triggered at 0.3% - 0.8% before the breakdown happens!
             signal_direction = -1
             pts_range = 35
             pts_ema50 = 30
@@ -243,7 +268,7 @@ class RangeDetectorEngine:
             confluence_score = pts_range + pts_ema50 + pts_vwap + pts_volume
             ignition_state = "PRE_IGNITION_SHORT"
             tier_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY SHORT)"
-            reason = f"Coiled at Breakdown Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_bot_pct}% above Range Bottom (₹{range_bot_val:.2f}) with downward momentum."
+            reason = f"Coiled at Breakdown Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_bot_pct}% above Support (₹{effective_support:.2f}) with downward momentum."
 
         elif is_coiling:
             ignition_state = "COILING_ALERT"
@@ -251,8 +276,7 @@ class RangeDetectorEngine:
             reason = "Spring coiled: 20 closed candles compressed within ±1 ATR band."
             
         elif broke_top:
-            breakout_dist_pct = round(((last_closed_price - range_top_val) / range_top_val) * 100.0, 2)
-            # UPTREND CONFIRMATION GATE: Must be above 50 EMA (and not so far)
+            breakout_dist_pct = round(((last_closed_price - effective_resistance) / effective_resistance) * 100.0, 2)
             if not above_ema50:
                 signal_direction = 0
                 ignition_state = "REJECTED_BELOW_EMA50"
@@ -263,17 +287,17 @@ class RangeDetectorEngine:
                 ignition_state = "OVEREXTENDED_FROM_EMA50"
                 tier_label = "OVEREXTENDED (> 50 EMA)"
                 reason = f"Breakout overextended: Price is +{ema50_dist_pct}% above 50 EMA (Max safe: +{max_dist_pct}%). Mean reversion risk high."
-            elif breakout_dist_pct > 1.2 or (pct_change_pdc >= 2.5 and breakout_dist_pct > 0.6):
-                # 🚫 EXTENDED RUNNER: Strictly prevent chasing late breakouts!
+            elif breakout_dist_pct > 1.2 and not has_tight_base:
+                # Mid-air spike without base: Wait for consolidation
                 signal_direction = 0
-                confluence_score = 45
-                ignition_state = "OVEREXTENDED_RUNNER"
-                tier_label = "⚠️ EXTENDED (DO NOT CHASE)"
-                reason = f"Overextended runner: Price (₹{last_closed_price:.2f}) is +{breakout_dist_pct}% past Breakout (₹{range_top_val:.2f}) & +{pct_change_pdc:+.2f}% from PDC. DO NOT CHASE. Wait for pullback to VWAP (₹{last_vwap:.2f}) or Range Top."
+                confluence_score = 50
+                ignition_state = "AWAITING_BASE_FORMATION"
+                tier_label = "WAIT FOR BASE / VWAP PULLBACK"
+                reason = f"Impulse active @ ₹{last_closed_price:.2f}: Stretched +{breakout_dist_pct}% above pivot without consolidation. Wait for 3-bar base near VWAP."
             else:
                 signal_direction = 1
-                pts_range = 35  # Range Top breakout (fresh within 0.0% - 1.2% of pivot)
-                pts_ema50 = 30  # Confirmed above 50 EMA within safe proximity
+                pts_range = 35  # Fresh breakout through resistance
+                pts_ema50 = 30
                 if above_vwap:
                     pts_vwap = 20
                 if rvol >= 1.25:
@@ -286,15 +310,15 @@ class RangeDetectorEngine:
                 if total_pts >= 85:
                     ignition_state = "BULLISH_IGNITION"
                     tier_label = "TIER-1 HIGH CONVICTION"
-                    reason = f"Closed above Range Top (₹{range_top_val:.2f}) [+{breakout_dist_pct}%] + 50 EMA confirmed (+{ema50_dist_pct}%) + VWAP confluence"
+                    reason = f"Fresh Breakout above ₹{effective_resistance:.2f} [+{breakout_dist_pct}%] + 50 EMA confirmed (+{ema50_dist_pct}%) + VWAP confluence"
                 elif total_pts >= 65:
                     ignition_state = "RANGE_BREAKOUT_LONG"
                     tier_label = "TIER-2 EARLY SCALP"
-                    reason = f"Closed above Range Top with 50 EMA (+{ema50_dist_pct}%) & VWAP confluence"
+                    reason = f"Closed above Resistance with 50 EMA (+{ema50_dist_pct}%) & VWAP confluence"
                 else:
                     ignition_state = "MILD_BREAKOUT_LONG"
                     tier_label = "WATCHLIST ONLY"
-                    reason = f"Range broke with weak volume support"
+                    reason = f"Breakout with weak volume support"
 
         elif broke_bot:
             breakdown_dist_pct = round(((range_bot_val - last_closed_price) / range_bot_val) * 100.0, 2)

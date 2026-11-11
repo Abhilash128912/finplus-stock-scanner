@@ -153,32 +153,31 @@ class NTFYDispatcher:
             f"Trend: {reg_lbl} | ADR {adr_val}:1"
         ]
         
-        # 2. Intraday Cash (Strict Institutional Entry & Chasing Protection)
+        # 2. Intraday Cash (Strict Institutional Pre-Breakout & Continuation Engine)
         best_cash = shortlist.get("best_intraday_stock")
-        if best_cash and best_cash.get("is_overextended"):
-            sym = best_cash.get("symbol")
-            ltp = best_cash.get("last_price", 0.0)
-            m_pct = best_cash.get("move_from_breakout_pct", 0.0)
-            chg = best_cash.get("pct_change_pdc", 0.0)
-            lines.append(f"Cash: [DO NOT CHASE] {sym} @ Rs {ltp:,.1f} (+{m_pct}% > Breakout, {chg:+.2f}% day). Wait for pullback!")
-        elif best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
+        if best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
             ign = best_cash.get("ignition_state", "")
-            r_top = best_cash.get("range_top", ltp)
+            trig = best_cash.get("trigger_price") or best_cash.get("range_top", ltp)
             risk = best_cash.get("risk_management", {})
-            sl = risk.get("stop_loss", "--")
-            tgt = risk.get("target", "--")
-            if ign == "PRE_IGNITION_LONG":
-                lines.append(f"Cash: [PRE-IGNITION BUY] {sym} @ Rs {ltp:,.1f} | Trigger: > {r_top:,.1f} | SL: {sl} | Tgt: {tgt}")
-            else:
+            sl = best_cash.get("tight_sl") or risk.get("stop_loss", "--")
+            tgt = best_cash.get("target_price") or risk.get("target", "--")
+            
+            if ign == "STAGE2_CONTINUATION_LAUNCHPAD":
+                lines.append(f"Cash: [STAGE-2 LAUNCHPAD] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+            elif ign == "PRE_IGNITION_LONG":
+                lines.append(f"Cash: [PRE-IGNITION LAUNCHPAD] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+            elif ign in ("FRESH_BREAKOUT", "BULLISH_IGNITION"):
                 m_pct = best_cash.get("move_from_breakout_pct", 0.0)
-                lines.append(f"Cash: [QUALIFIED BUY] {sym} @ Rs {ltp:,.1f} (+{m_pct}% from {r_top:,.1f}) | SL: {sl} | Tgt: {tgt}")
+                lines.append(f"Cash: [FRESH BREAKOUT] {sym} @ Rs {ltp:,.1f} (+{m_pct}% from {trig:,.1f}) | SL: {sl} | Tgt: {tgt}")
+            else:
+                lines.append(f"Cash: [QUALIFIED BUY] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
         elif best_cash and best_cash.get("is_standby_watch"):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
-            r_top = best_cash.get("range_top", ltp)
-            lines.append(f"Cash: [ON WATCH / COILING] {sym} @ Rs {ltp:,.1f} (Awaiting trigger > {r_top:,.1f}) | Hold Cash")
+            trig = best_cash.get("trigger_price") or best_cash.get("range_top", ltp)
+            lines.append(f"Cash: [ON WATCH / COILING] {sym} @ Rs {ltp:,.1f} (Awaiting trigger > {trig:,.1f}) | Hold Cash")
         elif best_cash:
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)

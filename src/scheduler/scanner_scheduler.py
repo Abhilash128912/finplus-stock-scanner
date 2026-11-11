@@ -70,19 +70,11 @@ class ScannerScheduler:
                             eval_res["candle_close"] = eval_res["last_price"]
                             eval_res["last_price"] = live_p # update primary price to instantaneous live LTP
                             
-                            # Overextended / Chasing Protection Guard
+                            # Update distance to active resistance pivot with instantaneous live LTP
                             if eval_res.get("range_top"):
                                 r_top = eval_res["range_top"]
                                 move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
                                 eval_res["move_from_breakout_pct"] = move_from_top_pct
-                                if move_from_top_pct > 1.2 or (eval_res.get("pct_change_pdc", 0.0) >= 2.5 and move_from_top_pct > 0.6):
-                                    eval_res["is_overextended"] = True
-                                    eval_res["signal_direction"] = 0 # Disqualify from fresh buy signals
-                                    eval_res["confluence_score"] = min(eval_res.get("confluence_score", 45), 45)
-                                    eval_res["overextended_warning"] = f"⚠️ EXTENDED (+{move_from_top_pct}% > Breakout). DO NOT CHASE."
-                                    if eval_res.get("category") == "INTRADAY_CASH":
-                                        eval_res["intraday_action_badge"] = "⚠️ EXTENDED (DO NOT CHASE)"
-                                        eval_res["intraday_directive"] = f"EXTENDED RUNNER @ ₹{live_p} (+{move_from_top_pct}% from breakout ₹{r_top}). Wait for pullback to VWAP/Range Top before entering."
                 except Exception:
                     pass
                 
