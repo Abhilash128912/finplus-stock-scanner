@@ -5,6 +5,19 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.2.0] - 2026-11-11
+
+### Added
+- **Institutional Micro-Base VCP Pre-Breakout Engine**: Eradicated blunt percentage filters (e.g. barring stocks > 1.5% or > 2.5%). Added micro-base compression detection (3–6 bar consolidation, base width $\le 1.2\%$) catching pre-ignition coiling 0.1%–0.7% below resistance before the move starts.
+- **Stage-2 Momentum Continuation (NETWEB Scenario)**: Support for runners already up +3% to +8% that form tight consolidation launchpads above VWAP for secondary +2% to +3% legs.
+- **4-Horizon Quantitative Scoring Engine**: Independent 0–100 scorecards for Intraday, Swing, Long-term Wealth, and Penny/4H segments.
+- **Windows File Lock Fault Tolerance**: Built `SafeRotatingFileHandler` in `time_and_logger.py` to gracefully handle Windows `PermissionError` [WinError 32] during rapid multithreaded log rotation.
+
+### Fixed
+- **BSE Sensex Spot Resolution**: Resolved stale 80,757 display by purging hardcoded fallbacks and verifying real-time BSE feed synchronization (82,353+).
+
+---
+
 ## [2.1.0] - 2026-11-08
 
 ### Added
