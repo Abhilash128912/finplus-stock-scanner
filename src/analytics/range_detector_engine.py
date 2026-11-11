@@ -212,7 +212,40 @@ class RangeDetectorEngine:
         below_vwap = last_closed_price < last_vwap
         has_volume = rvol >= 1.25
         
-        if is_coiling:
+        # Early Breakout / Coiling Proximity Calculation
+        # Distance to Range Top: positive means still below top, negative means broke above
+        dist_to_top_pct = round(((range_top_val - last_closed_price) / range_top_val) * 100.0, 2)
+        dist_to_bot_pct = round(((last_closed_price - range_bot_val) / range_bot_val) * 100.0, 2)
+        
+        # Pre-Ignition Launchpad: Price coiled within 0.1% to 0.8% of Range Top, above 50 EMA and Day VWAP
+        is_pre_ignition_long = (0.0 <= dist_to_top_pct <= 0.8) and above_ema50 and above_vwap
+        is_pre_ignition_short = (0.0 <= dist_to_bot_pct <= 0.8) and below_ema50 and below_vwap
+
+        if is_pre_ignition_long:
+            # ⚡ EARLY LAUNCHPAD LONG: Triggered at 0.3% - 0.8% before the 2.5% breakout happens!
+            signal_direction = 1
+            pts_range = 35 # Coiled at immediate breakout edge
+            pts_ema50 = 30 # Trend aligned
+            pts_vwap = 20  # Buyers in control
+            pts_volume = 15 if rvol >= 1.25 else 10
+            confluence_score = pts_range + pts_ema50 + pts_vwap + pts_volume
+            ignition_state = "PRE_IGNITION_LONG"
+            tier_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY ENTRY)"
+            reason = f"Coiled at Breakout Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_top_pct}% below Range Top (₹{range_top_val:.2f}) with VWAP & 50 EMA momentum."
+
+        elif is_pre_ignition_short:
+            # ⚡ EARLY LAUNCHPAD SHORT: Triggered at 0.3% - 0.8% before the breakdown happens!
+            signal_direction = -1
+            pts_range = 35
+            pts_ema50 = 30
+            pts_vwap = 20
+            pts_volume = 15 if rvol >= 1.25 else 10
+            confluence_score = pts_range + pts_ema50 + pts_vwap + pts_volume
+            ignition_state = "PRE_IGNITION_SHORT"
+            tier_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY SHORT)"
+            reason = f"Coiled at Breakdown Edge: Price (₹{last_closed_price:.2f}) is only {dist_to_bot_pct}% above Range Bottom (₹{range_bot_val:.2f}) with downward momentum."
+
+        elif is_coiling:
             ignition_state = "COILING_ALERT"
             tier_label = "PRE-IGNITION SQUEEZE"
             reason = "Spring coiled: 20 closed candles compressed within ±1 ATR band."
@@ -349,9 +382,14 @@ class RangeDetectorEngine:
             risk_amt = max(last_closed_price - underlying_sl, last_closed_price * 0.003)
             underlying_target = round(last_closed_price + (risk_amt * 2.0), 2)
             
-            if not is_cash_segment:
-                option_directive_text = f"BUY {call_strike_name} | Spot > Range Top. Target underlying ₹{underlying_target}."
-            intraday_directive_text = f"BUY {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
+            if ignition_state == "PRE_IGNITION_LONG":
+                if not is_cash_segment:
+                    option_directive_text = f"⚡ EARLY ATM CALL: BUY {call_strike_name} | Coiled at launchpad (Breakout Trigger: ₹{range_top_val:.2f}). Target ₹{underlying_target}."
+                intraday_directive_text = f"⚡ EARLY ENTRY: BUY {symbol} @ ₹{last_closed_price:.2f} (Trigger: ₹{range_top_val:.2f}) | SL: ₹{underlying_sl:.2f} | Target: ₹{underlying_target:.2f} (1:2 R:R)"
+            else:
+                if not is_cash_segment:
+                    option_directive_text = f"BUY {call_strike_name} | Spot > Range Top. Target underlying ₹{underlying_target}."
+                intraday_directive_text = f"BUY {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
             
             if category == "INDEX_OPTIONS":
                 risk_management = {
@@ -393,9 +431,14 @@ class RangeDetectorEngine:
             risk_amt = max(underlying_sl - last_closed_price, last_closed_price * 0.003)
             underlying_target = round(last_closed_price - (risk_amt * 2.0), 2)
             
-            if not is_cash_segment:
-                option_directive_text = f"BUY {put_strike_name} | Spot < Range Bottom. Target underlying ₹{underlying_target}."
-            intraday_directive_text = f"SHORT {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
+            if ignition_state == "PRE_IGNITION_SHORT":
+                if not is_cash_segment:
+                    option_directive_text = f"⚡ EARLY ATM PUT: BUY {put_strike_name} | Coiled at breakdown launchpad (Trigger: ₹{range_bot_val:.2f}). Target ₹{underlying_target}."
+                intraday_directive_text = f"⚡ EARLY SHORT: SHORT {symbol} @ ₹{last_closed_price:.2f} (Trigger: ₹{range_bot_val:.2f}) | SL: ₹{underlying_sl:.2f} | Target: ₹{underlying_target:.2f} (1:2 R:R)"
+            else:
+                if not is_cash_segment:
+                    option_directive_text = f"BUY {put_strike_name} | Spot < Range Bottom. Target underlying ₹{underlying_target}."
+                intraday_directive_text = f"SHORT {symbol} @ ₹{last_closed_price} | SL: ₹{underlying_sl} | Target: ₹{underlying_target} (1:2 R:R) | Exit by 15:15 IST"
             
             if category == "INDEX_OPTIONS":
                 risk_management = {
