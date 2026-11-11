@@ -21,6 +21,7 @@ import yfinance as yf
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_mcx_market_open_ist
+from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 
 logger = setup_logger("LivePaperTracker")
 
@@ -42,6 +43,7 @@ class LivePaperTracker:
         self.virtual_capital = VIRTUAL_STARTING_CAPITAL
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.is_running = False
+        self.indmoney_feed = INDMoneyLiveFeed()
         self._init_db()
         self._load_open_positions()
 
@@ -404,7 +406,15 @@ class LivePaperTracker:
         """Fetches live market price for trailing stop and P&L calculation."""
         clean_sym = symbol.split(" ")[0].upper()
 
-        # 1. Commodity Price resolution
+        # 0. Primary: Direct 0-Delay Official Broker Quote from INDmoney API
+        try:
+            ind_p = self.indmoney_feed.get_single_quote(clean_sym)
+            if ind_p and float(ind_p) > 0:
+                return round(float(ind_p), 2)
+        except Exception:
+            pass
+
+        # 1. Commodity Price resolution (Fallback)
         if sector == "COMMODITIES" or any(k in clean_sym for k in ["CRUDE", "NATGAS", "GOLD", "SILVER"]):
             # Try App #3 first
             endpoints = [
@@ -506,6 +516,14 @@ class LivePaperTracker:
         """Updates live prices, P&L, applies trailing stop-loss, and checks exit triggers."""
         if not self.active_positions:
             return
+
+        # Direct 0-delay batch pre-fetch from INDmoney broker API
+        try:
+            open_symbols = [p["symbol"].split(" ")[0].upper() for p in self.active_positions.values()]
+            if open_symbols:
+                self.indmoney_feed.fetch_batch_quotes(open_symbols, force=True)
+        except Exception:
+            pass
 
         now_ist = datetime.datetime.now(tz=IST)
         hour = now_ist.hour
