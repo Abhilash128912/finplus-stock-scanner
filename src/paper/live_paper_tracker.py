@@ -507,7 +507,8 @@ class LivePaperTracker:
             "NIFTY": "^NSEI",
             "SENSEX": "^BSESN",
             "BANKNIFTY": "^NSEBANK",
-            "MIDCPNIFTY": "^NSEI",
+            "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
+            "MIDCAP": "NIFTY_MID_SELECT.NS",
         }
 
         # 3. Yahoo Finance Live Quote for Equities & Underlying Stocks
@@ -593,7 +594,8 @@ class LivePaperTracker:
                 theta_decay_pts = min(pos["opt_entry_premium"] * 0.40, hours_held * (pos["opt_entry_premium"] * 0.025))
 
                 opt_gain_pts = (underlying_gain * delta) - theta_decay_pts
-                opt_curr = max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2))
+                max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
+                opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
                 pos["opt_current_premium"] = opt_curr
 
                 # Unrealized P&L capped at 100% loss of premium paid
