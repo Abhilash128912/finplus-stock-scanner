@@ -16,6 +16,8 @@ logger = setup_logger("NTFYDispatcher")
 
 DEFAULT_TOPICS = ["Finplus-Delta"]
 RENDER_SCANNER_URL = "https://finplus-stock-scanner.onrender.com"
+DEFAULT_NTFY_AUTH_TOKEN = "tk_wu13o6hgbaqdyt700zff66rid60s7"
+MAX_DAILY_NOTIFICATIONS = 220  # Safe cap below NTFY's 250 hard limit
 
 class NTFYDispatcher:
     def __init__(self, topics: Optional[List[str]] = None, min_interval_seconds: int = 1800):
@@ -27,13 +29,14 @@ class NTFYDispatcher:
         else:
             self.topics = DEFAULT_TOPICS
             
+        self.auth_token = os.getenv("NTFY_AUTH_TOKEN", DEFAULT_NTFY_AUTH_TOKEN)
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
         self.daily_message_count = 0
         self.last_count_reset_day = time.strftime("%Y-%m-%d")
 
     def _safe_post(self, url: str, message: str, headers: Dict[str, str]) -> bool:
-        """Dispatches NTFY notification with daily cap (up to 100/day). No burst throttling."""
+        """Dispatches NTFY notification with daily cap (up to 220/day) and Bearer auth."""
         today = time.strftime("%Y-%m-%d")
 
         # Reset daily counter on date rollover
@@ -41,13 +44,16 @@ class NTFYDispatcher:
             self.daily_message_count = 0
             self.last_count_reset_day = today
 
-        # 1. Daily cap (100 messages/day)
-        if self.daily_message_count >= 100:
-            logger.warning(f"NTFY Daily Limit reached ({self.daily_message_count}/100). Suppressing push.")
+        # 1. Daily cap (220 messages/day out of 250 free allowed)
+        if self.daily_message_count >= MAX_DAILY_NOTIFICATIONS:
+            logger.warning(f"NTFY Daily Safety Cap reached ({self.daily_message_count}/{MAX_DAILY_NOTIFICATIONS}). Suppressing push to avoid 429 lockout.")
             return False
 
         # Ensure all headers are strictly ASCII to prevent latin-1 UnicodeEncodeError
         safe_headers = {}
+        if self.auth_token:
+            safe_headers["Authorization"] = f"Bearer {self.auth_token}"
+
         for k, v in headers.items():
             if isinstance(v, str):
                 safe_headers[k] = v.encode('ascii', 'ignore').decode('ascii')
@@ -58,10 +64,10 @@ class NTFYDispatcher:
             resp = requests.post(url, data=message.encode('utf-8'), headers=safe_headers, timeout=10)
             if resp.status_code == 200:
                 self.daily_message_count += 1
-                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/100)")
+                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/{MAX_DAILY_NOTIFICATIONS})")
                 return True
             else:
-                logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code}")
+                logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
                 return False
         except Exception as e:
             logger.error(f"Failed delivering push to '{url}': {e}")

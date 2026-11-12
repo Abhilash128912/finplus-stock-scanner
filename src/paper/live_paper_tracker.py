@@ -756,8 +756,15 @@ class LivePaperTracker:
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
         """Dispatches instant NTFY push notification FIRST before populating into paper app."""
+        # Suppress local dispatches to prevent eating into cloud production quota
+        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+        if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
+            logger.debug("Local development environment: Suppressing NTFY trade opened push.")
+            return
+
         try:
             topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
+            auth_token = os.getenv("NTFY_AUTH_TOKEN", "tk_wu13o6hgbaqdyt700zff66rid60s7")
             action_tag = "chart_with_upwards_trend" if pos["action"] == "BUY" else "chart_with_downwards_trend"
             title = f"FinPlus Paper Exec | [{pos['action']}] {pos['symbol']}"
             is_opt = bool(pos.get("is_option"))
@@ -773,17 +780,21 @@ class LivePaperTracker:
                 f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
             ]
             msg = "\n".join(lines)
+            headers = {
+                "Title": title,
+                "Priority": "4",
+                "Tags": f"{action_tag},receipt",
+                "Markdown": "yes",
+                "Click": "https://finplus-stock-scanner.onrender.com/live",
+                "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+            }
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+
             requests.post(
                 f"https://ntfy.sh/{topic}",
                 data=msg.encode("utf-8"),
-                headers={
-                    "Title": title,
-                    "Priority": "4",
-                    "Tags": f"{action_tag},receipt",
-                    "Markdown": "yes",
-                    "Click": "https://finplus-stock-scanner.onrender.com/live",
-                    "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
-                },
+                headers=headers,
                 timeout=5
             )
             logger.info(f"NTFY Trade Opened push sent for {pos['symbol']}")
@@ -792,8 +803,15 @@ class LivePaperTracker:
 
     def _dispatch_ntfy_trade_closed(self, pos: Dict[str, Any], net_pnl: float, exit_price: float, exit_reason: str):
         """Dispatches instant NTFY push notification on trade closed."""
+        # Suppress local dispatches to prevent eating into cloud production quota
+        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+        if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
+            logger.debug("Local development environment: Suppressing NTFY trade closed push.")
+            return
+
         try:
             topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
+            auth_token = os.getenv("NTFY_AUTH_TOKEN", "tk_wu13o6hgbaqdyt700zff66rid60s7")
             status_tag = "tada" if net_pnl >= 0 else "x"
             pnl_sign = "+" if net_pnl >= 0 else ""
             title = f"FinPlus Paper Closed | {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})"
@@ -807,17 +825,21 @@ class LivePaperTracker:
                 f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
             ]
             msg = "\n".join(lines)
+            headers = {
+                "Title": title,
+                "Priority": "4",
+                "Tags": status_tag,
+                "Markdown": "yes",
+                "Click": "https://finplus-stock-scanner.onrender.com/live",
+                "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
+            }
+            if auth_token:
+                headers["Authorization"] = f"Bearer {auth_token}"
+
             requests.post(
                 f"https://ntfy.sh/{topic}",
                 data=msg.encode("utf-8"),
-                headers={
-                    "Title": title,
-                    "Priority": "4",
-                    "Tags": status_tag,
-                    "Markdown": "yes",
-                    "Click": "https://finplus-stock-scanner.onrender.com/live",
-                    "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
-                },
+                headers=headers,
                 timeout=5
             )
             logger.info(f"NTFY Trade Closed push sent for {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})")
