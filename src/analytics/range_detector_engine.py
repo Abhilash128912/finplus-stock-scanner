@@ -288,12 +288,27 @@ class RangeDetectorEngine:
                 tier_label = "OVEREXTENDED (> 50 EMA)"
                 reason = f"Breakout overextended: Price is +{ema50_dist_pct}% above 50 EMA (Max safe: +{max_dist_pct}%). Mean reversion risk high."
             elif breakout_dist_pct > 1.2 and not has_tight_base:
-                # Mid-air spike without base: Wait for consolidation
-                signal_direction = 0
-                confluence_score = 50
-                ignition_state = "AWAITING_BASE_FORMATION"
-                tier_label = "WAIT FOR BASE / VWAP PULLBACK"
-                reason = f"Impulse active @ ₹{last_closed_price:.2f}: Stretched +{breakout_dist_pct}% above pivot without consolidation. Wait for 3-bar base near VWAP."
+                is_cash_equity = (meta.get("category") == "INTRADAY_CASH" or meta.get("capital_tier") == "EQUITY_CASH")
+                is_cash_momentum = (is_cash_equity and (rvol >= 2.0 or (pct_change_pdc >= 2.5 and rvol >= 1.4)) and breakout_dist_pct <= 4.5)
+                if is_cash_momentum:
+                    # High-Velocity Cash Momentum Runner (e.g. ZEEL, COCHINSHIP, NETWEB)
+                    signal_direction = 1
+                    pts_range = 30
+                    pts_ema50 = 25
+                    pts_vwap = 20 if above_vwap else 10
+                    pts_volume = 20  # Max volume reward
+                    total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                    confluence_score = total_pts
+                    ignition_state = "STAGE2_MOMENTUM_RUNNER"
+                    tier_label = "🚀 HIGH-MOMENTUM CASH RUNNER (EXPLOSIVE RVOL)"
+                    reason = f"High-Velocity Cash Breakout above ₹{effective_resistance:.2f} [+{breakout_dist_pct}%] on {rvol:.1f}x Explosive RVOL. Tight SL at ₹{effective_resistance:.2f}."
+                else:
+                    # Mid-air spike without base: Wait for consolidation
+                    signal_direction = 0
+                    confluence_score = 50
+                    ignition_state = "AWAITING_BASE_FORMATION"
+                    tier_label = "WAIT FOR BASE / VWAP PULLBACK"
+                    reason = f"Impulse active @ ₹{last_closed_price:.2f}: Stretched +{breakout_dist_pct}% above pivot without consolidation. Wait for 3-bar base near VWAP."
             else:
                 signal_direction = 1
                 pts_range = 35  # Fresh breakout through resistance
@@ -334,12 +349,25 @@ class RangeDetectorEngine:
                 tier_label = "OVEREXTENDED (< 50 EMA)"
                 reason = f"Breakdown overextended: Price is {ema50_dist_pct}% below 50 EMA (Max safe: -{max_dist_pct}%). Oversold bounce risk."
             elif breakdown_dist_pct > 1.2 or (pct_change_pdc <= -2.5 and breakdown_dist_pct > 0.6):
-                # 🚫 EXTENDED BREAKDOWN: Strictly prevent chasing late breakdowns!
-                signal_direction = 0
-                confluence_score = 45
-                ignition_state = "OVEREXTENDED_SHORT"
-                tier_label = "⚠️ EXTENDED (DO NOT CHASE)"
-                reason = f"Overextended breakdown: Price (₹{last_closed_price:.2f}) is -{breakdown_dist_pct}% past Breakdown (₹{range_bot_val:.2f}) & {pct_change_pdc:+.2f}% from PDC. DO NOT CHASE. Wait for bounce to VWAP (₹{last_vwap:.2f})."
+                is_cash_equity = (meta.get("category") == "INTRADAY_CASH" or meta.get("capital_tier") == "EQUITY_CASH")
+                is_cash_breakdown = (is_cash_equity and (rvol >= 2.0 or (pct_change_pdc <= -2.5 and rvol >= 1.4)) and breakdown_dist_pct <= 4.5)
+                if is_cash_breakdown:
+                    signal_direction = -1
+                    pts_range = 30
+                    pts_ema50 = 25
+                    pts_vwap = 20 if below_vwap else 10
+                    pts_volume = 20
+                    total_pts = pts_range + pts_ema50 + pts_vwap + pts_volume
+                    confluence_score = total_pts
+                    ignition_state = "STAGE2_MOMENTUM_BREAKDOWN"
+                    tier_label = "⚡ HIGH-MOMENTUM CASH BREAKDOWN (EXPLOSIVE RVOL)"
+                    reason = f"High-Velocity Cash Breakdown below ₹{range_bot_val:.2f} [-{breakdown_dist_pct}%] on {rvol:.1f}x Volume. Trailing SL at ₹{range_bot_val:.2f}."
+                else:
+                    signal_direction = 0
+                    confluence_score = 45
+                    ignition_state = "OVEREXTENDED_SHORT"
+                    tier_label = "⚠️ EXTENDED (DO NOT CHASE)"
+                    reason = f"Overextended breakdown: Price (₹{last_closed_price:.2f}) is -{breakdown_dist_pct}% past Breakdown (₹{range_bot_val:.2f}) & {pct_change_pdc:+.2f}% from PDC. DO NOT CHASE. Wait for bounce to VWAP (₹{last_vwap:.2f})."
             else:
                 signal_direction = -1
                 pts_range = 35  # Range Bottom breakdown (fresh within 0.0% - 1.2% of pivot)

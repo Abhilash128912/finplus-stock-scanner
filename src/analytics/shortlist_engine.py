@@ -124,15 +124,18 @@ class ShortlistEngine:
         valid_long_states = (
             "PRE_IGNITION_LONG", 
             "STAGE2_CONTINUATION_LAUNCHPAD", 
+            "STAGE2_MOMENTUM_RUNNER",
             "FRESH_BREAKOUT", 
-            "BULLISH_IGNITION"
+            "BULLISH_IGNITION",
+            "RANGE_BREAKOUT_LONG"
         )
         valid_short_states = (
             "PRE_IGNITION_SHORT",
             "BEARISH_IGNITION",
             "RANGE_BREAKDOWN_SHORT",
             "MILD_BREAKDOWN_SHORT",
-            "STAGE2_DISTRIBUTION_SHORT"
+            "STAGE2_DISTRIBUTION_SHORT",
+            "STAGE2_MOMENTUM_BREAKDOWN"
         )
         valid_launchpad_states = valid_long_states + valid_short_states
 
@@ -194,7 +197,11 @@ class ShortlistEngine:
                 )
                 top_intraday_stocks = coiled_cash_stocks[:3]
             
-            if top_watch_cash:
+            if best_intraday_stock and not best_intraday_stock.get("is_standby_watch"):
+                is_active_short = int(best_intraday_stock.get("signal_direction", 0)) == -1
+                act = "SELL / SHORT INTRADAY" if is_active_short else "BUY INTRADAY"
+                cash_standby_reason = f"Active Institutional Cash Signal: {best_intraday_stock['symbol']} qualified for {act} (Score: {best_intraday_stock.get('confluence_score')}/100 | {best_intraday_stock.get('regime_badge')})."
+            elif top_watch_cash:
                 top_score = top_watch_cash.get('confluence_score', 0)
                 is_top_short = int(top_watch_cash.get("signal_direction", 0)) == -1
                 if top_score < 80:

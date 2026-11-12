@@ -201,8 +201,7 @@ class BroadMarketMaster:
                             "lot_size": 1,
                             "anti_circuit_cleared": True
                         })
-                        if len(items) >= top_n:
-                            break
+            logger.info(f"Loaded all {len(items)} Nifty 500 constituents from online fallback without alphabetical truncation.")
         except Exception as e:
             logger.error(f"Fallback fetch failed: {e}")
         return items

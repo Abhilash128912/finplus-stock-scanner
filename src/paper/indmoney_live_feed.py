@@ -88,6 +88,7 @@ class INDMoneyLiveFeed:
         self._last_fetch_time: float = 0.0
         self._broker_cooldown_until: float = 0.0
         self.scrip_registry = dict(DEFAULT_SCRIP_REGISTRY)
+        self._load_equity_instruments_registry()
 
         if AUTH_CLIENT_AVAILABLE:
             try:
@@ -110,6 +111,32 @@ class INDMoneyLiveFeed:
                 logger.info("INDMoneyLiveFeed initialized with active INDMoneyAuthClient.")
             except Exception as e:
                 logger.warning(f"Failed to initialize INDMoneyAuthClient: {e}")
+
+    def _load_equity_instruments_registry(self) -> None:
+        """Loads official NSE security codes from equity_instruments.csv if available."""
+        csv_candidates = [
+            _SCANNER_DIR / "equity_instruments.csv",
+            _APPS_ROOT / "finplus_stock_scanner" / "equity_instruments.csv",
+            _APPS_ROOT / "config" / "equity_instruments.csv"
+        ]
+        for csv_path in csv_candidates:
+            if csv_path.exists():
+                try:
+                    import csv
+                    count = 0
+                    with open(csv_path, mode="r", encoding="utf-8", errors="ignore") as f:
+                        reader = csv.DictReader(f)
+                        for row in reader:
+                            if row.get("EXCH") == "NSE" and row.get("SEGMENT") == "E" and row.get("SERIES") == "EQ":
+                                sym = row.get("TRADING_SYMBOL", "").strip().upper()
+                                sec_id = row.get("SECURITY_ID", "").strip()
+                                if sym and sec_id and sym not in self.scrip_registry:
+                                    self.scrip_registry[sym] = f"NSE_{sec_id}"
+                                    count += 1
+                    logger.info(f"Loaded {count} additional NSE scrip codes from {csv_path.name} (Total: {len(self.scrip_registry)}).")
+                    return
+                except Exception as e:
+                    logger.warning(f"Could not parse {csv_path}: {e}")
 
     def resolve_scrip_code(self, symbol: str) -> Optional[str]:
         """Resolves symbol to INDstocks scrip-code (e.g. CRUDEOILM -> MCX_573423, COFORGE -> NSE_11543)."""
@@ -149,44 +176,48 @@ class INDMoneyLiveFeed:
             self._broker_cooldown_until = now + 60.0
             return self._quote_cache
 
-        joined = ",".join(scrip_to_sym.keys())
-        url = f"{self.BASE_URL}{self.QUOTES_ENDPOINT}?scrip-codes={joined}"
+        scrip_list = list(scrip_to_sym.keys())
+        results = {}
+        chunk_size = 15
 
-        try:
-            resp = requests.get(url, headers=headers, timeout=2.5)
-            if resp.status_code == 200:
-                payload = resp.json()
-                data = payload.get("data", {})
-                
-                results = {}
-                for scrip, raw in data.items():
-                    sym = scrip_to_sym.get(scrip)
-                    if sym and raw:
-                        ltp = float(raw.get("live_price", 0.0))
-                        if ltp > 0:
-                            results[sym] = {
-                                "symbol": sym,
-                                "scrip_code": scrip,
-                                "ltp": ltp,
-                                "change_pct": float(raw.get("day_change_percentage", 0.0)),
-                                "day_high": float(raw.get("day_high", ltp)),
-                                "day_low": float(raw.get("day_low", ltp)),
-                                "day_open": float(raw.get("day_open", ltp)),
-                                "prev_close": float(raw.get("prev_close", ltp)),
-                                "volume": int(raw.get("volume", 0)),
-                                "source": "INDstocks Live Broker API"
-                            }
-                
-                if results:
-                    self._quote_cache.update(results)
-                    self._last_fetch_time = now
-                    return self._quote_cache
+        for i in range(0, len(scrip_list), chunk_size):
+            chunk = scrip_list[i:i + chunk_size]
+            joined = ",".join(chunk)
+            url = f"{self.BASE_URL}{self.QUOTES_ENDPOINT}?scrip-codes={joined}"
 
-            elif resp.status_code in (401, 403, 429):
-                logger.warning(f"INDstocks quote returned HTTP {resp.status_code}. Setting 60s cooldown.")
-                self._broker_cooldown_until = now + 60.0
-        except Exception as e:
-            logger.debug(f"INDstocks batch quote error: {e}")
+            try:
+                resp = requests.get(url, headers=headers, timeout=3.0)
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    data = payload.get("data", {})
+                    for scrip, raw in data.items():
+                        sym = scrip_to_sym.get(scrip)
+                        if sym and raw:
+                            ltp = float(raw.get("live_price", 0.0))
+                            if ltp > 0:
+                                results[sym] = {
+                                    "symbol": sym,
+                                    "scrip_code": scrip,
+                                    "ltp": ltp,
+                                    "change_pct": float(raw.get("day_change_percentage", 0.0)),
+                                    "day_high": float(raw.get("day_high", ltp)),
+                                    "day_low": float(raw.get("day_low", ltp)),
+                                    "day_open": float(raw.get("day_open", ltp)),
+                                    "prev_close": float(raw.get("prev_close", ltp)),
+                                    "volume": int(raw.get("volume", 0)),
+                                    "source": "INDstocks Live Broker API"
+                                }
+                elif resp.status_code in (401, 403, 429):
+                    logger.warning(f"INDstocks quote returned HTTP {resp.status_code}. Setting 60s cooldown.")
+                    self._broker_cooldown_until = now + 60.0
+                    break
+            except Exception as e:
+                logger.debug(f"INDstocks batch quote error for chunk {i}: {e}")
+
+        if results:
+            self._quote_cache.update(results)
+            self._last_fetch_time = now
+            return self._quote_cache
 
         return self._quote_cache
 

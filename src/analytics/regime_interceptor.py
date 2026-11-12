@@ -70,10 +70,11 @@ class App1RegimeInterceptor:
         self._cache_ts = now
         return self._cached_result
 
-    def evaluate_confluence(self, signal_direction: int, instrument_type: str = "STOCK") -> Tuple[str, str, Dict[str, Any]]:
+    def evaluate_confluence(self, signal_direction: int, instrument_type: str = "STOCK", rvol: float = 1.0, confluence_score: int = 0) -> Tuple[str, str, Dict[str, Any]]:
         """
         Cross-verifies an ignition signal against App #1 Macro Regime.
         FAIL-CLOSED: If App #1 is down or slow, the alert is tagged VETOED, never CONFIRMED.
+        Permits isolated high-RVOL cash momentum runners (e.g. ZEEL +6% on 4.8x RVOL) to bypass mild chop.
         """
         if signal_direction == 0:
             return "NO_SIGNAL", "STANDBY", {}
@@ -100,7 +101,11 @@ class App1RegimeInterceptor:
         # 1. Bullish Signal (Call Option / Long Breakout)
         if signal_direction == 1:
             if is_cash_equity:
-                # Cash equities do not suffer theta decay; allow selective high-scoring breakouts
+                # Isolated Momentum Exception: Cash equities with explosive RVOL independent of market chop
+                if (rvol >= 2.0 or confluence_score >= 80) and trend_score >= -15:
+                    return "APPROVED_ISOLATED_MOMENTUM", f"GREEN LIT (ISOLATED MOMENTUM • {rvol:.1f}x RVOL)", regime
+
+                # Standard Cash Confluence
                 if trend_score >= 15 and not is_divergent:
                     return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI UPTREND ALIGNED)", regime
                 elif trend_score >= 0 and not is_divergent:
@@ -123,7 +128,11 @@ class App1RegimeInterceptor:
         # 2. Bearish Signal (Put Option / Short Breakdown)
         elif signal_direction == -1:
             if is_cash_equity:
-                # Cash equity shorting (MIS intraday)
+                # Isolated Breakdown Exception for Cash Shorts
+                if (rvol >= 2.0 or confluence_score >= 80) and trend_score <= 15:
+                    return "APPROVED_ISOLATED_MOMENTUM", f"GREEN LIT (ISOLATED SHORT • {rvol:.1f}x RVOL)", regime
+
+                # Standard Cash Short Confluence
                 if trend_score <= -15:
                     return "APPROVED_HIGH_CONFLUENCE", "GREEN LIT (CTI DOWNTREND ALIGNED)", regime
                 elif trend_score <= 0:

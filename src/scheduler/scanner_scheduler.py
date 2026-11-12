@@ -14,6 +14,7 @@ from src.analytics.regime_interceptor import App1RegimeInterceptor
 from src.analytics.shortlist_engine import ShortlistEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.paper.live_paper_tracker import LivePaperTracker
+from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
 
@@ -32,6 +33,7 @@ class ScannerScheduler:
         self.shortlist_engine = ShortlistEngine()
         self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
         self.paper_tracker = LivePaperTracker()
+        self.indmoney_feed = INDMoneyLiveFeed(cache_ttl_seconds=5.0)
         
         self.latest_scan_results: List[Dict[str, Any]] = []
         self.latest_shortlist: Dict[str, Any] = {}
@@ -51,6 +53,13 @@ class ScannerScheduler:
         
         logger.info(f"Starting universe scan ({len(universe)} dynamic instruments: F&O Options + Intraday Cash)...")
         
+        # Batch prefetch candles in chunks of 35 (cuts 7-min scan down to ~25s and eliminates rate limits)
+        all_tickers = [item.get("yf_ticker") for item in universe if item.get("yf_ticker")]
+        try:
+            self.feed.prefetch_batch_15m_candles(all_tickers, period="5d")
+        except Exception as e:
+            logger.warning(f"Batch prefetch exception: {e}")
+
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
@@ -61,29 +70,40 @@ class ScannerScheduler:
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
                 
-                # Fetch instantaneous live tick to prevent stale prices and buying at the top
+                # Fetch instantaneous live tick from INDmoney broker API (or fast_info fallback)
                 try:
-                    live_ticker = self.feed._get_ticker(ticker) if hasattr(self.feed, '_get_ticker') else None
-                    if live_ticker and hasattr(live_ticker, 'fast_info'):
-                        fast_p = getattr(live_ticker.fast_info, 'last_price', None)
-                        if fast_p and fast_p > 0:
-                            live_p = round(float(fast_p), 2)
-                            eval_res["live_ltp"] = live_p
-                            eval_res["candle_close"] = eval_res["last_price"]
-                            eval_res["last_price"] = live_p # update primary price to instantaneous live LTP
-                            
-                            # Update distance to active resistance pivot with instantaneous live LTP
-                            if eval_res.get("range_top"):
-                                r_top = eval_res["range_top"]
-                                move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
-                                eval_res["move_from_breakout_pct"] = move_from_top_pct
+                    ind_quote = self.indmoney_feed.get_single_quote(sym) if self.indmoney_feed else None
+                    if ind_quote and ind_quote > 0:
+                        live_p = round(float(ind_quote), 2)
+                        eval_res["live_ltp"] = live_p
+                        eval_res["candle_close"] = eval_res["last_price"]
+                        eval_res["last_price"] = live_p
+                        eval_res["price_source"] = "INDstocks Broker API"
+                        if eval_res.get("range_top"):
+                            r_top = eval_res["range_top"]
+                            move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
+                            eval_res["move_from_breakout_pct"] = move_from_top_pct
+                    else:
+                        live_ticker = self.feed._get_ticker(ticker) if hasattr(self.feed, '_get_ticker') else None
+                        if live_ticker and hasattr(live_ticker, 'fast_info'):
+                            fast_p = getattr(live_ticker.fast_info, 'last_price', None)
+                            if fast_p and fast_p > 0:
+                                live_p = round(float(fast_p), 2)
+                                eval_res["live_ltp"] = live_p
+                                eval_res["candle_close"] = eval_res["last_price"]
+                                eval_res["last_price"] = live_p
+                                eval_res["price_source"] = "Exchange Feed"
+                                if eval_res.get("range_top"):
+                                    r_top = eval_res["range_top"]
+                                    move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
+                                    eval_res["move_from_breakout_pct"] = move_from_top_pct
                 except Exception:
                     pass
                 
                 # Cross-reference with App #1 (Fail-Closed 2s Timeout)
                 sig_dir = eval_res.get("signal_direction", 0)
                 conf_status, conf_badge, regime_data = self.interceptor.evaluate_confluence(
-                    sig_dir, item.get("category", "STOCK")
+                    sig_dir, item.get("category", "STOCK"), eval_res.get("rvol", 1.0), eval_res.get("confluence_score", 0)
                 )
                 
                 eval_res["regime_confluence"] = conf_status

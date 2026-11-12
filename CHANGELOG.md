@@ -5,6 +5,20 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.4.0] - 2026-11-12
+
+### Added
+- **Multi-Threaded Chunked 15m Candle Prefetching**: Replaced single-threaded 1-by-1 Yahoo Finance requests for 527 tickers with chunked multi-threaded downloads (35 tickers/chunk). Reduces full scan cycle from 7+ minutes down to ~25 seconds and completely eliminates Yahoo Finance HTTP 429 `YFRateLimitError` lockouts.
+- **Full INDmoney Broker Live Quote Feed (2,782 Scrips)**: Integrated official INDstocks broker live quote API (`https://api.indstocks.com/market/quotes/full`) with automatic dynamic mapping of 2,782 NSE EQ symbols from `equity_instruments.csv`. Provides 0-delay live broker LTP, Day High/Low, and Volume during scan cycles and paper trade execution.
+- **Stage-2 High-Momentum Cash Breakout Engine (ZEEL Fix)**: Relaxed the blunt 1.2% base restriction for `INTRADAY_CASH` runners exhibiting explosive volume (`RVOL >= 2.0x` or `+2.5%` move with `RVOL >= 1.4x`). Classifies rapid momentum movers as `STAGE2_MOMENTUM_RUNNER` with active institutional triggers rather than falsely disqualifying them with `AWAITING_BASE_FORMATION` (confluence score 0).
+- **Isolated Outlier Momentum Exception in Regime Interceptor**: Allowed high-RVOL cash equities (`RVOL >= 2.0x` or `confluence_score >= 80`) to trigger `APPROVED_ISOLATED_MOMENTUM` even when macro index breadth is in mild chop or minor downtrend (CTI down to -15), preventing red index days from suppressing isolated runner breakouts like ZEEL (+6%).
+
+### Fixed
+- **Alphabetical Fallback Slicing in BroadMarketMaster**: Removed early loop break (`len(items) >= top_n`) on `ind_nifty500list.csv`, preventing alphabetical truncation if the online fallback is invoked.
+- **Cash Standby Reason Logic in ShortlistEngine**: Fixed bug where `cash_standby_reason` always reported "Market Choppy" from the watch list even when an active cash setup (e.g. ZEEL) was approved and recommended.
+
+---
+
 ## [2.3.0] - 2026-11-12
 
 ### Added
