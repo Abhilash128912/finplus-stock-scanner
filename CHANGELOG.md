@@ -5,6 +5,22 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.3.0] - 2026-11-12
+
+### Added
+- **Midday Theta Freeze Gate (11:30 AM – 01:00 PM IST)**: Implemented empirical timing filter in `shortlist_engine.py`, `live_paper_tracker.py`, and `ntfy_dispatcher.py`. Analyzed past trade journals and NSE market microstructure proving 11:30–13:00 is a high-decay dead-zone (0% win-rate). Fresh option buying and cash entries are strictly paused during this window, automatically resuming for the 13:00+ European open session.
+- **Two-Way Intraday Cash Trading (MIS Short Selling + Long Breakouts)**: Expanded cash equity engine to recommend active `SELL / SHORT INTRADAY (MIS)` on quality, liquid non-F&O midcaps/smallcaps breaking down below support floors on high volume with tight SL (base roof) and 1:2.2 downside targets. Fully decoupled from F&O stock options (which exclusively trade CE/PE).
+- **Dedicated NTFY Token Authentication (`tk_wu13o6...`)**: Integrated official Bearer token across all dispatches in `ntfy_dispatcher.py` and `live_paper_tracker.py`, eliminating anonymous IP rate limiting.
+- **Unified 220-Message Daily Safety Cap**: Raised message allowance to 220 messages/day (safely within the 250 free daily limit), preventing HTTP 429 quota lockouts.
+- **Local Dev Push Suppression**: Suppressed local duplicate NTFY pushes so only 24/7 Render Cloud dispatches to user devices, protecting quota during development.
+
+### Fixed
+- **Unthrottled Direct NTFY Calls in Paper Tracker**: Fixed bug where `live_paper_tracker.py` made raw `requests.post()` calls on trade open/close that bypassed `NTFYDispatcher` rate limiting, which caused the 09:48 AM 429 lockout.
+- **MIDCAPNIFTY Option Price Modeling & Phantom ₹3L Profit**: Corrected underlying index mapping from `^NSEI` (25,340) to `NIFTY_MID_SELECT.NS` (~14,250), added hard option surge ceiling (max 3.0x entry premium), and purged corrupt ledger entries.
+- **Better Stack 405 Method Not Allowed**: Added native `HEAD` HTTP method handling across all API server routes in `finplus_index_breadth` and `finplus_stock_scanner` to satisfy free-tier monitoring pings.
+
+---
+
 ## [2.2.0] - 2026-11-11
 
 ### Added
