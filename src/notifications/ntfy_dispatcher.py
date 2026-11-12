@@ -46,8 +46,16 @@ class NTFYDispatcher:
             logger.warning(f"NTFY Daily Limit reached ({self.daily_message_count}/100). Suppressing push.")
             return False
 
+        # Ensure all headers are strictly ASCII to prevent latin-1 UnicodeEncodeError
+        safe_headers = {}
+        for k, v in headers.items():
+            if isinstance(v, str):
+                safe_headers[k] = v.encode('ascii', 'ignore').decode('ascii')
+            else:
+                safe_headers[k] = v
+
         try:
-            resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
+            resp = requests.post(url, data=message.encode('utf-8'), headers=safe_headers, timeout=10)
             if resp.status_code == 200:
                 self.daily_message_count += 1
                 logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/100)")
@@ -298,7 +306,7 @@ class NTFYDispatcher:
                 "Markdown": "yes",
                 "X-Markdown": "yes",
                 "Click": f"{RENDER_SCANNER_URL}/live",
-                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
+                "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
             if self._safe_post(url, message, headers):
                 success = True
@@ -418,7 +426,7 @@ class NTFYDispatcher:
                 "Markdown": "no",
                 "X-Markdown": "no",
                 "Click": f"{RENDER_SCANNER_URL}/live",
-                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
+                "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
             if self._safe_post(url, message, headers):
                 success = True
@@ -535,7 +543,7 @@ class NTFYDispatcher:
                 "Markdown": "yes",
                 "X-Markdown": "yes",
                 "Click": f"{RENDER_SCANNER_URL}/live",
-                "Actions": f"view, 📈 Live Positions, {RENDER_SCANNER_URL}/live; view, 🖥️ Scanner Cockpit, {cockpit_url}"
+                "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
             if self._safe_post(url, message, headers):
                 success = True
