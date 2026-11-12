@@ -97,13 +97,20 @@ class FNOContractMaster:
         logger.error("No live or cached fo_mktlots.csv available!")
         return ""
 
-    def load_universe(self, top_n_equities: int = 25) -> List[Dict[str, Any]]:
+    def load_universe(self, top_n_equities: int = 150) -> List[Dict[str, Any]]:
         """
-        Parses CSV, filters equities where lot <= 500 (+ RELIANCE),
+        Parses CSV, filters liquid equities where lot <= 500 (+ key leaders like MARUTI, RELIANCE),
         and returns structured metadata list.
         """
         raw_csv = self.fetch_nse_mktlots_csv()
         equities = []
+
+        # Key High-Beta / High-Volume F&O Market Movers that must ALWAYS be included
+        PRIORITY_LEADERS = {
+            "MARUTI", "M&M", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "TATAMOTORS",
+            "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK",
+            "LT", "BHARTIARTL", "TITAN", "TRENT", "BOSCHLTD", "ABB", "COFORGE"
+        }
 
         if raw_csv:
             reader = csv.reader(io.StringIO(raw_csv.strip()))
@@ -122,8 +129,8 @@ class FNOContractMaster:
                             
                         try:
                             lot = int(lot_str)
-                            # Filter rule: lot <= 500 OR RELIANCE
-                            if lot <= self.max_lot_size or sym == "RELIANCE":
+                            # Filter rule: lot <= 500 OR priority leader
+                            if lot <= self.max_lot_size or sym in PRIORITY_LEADERS:
                                 # Determine reasonable strike step based on price/lot
                                 strike_step = 50
                                 if lot <= 100:
@@ -139,14 +146,18 @@ class FNOContractMaster:
                                     "lot_size": lot,
                                     "strike_step": strike_step,
                                     "importance": "HIGH",
-                                    "category": "STOCK_OPTIONS"
+                                    "category": "STOCK_OPTIONS",
+                                    "is_priority_leader": sym in PRIORITY_LEADERS
                                 })
                         except ValueError:
                             continue
             except Exception as e:
                 logger.error(f"Error parsing fo_mktlots.csv: {e}")
 
-        # Limit to top N liquid equities for fast 15m scanning
+        # Sort priority leaders to the front, followed by remaining liquid F&O stocks
+        equities.sort(key=lambda x: (not x.get("is_priority_leader", False), x["symbol"]))
+
+        # Limit to top N liquid equities (default 150 captures all qualifying F&O stocks)
         selected_equities = equities[:top_n_equities]
         
         # Combine: Sensex (BSE), Nifty (NSE), and selected equities

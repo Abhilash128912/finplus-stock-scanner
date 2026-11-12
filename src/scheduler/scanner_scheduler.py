@@ -24,7 +24,7 @@ class ScannerScheduler:
         self.feed = MarketDataFeed(
             cache_ttl_seconds=60,
             max_lot_size=500,
-            top_n_fno_stocks=50,
+            top_n_fno_stocks=150,
             top_n_cash_stocks=750
         )
         self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=500)
