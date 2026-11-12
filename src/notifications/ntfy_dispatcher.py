@@ -190,31 +190,45 @@ class NTFYDispatcher:
             f"Trend: {reg_lbl} | ADR {adr_val}:1"
         ]
         
-        # 2. Intraday Cash (Strict Institutional Pre-Breakout & Continuation Engine)
+        # 2. Intraday Cash (Strict Institutional Pre-Breakout & Breakdown Engine)
         best_cash = shortlist.get("best_intraday_stock")
         if best_cash and best_cash.get("confluence_score", 0) >= 80 and "APPROVED" in best_cash.get("regime_confluence", ""):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
             ign = best_cash.get("ignition_state", "")
-            trig = best_cash.get("trigger_price") or best_cash.get("range_top", ltp)
             risk = best_cash.get("risk_management", {})
+            act = "SELL" if ("SELL" in best_cash.get("intraday_action_badge", "") or best_cash.get("signal_direction") == -1) else "BUY"
+            trig = best_cash.get("trigger_price") or (best_cash.get("range_bottom", ltp) if act == "SELL" else best_cash.get("range_top", ltp))
             sl = best_cash.get("tight_sl") or risk.get("stop_loss", "--")
             tgt = best_cash.get("target_price") or risk.get("target", "--")
             
-            if ign == "STAGE2_CONTINUATION_LAUNCHPAD":
-                lines.append(f"Cash: [STAGE-2 LAUNCHPAD] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
-            elif ign == "PRE_IGNITION_LONG":
-                lines.append(f"Cash: [PRE-IGNITION LAUNCHPAD] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
-            elif ign in ("FRESH_BREAKOUT", "BULLISH_IGNITION"):
-                m_pct = best_cash.get("move_from_breakout_pct", 0.0)
-                lines.append(f"Cash: [FRESH BREAKOUT] {sym} @ Rs {ltp:,.1f} (+{m_pct}% from {trig:,.1f}) | SL: {sl} | Tgt: {tgt}")
+            if act == "SELL":
+                if ign == "PRE_IGNITION_SHORT":
+                    lines.append(f"Cash: [PRE-BREAKDOWN SHORT (MIS)] {sym} @ Rs {ltp:,.1f} | Trigger: < {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+                elif ign in ("BEARISH_IGNITION", "RANGE_BREAKDOWN_SHORT"):
+                    lines.append(f"Cash: [FRESH BREAKDOWN SHORT (MIS)] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
+                elif ign == "STAGE2_DISTRIBUTION_SHORT":
+                    lines.append(f"Cash: [STAGE-2 BREAKDOWN SHORT (MIS)] {sym} @ Rs {ltp:,.1f} | Trigger: < {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+                else:
+                    lines.append(f"Cash: [QUALIFIED SHORT (MIS)] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
             else:
-                lines.append(f"Cash: [QUALIFIED BUY] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
+                if ign == "STAGE2_CONTINUATION_LAUNCHPAD":
+                    lines.append(f"Cash: [STAGE-2 LAUNCHPAD BUY] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+                elif ign == "PRE_IGNITION_LONG":
+                    lines.append(f"Cash: [PRE-IGNITION LAUNCHPAD BUY] {sym} @ Rs {ltp:,.1f} | Trigger: > {trig:,.1f} | SL: {sl} | Tgt: {tgt}")
+                elif ign in ("FRESH_BREAKOUT", "BULLISH_IGNITION"):
+                    m_pct = best_cash.get("move_from_breakout_pct", 0.0)
+                    lines.append(f"Cash: [FRESH BREAKOUT BUY] {sym} @ Rs {ltp:,.1f} (+{m_pct}% from {trig:,.1f}) | SL: {sl} | Tgt: {tgt}")
+                else:
+                    lines.append(f"Cash: [QUALIFIED BUY] {sym} @ Rs {ltp:,.1f} | SL: {sl} | Tgt: {tgt}")
         elif best_cash and best_cash.get("is_standby_watch"):
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)
-            trig = best_cash.get("trigger_price") or best_cash.get("range_top", ltp)
-            lines.append(f"Cash: [ON WATCH / COILING] {sym} @ Rs {ltp:,.1f} (Awaiting trigger > {trig:,.1f}) | Hold Cash")
+            is_watch_short = int(best_cash.get("signal_direction", 0)) == -1
+            trig = best_cash.get("trigger_price") or (best_cash.get("range_bottom", ltp) if is_watch_short else best_cash.get("range_top", ltp))
+            symb_trig = "<" if is_watch_short else ">"
+            watch_lbl = "COILING AT SUPPORT" if is_watch_short else "COILING AT RESISTANCE"
+            lines.append(f"Cash: [ON WATCH / {watch_lbl}] {sym} @ Rs {ltp:,.1f} (Awaiting trigger {symb_trig} {trig:,.1f}) | Hold Cash")
         elif best_cash:
             sym = best_cash.get("symbol")
             ltp = best_cash.get("last_price", 0.0)

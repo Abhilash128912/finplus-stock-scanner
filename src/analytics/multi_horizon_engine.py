@@ -87,93 +87,185 @@ class MultiHorizonScorer:
             except Exception:
                 pass
 
-        # Distance to Breakout Resistance Pivot
-        dist_to_pivot_pct = round(((base_high - last_price) / max(1.0, base_high)) * 100.0, 2)
-        
-        # Pillar 1: Tight Base Proximity to Resistance (30 pts)
-        if 0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2:
-            pts += 30
-            reasons.append(f"Launchpad Squeeze (Coiled {dist_to_pivot_pct}% below ₹{base_high:.2f}, Base: {base_width_pct}%)")
-        elif dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6:
-            pts += 25
-            reasons.append(f"Fresh Breakout (+{abs(dist_to_pivot_pct)}% through pivot ₹{base_high:.2f})")
-        elif base_width_pct <= 0.8:
-            pts += 20
-            reasons.append(f"Ultra-Tight Base ({base_width_pct}% spread)")
+        is_short = int(eval_res.get("signal_direction", 0)) == -1 or "SHORT" in str(eval_res.get("intraday_action_badge", ""))
 
-        # Pillar 2: Volatility Contraction Pattern (VCP) (20 pts)
-        if is_vcp_contracting and base_width_pct <= 1.0:
-            pts += 20
-            reasons.append("VCP Volatility Contraction (Candles compressing near resistance)")
-        elif is_vcp_contracting or base_width_pct <= 1.2:
-            pts += 12
-            reasons.append("Moderate Volatility Compression")
+        if not is_short:
+            # Distance to Breakout Resistance Pivot (Bullish)
+            dist_to_pivot_pct = round(((base_high - last_price) / max(1.0, base_high)) * 100.0, 2)
+            
+            # Pillar 1: Tight Base Proximity to Resistance (30 pts)
+            if 0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2:
+                pts += 30
+                reasons.append(f"Launchpad Squeeze (Coiled {dist_to_pivot_pct}% below ₹{base_high:.2f}, Base: {base_width_pct}%)")
+            elif dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6:
+                pts += 25
+                reasons.append(f"Fresh Breakout (+{abs(dist_to_pivot_pct)}% through pivot ₹{base_high:.2f})")
+            elif base_width_pct <= 0.8:
+                pts += 20
+                reasons.append(f"Ultra-Tight Base ({base_width_pct}% spread)")
 
-        # Pillar 3: Volume Dry-Up (15 pts)
-        if is_volume_dry:
-            pts += 15
-            reasons.append("Volume Dry-up in Base (Sellers exhausted)")
-        elif rvol >= 1.2 and abs(dist_to_pivot_pct) <= 0.5:
-            pts += 15
-            reasons.append("Breakout Volume Expansion")
-        elif rvol <= 0.8:
-            pts += 10
-            reasons.append("Low supply drag")
+            # Pillar 2: Volatility Contraction Pattern (VCP) (20 pts)
+            if is_vcp_contracting and base_width_pct <= 1.0:
+                pts += 20
+                reasons.append("VCP Volatility Contraction (Candles compressing near resistance)")
+            elif is_vcp_contracting or base_width_pct <= 1.2:
+                pts += 12
+                reasons.append("Moderate Volatility Compression")
 
-        # Pillar 4: Relative Strength vs Nifty (15 pts)
-        rs_spread = round(pct_change - nifty_change_pct, 2)
-        if rs_spread >= 1.5:
-            pts += 15
-            reasons.append(f"Superior Relative Strength (+{rs_spread}% vs Nifty)")
-        elif rs_spread > 0.0:
-            pts += 10
-            reasons.append(f"Positive RS (+{rs_spread}% vs Nifty)")
-
-        # Pillar 5: Trend & VWAP Support (10 pts)
-        if last_price >= vwap and last_price >= ema50:
-            pts += 10
-            reasons.append("Price > VWAP & 50 EMA Support")
-        elif last_price >= vwap:
-            pts += 6
-
-        # Pillar 6: Orderflow Imbalance (10 pts)
-        buy_pct = 50.0
-        if orderflow_data:
-            buy_pct = float(orderflow_data.get("buy_percentage", 50.0))
-            if buy_pct >= 65.0:
+            # Pillar 3: Volume Dry-Up (15 pts)
+            if is_volume_dry:
+                pts += 15
+                reasons.append("Volume Dry-up in Base (Sellers exhausted)")
+            elif rvol >= 1.2 and abs(dist_to_pivot_pct) <= 0.5:
+                pts += 15
+                reasons.append("Breakout Volume Expansion")
+            elif rvol <= 0.8:
                 pts += 10
-                reasons.append(f"Orderflow: {buy_pct:.0f}% Institutional Bids")
-            elif buy_pct >= 55.0:
-                pts += 5
-        elif pts >= 60:
-            pts += 7
+                reasons.append("Low supply drag")
 
-        # Classification: Distinguish Launchpad, High-Tight Continuation (NETWEB), and Mid-Air Extension
-        is_coiling_launchpad = (0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2 and last_price >= vwap)
-        is_fresh_breakout = (dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6 and last_price >= vwap)
-        is_continuation_runner = (pct_change >= 2.5 and is_coiling_launchpad)
-        
-        # Calculate institutional entry triggers & tight risk
-        trigger_price = round(base_high + (base_high * 0.0005), 2)  # Tick above resistance
-        tight_sl = round(base_low - (base_low * 0.0005), 2)         # Tick below base floor
-        risk_per_share = max(last_price * 0.004, trigger_price - tight_sl)
-        target_price = round(last_price + (risk_per_share * 2.2), 2) # 1:2.2 R:R
+            # Pillar 4: Relative Strength vs Nifty (15 pts)
+            rs_spread = round(pct_change - nifty_change_pct, 2)
+            if rs_spread >= 1.5:
+                pts += 15
+                reasons.append(f"Superior Relative Strength (+{rs_spread}% vs Nifty)")
+            elif rs_spread > 0.0:
+                pts += 10
+                reasons.append(f"Positive RS (+{rs_spread}% vs Nifty)")
 
-        state_label = "CONSOLIDATING"
-        badge_label = "STANDBY"
-        if is_continuation_runner:
-            state_label = "STAGE2_CONTINUATION_LAUNCHPAD"
-            badge_label = "⚡ HIGH-TIGHT BASE (STAGE-2 CONTINUATION)"
-        elif is_coiling_launchpad:
-            state_label = "PRE_IGNITION_LAUNCHPAD"
-            badge_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY ENTRY)"
-        elif is_fresh_breakout:
-            state_label = "FRESH_BREAKOUT"
-            badge_label = "🚀 FRESH BREAKOUT (TRIGGER CONFIRMED)"
-        elif dist_to_pivot_pct < -1.5 and base_width_pct > 1.5:
-            state_label = "AWAITING_BASE_FORMATION"
-            badge_label = "WAIT FOR BASE / VWAP PULLBACK"
-            pts = min(pts, 48)  # Don't buy mid-air vertical spikes without a base
+            # Pillar 5: Trend & VWAP Support (10 pts)
+            if last_price >= vwap and last_price >= ema50:
+                pts += 10
+                reasons.append("Price > VWAP & 50 EMA Support")
+            elif last_price >= vwap:
+                pts += 6
+
+            # Pillar 6: Orderflow Imbalance (10 pts)
+            buy_pct = 50.0
+            if orderflow_data:
+                buy_pct = float(orderflow_data.get("buy_percentage", 50.0))
+                if buy_pct >= 65.0:
+                    pts += 10
+                    reasons.append(f"Orderflow: {buy_pct:.0f}% Institutional Bids")
+                elif buy_pct >= 55.0:
+                    pts += 5
+            elif pts >= 60:
+                pts += 7
+
+            # Classification: Distinguish Launchpad, High-Tight Continuation (NETWEB), and Mid-Air Extension
+            is_coiling_launchpad = (0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2 and last_price >= vwap)
+            is_fresh_breakout = (dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6 and last_price >= vwap)
+            is_continuation_runner = (pct_change >= 2.5 and is_coiling_launchpad)
+            
+            # Calculate institutional entry triggers & tight risk
+            trigger_price = round(base_high + (base_high * 0.0005), 2)  # Tick above resistance
+            tight_sl = round(base_low - (base_low * 0.0005), 2)         # Tick below base floor
+            risk_per_share = max(last_price * 0.004, trigger_price - tight_sl)
+            target_price = round(last_price + (risk_per_share * 2.2), 2) # 1:2.2 R:R
+
+            state_label = "CONSOLIDATING"
+            badge_label = "STANDBY"
+            if is_continuation_runner:
+                state_label = "STAGE2_CONTINUATION_LAUNCHPAD"
+                badge_label = "⚡ HIGH-TIGHT BASE (STAGE-2 CONTINUATION)"
+            elif is_coiling_launchpad:
+                state_label = "PRE_IGNITION_LONG"
+                badge_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY ENTRY)"
+            elif is_fresh_breakout:
+                state_label = "FRESH_BREAKOUT"
+                badge_label = "🚀 FRESH BREAKOUT (TRIGGER CONFIRMED)"
+            elif dist_to_pivot_pct < -1.5 and base_width_pct > 1.5:
+                state_label = "AWAITING_BASE_FORMATION"
+                badge_label = "WAIT FOR BASE / VWAP PULLBACK"
+                pts = min(pts, 48)  # Don't buy mid-air vertical spikes without a base
+        else:
+            # Bearish / Short Breakdown Logic
+            # Distance to Breakdown Floor (Support)
+            dist_to_pivot_pct = round(((last_price - base_low) / max(1.0, base_low)) * 100.0, 2)
+            
+            # Pillar 1: Tight Base Proximity to Breakdown Support (30 pts)
+            if 0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2:
+                pts += 30
+                reasons.append(f"Breakdown Squeeze (Coiled {dist_to_pivot_pct}% above floor ₹{base_low:.2f}, Base: {base_width_pct}%)")
+            elif dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6:
+                pts += 25
+                reasons.append(f"Fresh Breakdown (-{abs(dist_to_pivot_pct)}% below floor ₹{base_low:.2f})")
+            elif base_width_pct <= 0.8:
+                pts += 20
+                reasons.append(f"Ultra-Tight Breakdown Base ({base_width_pct}% spread)")
+
+            # Pillar 2: Volatility Contraction Pattern (VCP) (20 pts)
+            if is_vcp_contracting and base_width_pct <= 1.0:
+                pts += 20
+                reasons.append("VCP Volatility Contraction (Candles compressing near breakdown floor)")
+            elif is_vcp_contracting or base_width_pct <= 1.2:
+                pts += 12
+                reasons.append("Moderate Volatility Compression")
+
+            # Pillar 3: Volume Dry-Up or Breakdown Expansion (15 pts)
+            if is_volume_dry:
+                pts += 15
+                reasons.append("Volume Dry-up in Distribution Base (Buyers exhausted)")
+            elif rvol >= 1.2 and abs(dist_to_pivot_pct) <= 0.5:
+                pts += 15
+                reasons.append("Breakdown Volume Expansion")
+            elif rvol <= 0.8:
+                pts += 10
+                reasons.append("Low buyer support drag")
+
+            # Pillar 4: Relative Weakness vs Nifty (15 pts)
+            rs_spread = round(pct_change - nifty_change_pct, 2)
+            if rs_spread <= -1.5:
+                pts += 15
+                reasons.append(f"Superior Relative Weakness ({rs_spread}% vs Nifty)")
+            elif rs_spread < 0.0:
+                pts += 10
+                reasons.append(f"Underperforming Nifty ({rs_spread}% vs Nifty)")
+
+            # Pillar 5: Trend & VWAP Resistance (10 pts)
+            if last_price <= vwap and last_price <= ema50:
+                pts += 10
+                reasons.append("Price < VWAP & 50 EMA Resistance")
+            elif last_price <= vwap:
+                pts += 6
+
+            # Pillar 6: Orderflow Imbalance (10 pts)
+            buy_pct = 50.0
+            if orderflow_data:
+                buy_pct = float(orderflow_data.get("buy_percentage", 50.0))
+                sell_pct = 100.0 - buy_pct
+                if sell_pct >= 65.0:
+                    pts += 10
+                    reasons.append(f"Orderflow: {sell_pct:.0f}% Institutional Asks (Selling)")
+                elif sell_pct >= 55.0:
+                    pts += 5
+            elif pts >= 60:
+                pts += 7
+
+            is_coiling_launchpad = (0.0 <= dist_to_pivot_pct <= 0.7 and base_width_pct <= 1.2 and last_price <= vwap)
+            is_fresh_breakout = (dist_to_pivot_pct < 0.0 and abs(dist_to_pivot_pct) <= 0.6 and last_price <= vwap)
+            is_continuation_runner = (pct_change <= -2.5 and is_coiling_launchpad)
+
+            # Downside trigger & stop loss
+            trigger_price = round(base_low - (base_low * 0.0005), 2)  # Tick below support floor
+            tight_sl = round(base_high + (base_high * 0.0005), 2)     # Tick above base ceiling
+            risk_per_share = max(last_price * 0.004, tight_sl - trigger_price)
+            target_price = round(last_price - (risk_per_share * 2.2), 2) # 1:2.2 R:R Downside
+
+            state_label = "CONSOLIDATING"
+            badge_label = "STANDBY"
+            if is_continuation_runner:
+                state_label = "STAGE2_DISTRIBUTION_SHORT"
+                badge_label = "⚡ HIGH-TIGHT DISTRIBUTION (STAGE-2 BREAKDOWN)"
+            elif is_coiling_launchpad:
+                state_label = "PRE_IGNITION_SHORT"
+                badge_label = "⚡ PRE-IGNITION LAUNCHPAD (EARLY SHORT)"
+            elif is_fresh_breakout:
+                state_label = "BEARISH_IGNITION"
+                badge_label = "📉 FRESH BREAKDOWN SHORT (TRIGGER CONFIRMED)"
+            elif dist_to_pivot_pct < -1.5 and base_width_pct > 1.5:
+                state_label = "AWAITING_BASE_FORMATION"
+                badge_label = "WAIT FOR BASE / VWAP PULLBACK"
+                pts = min(pts, 48)
 
         return {
             "score": max(0, min(100, pts)),

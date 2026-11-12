@@ -274,9 +274,17 @@ class LivePaperTracker:
             if not (vol_pts < 10 and (rvol > 0 and rvol < 1.0)):
                 ltp = float(cash.get("last_price", 0.0))
                 risk = cash.get("risk_management", {})
-                sl = float(risk.get("stop_loss", ltp * 0.985))
-                tgt = float(risk.get("target", ltp * 1.03))
-                act = "SELL" if "SELL" in cash.get("intraday_action_badge", "") else "BUY"
+                act = "SELL" if ("SELL" in cash.get("intraday_action_badge", "") or cash.get("signal_direction") == -1) else "BUY"
+                if act == "SELL":
+                    raw_sl = float(cash.get("tight_sl") or risk.get("stop_loss", ltp * 1.015))
+                    raw_tgt = float(cash.get("target_price") or risk.get("target", ltp * 0.97))
+                    sl = raw_sl if raw_sl > ltp else round(ltp * 1.015, 2)
+                    tgt = raw_tgt if (raw_tgt > 0 and raw_tgt < ltp) else round(ltp * 0.97, 2)
+                else:
+                    raw_sl = float(cash.get("tight_sl") or risk.get("stop_loss", ltp * 0.985))
+                    raw_tgt = float(cash.get("target_price") or risk.get("target", ltp * 1.03))
+                    sl = raw_sl if (raw_sl > 0 and raw_sl < ltp) else round(ltp * 0.985, 2)
+                    tgt = raw_tgt if raw_tgt > ltp else round(ltp * 1.03, 2)
                 qty = max(1, int(40_000 / ltp)) if ltp > 0 else 25
                 self.open_position(
                     source_app="APP_02_STOCK_SCANNER",
@@ -287,7 +295,7 @@ class LivePaperTracker:
                     stop_loss=sl,
                     target=tgt,
                     quantity=qty,
-                    notes=f"Cash Breakout: {cash.get('reason', '')}"
+                    notes=f"Cash Short Breakdown: {cash.get('reason', '')}" if act == "SELL" else f"Cash Breakout: {cash.get('reason', '')}"
                 )
 
         # 2. Stock Option

@@ -107,12 +107,21 @@ class ShortlistEngine:
                 except Exception:
                     pass
 
-        valid_launchpad_states = (
+        valid_long_states = (
             "PRE_IGNITION_LONG", 
             "STAGE2_CONTINUATION_LAUNCHPAD", 
             "FRESH_BREAKOUT", 
             "BULLISH_IGNITION"
         )
+        valid_short_states = (
+            "PRE_IGNITION_SHORT",
+            "BEARISH_IGNITION",
+            "RANGE_BREAKDOWN_SHORT",
+            "MILD_BREAKDOWN_SHORT",
+            "STAGE2_DISTRIBUTION_SHORT"
+        )
+        valid_launchpad_states = valid_long_states + valid_short_states
+
         approved_cash_stocks = [
             r for r in scan_results 
             if r.get("category") == "INTRADAY_CASH" 
@@ -146,22 +155,26 @@ class ShortlistEngine:
         top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
         top_watch_stocks = coiled_cash_stocks[:3]
 
-        # Do NOT force an unapproved stock to be qualified buy; if not approved, keep as watchlist standby
+        # Do NOT force an unapproved stock to be qualified buy/sell; if not approved, keep as watchlist standby
         if not best_intraday_stock and top_watch_cash:
-            # Candidate is on watch/coiling, NOT an active buy signal
+            # Candidate is on watch/coiling, NOT an active signal
             best_intraday_stock = dict(top_watch_cash)
             best_intraday_stock["is_standby_watch"] = True
-            best_intraday_stock["intraday_action_badge"] = "⚡ ON WATCH (COILING AT LAUNCHPAD)"
+            is_watch_short = int(best_intraday_stock.get("signal_direction", 0)) == -1
+            best_intraday_stock["intraday_action_badge"] = (
+                "⚡ ON WATCH (COILING AT BREAKDOWN FLOOR)" if is_watch_short else "⚡ ON WATCH (COILING AT LAUNCHPAD)"
+            )
             top_intraday_stocks = coiled_cash_stocks[:3]
         
         if top_watch_cash:
             top_score = top_watch_cash.get('confluence_score', 0)
+            is_top_short = int(top_watch_cash.get("signal_direction", 0)) == -1
             if top_score < 80:
-                cash_standby_reason = f"Capital Safeguard Active: Top candidate {top_watch_cash['symbol']} scored {top_score}/100 (below strict 80/100 threshold). HOLD CASH to protect capital."
+                cash_standby_reason = f"Capital Safeguard Active: Top {'short' if is_top_short else 'buy'} candidate {top_watch_cash['symbol']} scored {top_score}/100 (below strict 80/100 threshold). HOLD CASH to protect capital."
             else:
-                cash_standby_reason = f"Market Choppy: Top setup {top_watch_cash['symbol']} scored {top_score}/100, but index heavyweights ({heavyweights} above VWAP) lack thrust. Holding cash to avoid false intraday breakout."
+                cash_standby_reason = f"Market Choppy: Top {'short' if is_top_short else 'buy'} setup {top_watch_cash['symbol']} scored {top_score}/100, but index momentum lacks directional thrust. Holding cash to avoid false intraday {'breakdown' if is_top_short else 'breakout'}."
         else:
-            cash_standby_reason = "All 750 broad-market equities are inside range bands. Awaiting fresh breakout."
+            cash_standby_reason = "All 750 broad-market equities are inside range bands. Awaiting fresh breakout or breakdown."
             
         # Detect Trend Continuation vs Previous 30m Cycle for Stock Option
         stock_continuation = False
