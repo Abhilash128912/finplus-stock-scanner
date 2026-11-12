@@ -264,6 +264,14 @@ class LivePaperTracker:
         if not shortlist:
             return
 
+        # Midday Freeze Gate (11:30 AM to 01:00 PM IST)
+        # Suppress fresh trade ingestion during lunchtime theta decay & low-volume chop
+        now_ist = get_ist_now()
+        hour_float = now_ist.hour + (now_ist.minute / 60.0)
+        if 11.5 <= hour_float < 13.0:
+            logger.info("Midday Freeze Active (11:30 - 13:00 IST): Auto paper trade ingestion paused.")
+            return
+
         # 1. Intraday Cash
         cash = shortlist.get("best_intraday_stock")
         if cash and cash.get("confluence_score", 0) >= 80 and "APPROVED" in cash.get("regime_confluence", ""):

@@ -8,7 +8,7 @@ STRICT INSTITUTIONAL MARKET REGIME GATING:
 """
 
 from typing import Dict, Any, List, Optional
-from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
+from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 
 logger = setup_logger("ShortlistEngine")
 
@@ -46,35 +46,49 @@ class ShortlistEngine:
         midcap_radar = self._format_index_radar(midcap_item, default_sym="MIDCPNIFTY", default_lot=75, default_step=25, regime=regime)
         
         # -------------------------------------------------------------
+        # MIDDAY THETA FREEZE GATE (11:30 AM to 01:00 PM IST)
+        # Empirical rule: 11:30 - 13:00 is a dead-zone with 0% win-rate & high theta decay.
+        # Zero fresh trade signals are permitted during this window.
+        # -------------------------------------------------------------
+        now_ist = get_ist_now()
+        hour_float = now_ist.hour + (now_ist.minute / 60.0)
+        is_midday_freeze = (11.5 <= hour_float < 13.0)
+
+        # -------------------------------------------------------------
         # 1. STOCK OPTIONS: STRICT MARKET CONDITION FILTER
         # Must be: F&O (lot <= 500) + Score >= 50 + APPROVED by App #1 Macro Regime
         # -------------------------------------------------------------
-        approved_stock_options = [
-            r for r in scan_results 
-            if r.get("category") == "STOCK_OPTIONS" 
-            and r.get("signal_direction", 0) != 0
-            and r.get("confluence_score", 0) >= 50
-            and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
-        ]
-        
-        # Sort by highest confluence score
-        approved_stock_options.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
-        best_stock_option = approved_stock_options[0] if approved_stock_options else None
-        
-        # Find top candidate on watch if gated by market conditions
-        coiled_stock_options = [
-            r for r in scan_results 
-            if r.get("category") == "STOCK_OPTIONS" 
-            and r.get("signal_direction", 0) != 0
-            and r.get("confluence_score", 0) >= 50
-        ]
-        coiled_stock_options.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
-        top_watch_option = coiled_stock_options[0] if coiled_stock_options else None
-        
-        if top_watch_option:
-            stock_option_standby_reason = f"Market Choppy: Top setup {top_watch_option['symbol']} scored {top_watch_option.get('confluence_score')}/100, but Index momentum (Score: +{trend_score}/100, Heavyweights: {heavyweights} above VWAP) is below entry threshold. Option buying paused to prevent theta decay."
+        if is_midday_freeze:
+            best_stock_option = None
+            top_watch_option = None
+            stock_option_standby_reason = "Midday Theta Freeze Active (11:30 - 13:00 IST): Stock option buying paused to eliminate lunchtime time-decay & low-volume chop. Monitoring bases for 13:00+ European open."
         else:
-            stock_option_standby_reason = "All liquid F&O scrips are consolidating inside range bands. No breakout active."
+            approved_stock_options = [
+                r for r in scan_results 
+                if r.get("category") == "STOCK_OPTIONS" 
+                and r.get("signal_direction", 0) != 0
+                and r.get("confluence_score", 0) >= 50
+                and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
+            ]
+            
+            # Sort by highest confluence score
+            approved_stock_options.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+            best_stock_option = approved_stock_options[0] if approved_stock_options else None
+            
+            # Find top candidate on watch if gated by market conditions
+            coiled_stock_options = [
+                r for r in scan_results 
+                if r.get("category") == "STOCK_OPTIONS" 
+                and r.get("signal_direction", 0) != 0
+                and r.get("confluence_score", 0) >= 50
+            ]
+            coiled_stock_options.sort(key=lambda x: x.get("confluence_score", 0), reverse=True)
+            top_watch_option = coiled_stock_options[0] if coiled_stock_options else None
+            
+            if top_watch_option:
+                stock_option_standby_reason = f"Market Choppy: Top setup {top_watch_option['symbol']} scored {top_watch_option.get('confluence_score')}/100, but Index momentum (Score: +{trend_score}/100, Heavyweights: {heavyweights} above VWAP) is below entry threshold. Option buying paused to prevent theta decay."
+            else:
+                stock_option_standby_reason = "All liquid F&O scrips are consolidating inside range bands. No breakout active."
         
         # -------------------------------------------------------------
         # 2. INTRADAY CASH: 750 BROAD MARKET CROWN HERO FILTER (SCORE >= 80)
@@ -122,59 +136,73 @@ class ShortlistEngine:
         )
         valid_launchpad_states = valid_long_states + valid_short_states
 
-        approved_cash_stocks = [
-            r for r in scan_results 
-            if r.get("category") == "INTRADAY_CASH" 
-            and r.get("signal_direction", 0) != 0
-            and r.get("confluence_score", 0) >= 80
-            and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
-            and r.get("anti_circuit_status") == "SAFE"
-            and r.get("ignition_state") in valid_launchpad_states
-        ]
-        
-        # Sort by highest combined Confluence + VCP Launchpad Score
-        approved_cash_stocks.sort(
-            key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
-            reverse=True
-        )
-        best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
-        top_intraday_stocks = approved_cash_stocks[:3]
-        
-        # Find top cash candidate on watch (un-extended coiling scrips only)
-        coiled_cash_stocks = [
-            r for r in scan_results 
-            if r.get("category") == "INTRADAY_CASH" 
-            and r.get("signal_direction", 0) != 0
-            and r.get("anti_circuit_status") == "SAFE"
-            and r.get("ignition_state") in valid_launchpad_states
-        ]
-        coiled_cash_stocks.sort(
-            key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
-            reverse=True
-        )
-        top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
-        top_watch_stocks = coiled_cash_stocks[:3]
-
-        # Do NOT force an unapproved stock to be qualified buy/sell; if not approved, keep as watchlist standby
-        if not best_intraday_stock and top_watch_cash:
-            # Candidate is on watch/coiling, NOT an active signal
-            best_intraday_stock = dict(top_watch_cash)
-            best_intraday_stock["is_standby_watch"] = True
-            is_watch_short = int(best_intraday_stock.get("signal_direction", 0)) == -1
-            best_intraday_stock["intraday_action_badge"] = (
-                "⚡ ON WATCH (COILING AT BREAKDOWN FLOOR)" if is_watch_short else "⚡ ON WATCH (COILING AT LAUNCHPAD)"
-            )
-            top_intraday_stocks = coiled_cash_stocks[:3]
-        
-        if top_watch_cash:
-            top_score = top_watch_cash.get('confluence_score', 0)
-            is_top_short = int(top_watch_cash.get("signal_direction", 0)) == -1
-            if top_score < 80:
-                cash_standby_reason = f"Capital Safeguard Active: Top {'short' if is_top_short else 'buy'} candidate {top_watch_cash['symbol']} scored {top_score}/100 (below strict 80/100 threshold). HOLD CASH to protect capital."
-            else:
-                cash_standby_reason = f"Market Choppy: Top {'short' if is_top_short else 'buy'} setup {top_watch_cash['symbol']} scored {top_score}/100, but index momentum lacks directional thrust. Holding cash to avoid false intraday {'breakdown' if is_top_short else 'breakout'}."
+        if is_midday_freeze:
+            approved_cash_stocks = []
+            best_intraday_stock = None
+            top_intraday_stocks = []
+            top_watch_cash = None
+            top_watch_stocks = []
+            cash_standby_reason = "Midday Freeze Active (11:30 - 13:00 IST): Trading paused to eliminate lunchtime chop. Monitoring bases for 13:00+ European open."
+            sensex_radar["is_actionable"] = False
+            nifty_radar["is_actionable"] = False
+            midcap_radar["is_actionable"] = False
+            sensex_radar["directive"] = "Midday Theta Freeze Active (11:30 - 13:00 IST). Zero options recommended."
+            nifty_radar["directive"] = "Midday Theta Freeze Active (11:30 - 13:00 IST). Zero options recommended."
+            midcap_radar["directive"] = "Midday Theta Freeze Active (11:30 - 13:00 IST). Zero options recommended."
         else:
-            cash_standby_reason = "All 750 broad-market equities are inside range bands. Awaiting fresh breakout or breakdown."
+            approved_cash_stocks = [
+                r for r in scan_results 
+                if r.get("category") == "INTRADAY_CASH" 
+                and r.get("signal_direction", 0) != 0
+                and r.get("confluence_score", 0) >= 80
+                and "APPROVED" in r.get("regime_confluence", "")  # MUST PASS MARKET CONDITIONS TEST
+                and r.get("anti_circuit_status") == "SAFE"
+                and r.get("ignition_state") in valid_launchpad_states
+            ]
+            
+            # Sort by highest combined Confluence + VCP Launchpad Score
+            approved_cash_stocks.sort(
+                key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
+                reverse=True
+            )
+            best_intraday_stock = approved_cash_stocks[0] if approved_cash_stocks else None
+            top_intraday_stocks = approved_cash_stocks[:3]
+            
+            # Find top cash candidate on watch (un-extended coiling scrips only)
+            coiled_cash_stocks = [
+                r for r in scan_results 
+                if r.get("category") == "INTRADAY_CASH" 
+                and r.get("signal_direction", 0) != 0
+                and r.get("anti_circuit_status") == "SAFE"
+                and r.get("ignition_state") in valid_launchpad_states
+            ]
+            coiled_cash_stocks.sort(
+                key=lambda x: (x.get("confluence_score", 0) + (15 if x.get("is_launchpad") else 0)),
+                reverse=True
+            )
+            top_watch_cash = coiled_cash_stocks[0] if coiled_cash_stocks else None
+            top_watch_stocks = coiled_cash_stocks[:3]
+
+            # Do NOT force an unapproved stock to be qualified buy/sell; if not approved, keep as watchlist standby
+            if not best_intraday_stock and top_watch_cash:
+                # Candidate is on watch/coiling, NOT an active signal
+                best_intraday_stock = dict(top_watch_cash)
+                best_intraday_stock["is_standby_watch"] = True
+                is_watch_short = int(best_intraday_stock.get("signal_direction", 0)) == -1
+                best_intraday_stock["intraday_action_badge"] = (
+                    "⚡ ON WATCH (COILING AT BREAKDOWN FLOOR)" if is_watch_short else "⚡ ON WATCH (COILING AT LAUNCHPAD)"
+                )
+                top_intraday_stocks = coiled_cash_stocks[:3]
+            
+            if top_watch_cash:
+                top_score = top_watch_cash.get('confluence_score', 0)
+                is_top_short = int(top_watch_cash.get("signal_direction", 0)) == -1
+                if top_score < 80:
+                    cash_standby_reason = f"Capital Safeguard Active: Top {'short' if is_top_short else 'buy'} candidate {top_watch_cash['symbol']} scored {top_score}/100 (below strict 80/100 threshold). HOLD CASH to protect capital."
+                else:
+                    cash_standby_reason = f"Market Choppy: Top {'short' if is_top_short else 'buy'} setup {top_watch_cash['symbol']} scored {top_score}/100, but index momentum lacks directional thrust. Holding cash to avoid false intraday {'breakdown' if is_top_short else 'breakout'}."
+            else:
+                cash_standby_reason = "All 750 broad-market equities are inside range bands. Awaiting fresh breakout or breakdown."
             
         # Detect Trend Continuation vs Previous 30m Cycle for Stock Option
         stock_continuation = False

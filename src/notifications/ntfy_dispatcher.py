@@ -256,21 +256,25 @@ class NTFYDispatcher:
             lines.append("Sensex Opt: [HOLD CASH] Standby (Market Choppy | Confirmed Strike: NONE)")
 
         # 4. Stock Option (Strict 100% correlation with Dashboard)
-        stk_opt = shortlist.get("best_stock_option")
-        if stk_opt and stk_opt.get("confluence_score", 0) >= 80 and "APPROVED" in stk_opt.get("regime_confluence", ""):
-            s_sym = stk_opt.get("symbol")
-            rec_contract = stk_opt.get("recommended_contract") or f"{s_sym} ATM"
-            opt_act = "BUY" if "BUY" in stk_opt.get("option_action_badge", "BUY") else "BUY"
-            o_risk = stk_opt.get("risk_management", {})
-            u_entry = o_risk.get("underlying_entry", stk_opt.get("last_price", 0))
-            u_sl = o_risk.get("underlying_sl", "--")
-            u_tgt = o_risk.get("underlying_target", "--")
-            lines.append(f"Stock Opt: [QUALIFIED] {rec_contract} | Under: {u_entry:,.0f} | SL: {u_sl} | Tgt: {u_tgt}")
-        elif shortlist.get("top_watch_option"):
-            w = shortlist.get("top_watch_option")
-            lines.append(f"Stock Opt: [ON WATCH] {w.get('symbol')} (Score: {w.get('confluence_score')}/100 | Macro Gated)")
+        h_float = ist_now.hour + (ist_now.minute / 60.0)
+        if 11.5 <= h_float < 13.0:
+            lines.append("Stock Opt: [HOLD CASH] Midday Theta Freeze (11:30 - 13:00 IST) | Fresh buying paused")
         else:
-            lines.append("Stock Opt: [HOLD CASH] No 100/100 breakouts active | Preserving premium")
+            stk_opt = shortlist.get("best_stock_option")
+            if stk_opt and stk_opt.get("confluence_score", 0) >= 80 and "APPROVED" in stk_opt.get("regime_confluence", ""):
+                s_sym = stk_opt.get("symbol")
+                rec_contract = stk_opt.get("recommended_contract") or f"{s_sym} ATM"
+                opt_act = "BUY" if "BUY" in stk_opt.get("option_action_badge", "BUY") else "BUY"
+                o_risk = stk_opt.get("risk_management", {})
+                u_entry = o_risk.get("underlying_entry", stk_opt.get("last_price", 0))
+                u_sl = o_risk.get("underlying_sl", "--")
+                u_tgt = o_risk.get("underlying_target", "--")
+                lines.append(f"Stock Opt: [QUALIFIED] {rec_contract} | Under: {u_entry:,.0f} | SL: {u_sl} | Tgt: {u_tgt}")
+            elif shortlist.get("top_watch_option"):
+                w = shortlist.get("top_watch_option")
+                lines.append(f"Stock Opt: [ON WATCH] {w.get('symbol')} (Score: {w.get('confluence_score')}/100 | Macro Gated)")
+            else:
+                lines.append("Stock Opt: [HOLD CASH] No 100/100 breakouts active | Preserving premium")
 
         # 5. Multi-Horizon Directives (Swing, Long-Term, Penny Runner)
         swing_stk = shortlist.get("best_swing_stock")
