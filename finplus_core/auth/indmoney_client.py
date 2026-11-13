@@ -258,6 +258,11 @@ class INDMoneyAuthClient:
             logger.warning("Could not read shared config/.env: %s", e)
         return None
 
+    def force_refresh_token(self) -> str:
+        """Forces fresh token generation via headless TOTP regardless of held token timestamp."""
+        logger.info("Forcing fresh token generation via TOTP...")
+        return self.generate_fresh_token(persist_to_env=True)
+
     def get_valid_token(self, auto_refresh: bool = True) -> str:
         """
         Returns a verified active access token.
