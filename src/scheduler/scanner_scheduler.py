@@ -178,11 +178,11 @@ class ScannerScheduler:
                         await asyncio.sleep(60)
                         continue
 
-                    # 1. 09:00 AM IST: Today's Agenda
+                    # 1. 09:00 AM IST: Today's Agenda (Catch-up allowed between 09:00 and 09:29 IST)
                     slot_0900 = f"{date_str}_09:00"
-                    if hh == 9 and 0 <= mm < 5 and slot_0900 not in self._dispatched_slots:
+                    if hh == 9 and 0 <= mm < 30 and slot_0900 not in self._dispatched_slots:
                         self._dispatched_slots.add(slot_0900)
-                        logger.info("Triggering 09:00 AM IST Today's Agenda Briefing...")
+                        logger.info("Triggering 09:00 AM IST Today's Agenda Briefing (Catch-up / Wall-clock)...")
                         self.dispatcher.send_morning_tactical_briefing(shortlist=self.latest_shortlist, force=True)
 
                     # 2. Every 30 Minutes from 09:30 AM to 02:30 PM:
@@ -193,17 +193,19 @@ class ScannerScheduler:
                     ]
                     for target_h, target_m in schedule_slots:
                         slot_id = f"{date_str}_{target_h:02d}:{target_m:02d}"
-                        if hh == target_h and target_m <= mm < target_m + 5 and slot_id not in self._dispatched_slots:
+                        # 25-minute wide catch-up window so cold starts/restarts never drop scheduled pulse
+                        is_in_slot = (hh == target_h and target_m <= mm < target_m + 25)
+                        if is_in_slot and slot_id not in self._dispatched_slots:
                             self._dispatched_slots.add(slot_id)
                             label = "09:30 AM First Status & Suggestions" if (target_h, target_m) == (9, 30) else f"{target_h:02d}:{target_m:02d} IST 30m Pulse"
-                            logger.info(f"Triggering {label}...")
+                            logger.info(f"Triggering {label} (Catch-up / Wall-clock)...")
                             self.dispatcher.send_30m_shortlist_pulse(self.latest_shortlist, force=True)
 
-                    # 3. 03:00 PM (15:00) IST: End of Trade Summary
+                    # 3. 03:00 PM (15:00) IST: End of Trade Summary (Catch-up allowed between 15:00 and 15:29 IST)
                     slot_1500 = f"{date_str}_15:00"
-                    if hh == 15 and 0 <= mm < 5 and slot_1500 not in self._dispatched_slots:
+                    if hh == 15 and 0 <= mm < 30 and slot_1500 not in self._dispatched_slots:
                         self._dispatched_slots.add(slot_1500)
-                        logger.info("Triggering 03:00 PM IST End of Trade Session Summary...")
+                        logger.info("Triggering 03:00 PM IST End of Trade Session Summary (Catch-up / Wall-clock)...")
                         self.dispatcher.send_end_of_trade_summary(shortlist=self.latest_shortlist, force=True)
 
                 await asyncio.sleep(5)
@@ -216,6 +218,12 @@ class ScannerScheduler:
     async def _scanner_worker_loop(self):
         """Background 516-universe data refresher."""
         logger.info("Scanner Data Worker Loop active.")
+        # Perform initial scan in background worker so start_loop does not block clock dispatcher
+        try:
+            await asyncio.to_thread(self.scan_universe_now)
+        except Exception as e:
+            logger.error(f"Error in initial universe scan: {e}")
+
         while self.is_running:
             try:
                 sleep_secs = 60 if is_market_open_ist() else 180
@@ -232,10 +240,7 @@ class ScannerScheduler:
         self.is_running = True
         logger.info("ScannerScheduler background daemon starting...")
         
-        # Initial scan boot
-        await asyncio.to_thread(self.scan_universe_now)
-        
-        # Run loops concurrently without blocking each other
+        # Run loops concurrently immediately without blocking clock dispatcher or paper tracker
         await asyncio.gather(
             self._clock_dispatcher_loop(),
             self._scanner_worker_loop(),
