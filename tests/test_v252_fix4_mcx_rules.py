@@ -81,3 +81,4 @@ def test_mcx_session_rules_at_1500_ist(tmp_path):
     # MCX position must STAY OPEN
     assert mcx_id in tracker.active_positions, "MCX commodity position should NOT close at 15:00 IST"
     assert tracker.active_positions[mcx_id]["status"] == "OPEN"
+

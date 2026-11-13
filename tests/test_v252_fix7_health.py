@@ -52,3 +52,4 @@ async def test_health_deep_stale_feed_during_market_hours():
 
     # Reset state
     scheduler.is_stale_feed = False
+

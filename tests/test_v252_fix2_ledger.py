@@ -91,3 +91,4 @@ def test_never_send_completed_milestone(tmp_path):
     pending = ledger.get_pending_due_events(ist_sim)
     agenda_pending = [p for p in pending if p["slot_id"] == "09:00_AGENDA"]
     assert len(agenda_pending) == 0, "COMPLETED milestone appeared in pending list"
+

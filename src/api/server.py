@@ -199,6 +199,16 @@ async def deep_health_check():
     else:
         subsystem_status["notifications"] = "DISABLED"
 
+    # 6. Price Sanity & Rejected-Tick Subsystem
+    rejected_ticks_info = {}
+    if scheduler.paper_tracker and hasattr(scheduler.paper_tracker, "get_rejected_ticks_telemetry"):
+        rejected_ticks_info = scheduler.paper_tracker.get_rejected_ticks_telemetry()
+        total_rej = rejected_ticks_info.get("total_rejected_ticks", 0)
+        suspect_cnt = len(rejected_ticks_info.get("suspect_symbols", []))
+        subsystem_status["price_sanity"] = "DATA_SUSPECT" if suspect_cnt > 0 else "HEALTHY"
+    else:
+        subsystem_status["price_sanity"] = "HEALTHY"
+
     # Off-hours rule: Return 200 outside market hours, weekends, and holidays
     if not market_open or is_weekend or is_hol:
         http_status = 200
@@ -230,6 +240,7 @@ async def deep_health_check():
             "milestones": ledger_status
         },
         "ntfy_quota": ntfy_quota_info,
+        "rejected_ticks": rejected_ticks_info,
         "issues": issues
     }
 

@@ -47,8 +47,23 @@ class LivePaperTracker:
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.symbol_last_close_time: Dict[str, float] = {}
         self.rejected_ticks_count: Dict[str, int] = {}
+        self.daily_rejected_ticks_count: Dict[str, int] = {}
+        self.rejected_ticks_date_str: str = ""
+        self.last_accepted_tick_time: Dict[str, float] = {}
+        self.suspect_consecutive_good: Dict[str, List[float]] = {}
         self.suspect_symbols: set = set()
-        self.price_sanity_pct = float(os.getenv("PRICE_SANITY_MAX_PCT", "15.0"))
+        
+        # Segment-specific Price Sanity Limits
+        self.price_sanity_pct_cash = float(os.getenv("PRICE_SANITY_MAX_PCT_CASH", os.getenv("PRICE_SANITY_MAX_PCT", "15.0")))
+        self.price_sanity_pct_option = float(os.getenv("PRICE_SANITY_MAX_PCT_OPTION", "40.0"))
+        self.price_sanity_pct_mcx = float(os.getenv("PRICE_SANITY_MAX_PCT_MCX", "10.0"))
+        self.price_sanity_clear_pct = float(os.getenv("PRICE_SANITY_CLEAR_PCT", "2.0"))
+        # Backward compatibility attribute
+        self.price_sanity_pct = self.price_sanity_pct_cash
+
+        # Exit confirmation cache for bad ticks: {pos_id: (candidate_price, timestamp, exit_reason)}
+        self.pending_exit_confirmations: Dict[str, Tuple[float, float, str]] = {}
+
         self.is_running = False
         self.indmoney_feed = INDMoneyLiveFeed()
         self._init_db()
@@ -320,6 +335,10 @@ class LivePaperTracker:
         stk_opt = shortlist.get("best_stock_option")
         if stk_opt and stk_opt.get("confluence_score", 0) >= 65 and "APPROVED" in stk_opt.get("regime_confluence", ""):
             sym = stk_opt.get("recommended_contract") or f"{stk_opt.get('symbol')} ATM"
+            clean_sym = sym.split(" ")[0].upper()
+            if sym in self.suspect_symbols or clean_sym in self.suspect_symbols:
+                logger.warning(f"Blocking fresh entry for option {sym}: marked DATA_SUSPECT.")
+                return
             opt_pts = stk_opt.get("points_breakdown", {})
             opt_vol_pts = opt_pts.get("volume_pts", 0)
             opt_rvol = float(stk_opt.get("relative_volume", 0.0) or 0.0)
@@ -409,6 +428,9 @@ class LivePaperTracker:
                     pt = data.get("priority_trade")
                     if pt and pt.get("confluence_score", 0) >= 80:
                         sym = pt.get("symbol")
+                        if sym in self.suspect_symbols:
+                            logger.warning(f"Blocking fresh commodity entry for {sym}: marked DATA_SUSPECT.")
+                            return
                         ltp = float(pt.get("ltp", 0.0))
                         act = "SELL" if "SHORT" in pt.get("futures_directive", "") or "SELL" in pt.get("futures_directive", "") else "BUY"
                         if act == "SELL":
@@ -606,29 +628,183 @@ class LivePaperTracker:
                 if not live_price or live_price <= 0:
                     continue
 
-                # PRICE SANITY GUARD:
-                # 1. Reject any tick that jumps more than price_sanity_pct (default 15%) in one tick from last accepted price
-                # 2. Reject option premium > 3x entry cap
+                # Determine sanity limit for this sector/instrument
+                if is_opt:
+                    sanity_limit = self.price_sanity_pct_option
+                elif sector == "COMMODITIES":
+                    sanity_limit = self.price_sanity_pct_mcx
+                else:
+                    sanity_limit = self.price_sanity_pct_cash
+
+                # Check if this tick triggers an exit regardless of sanity guard
                 last_accepted = pos.get("current_price", entry)
-                if last_accepted > 0:
-                    pct_jump = abs(live_price - last_accepted) / last_accepted * 100.0
-                    if pct_jump > self.price_sanity_pct:
+                is_gap_reset = False
+                now_tick_ts = time.time()
+                last_tick_ts = self.last_accepted_tick_time.get(sym)
+
+                # ITEM 1: RESET REFERENCE AFTER GAP (> 30s)
+                if last_tick_ts is not None and (now_tick_ts - last_tick_ts) > 30.0:
+                    logger.info(f"reference reset after gap for {sym} (gap {now_tick_ts - last_tick_ts:.1f}s > 30s)")
+                    is_gap_reset = True
+
+                pct_jump = (abs(live_price - last_accepted) / last_accepted * 100.0) if last_accepted > 0 else 0.0
+                would_reject = (not is_gap_reset) and (pct_jump > sanity_limit)
+
+                # Pre-evaluate whether this tick triggers a stop-loss, target, or EOD exit
+                is_exit_trigger = False
+                exit_type_matched = None
+
+                if is_opt:
+                    opt_entry_val = pos.get("opt_entry_premium", 1.0)
+                    opt_tgt_val = pos.get("opt_target", round(opt_entry_val * 1.60, 2))
+                    opt_sl_val = pos.get("opt_trailing_sl", round(opt_entry_val * 0.70, 2))
+                    
+                    # Quick estimate of option premium at live_price
+                    u_gain = (entry - live_price) if is_put else (live_price - entry)
+                    d_est = min(0.70, 0.50 + (u_gain / entry) * 4) if u_gain > 0 else max(0.20, 0.50 + (u_gain / entry) * 4)
+                    opt_est = max(0.05, round(opt_entry_val + (u_gain * d_est), 2))
+                    
+                    if opt_est >= opt_tgt_val:
+                        is_exit_trigger = True
+                        exit_type_matched = "TARGET_HIT"
+                    elif opt_est <= opt_sl_val:
+                        is_exit_trigger = True
+                        exit_type_matched = "SL_HIT"
+                    elif is_equity_eod and sector in equity_sectors:
+                        is_exit_trigger = True
+                        exit_type_matched = "15:00_SQUAREOFF"
+                else:
+                    is_down = is_put or act == "SELL"
+                    if is_down:
+                        # Downward (Short / Put): SL is above entry (price goes up), Target is below entry (price goes down)
+                        if live_price >= pos["trailing_sl"]:
+                            is_exit_trigger = True
+                            exit_type_matched = "SL_HIT"
+                        elif live_price <= tgt:
+                            is_exit_trigger = True
+                            exit_type_matched = "TARGET_HIT"
+                        elif is_equity_eod and sector in equity_sectors:
+                            is_exit_trigger = True
+                            exit_type_matched = "15:00_SQUAREOFF"
+                        elif is_mcx_eod and sector == "COMMODITIES":
+                            is_exit_trigger = True
+                            exit_type_matched = "MCX_CUTOFF_SQUAREOFF"
+                    else:
+                        # Upward (Long / Call): SL is below entry (price drops), Target is above entry (price climbs)
+                        if live_price <= pos["trailing_sl"]:
+                            is_exit_trigger = True
+                            exit_type_matched = "SL_HIT"
+                        elif is_equity_eod and sector in equity_sectors:
+                            is_exit_trigger = True
+                            exit_type_matched = "15:00_SQUAREOFF"
+                        elif is_mcx_eod and sector == "COMMODITIES":
+                            is_exit_trigger = True
+                            exit_type_matched = "MCX_CUTOFF_SQUAREOFF"
+
+                # ITEM 2 & ADDENDUM D: EXIT CONFIRMATION FOR BAD TICKS
+                if is_exit_trigger:
+                    # 15:00 equity and MCX cutoff exits always close immediately
+                    is_cutoff_exit = (exit_type_matched in ("15:00_SQUAREOFF", "MCX_CUTOFF_SQUAREOFF"))
+                    
+                    if would_reject and not is_cutoff_exit:
+                        # Tick is outside sanity band and would trigger SL or Target
+                        # Check if we already have a pending confirmation within 10 seconds
+                        confirmed = False
+                        if pos_id in self.pending_exit_confirmations:
+                            prev_tick, prev_ts, prev_reason = self.pending_exit_confirmations[pos_id]
+                            if (now_tick_ts - prev_ts) <= 10.0:
+                                diff_pct = abs(live_price - prev_tick) / prev_tick * 100.0 if prev_tick > 0 else 0.0
+                                if diff_pct <= 3.0:
+                                    confirmed = True
+                                    self.pending_exit_confirmations.pop(pos_id, None)
+                                    logger.warning(
+                                        f"Exit confirmed for {sym} ({exit_type_matched}) with 2 consecutive bad ticks within {diff_pct:.1f}%: "
+                                        f"1st: {prev_tick:.2f}, 2nd: {live_price:.2f}. Closing position."
+                                    )
+                                else:
+                                    # Not within 3%: reject both and count them
+                                    self.pending_exit_confirmations.pop(pos_id, None)
+                                    self.rejected_ticks_count[sym] = self.rejected_ticks_count.get(sym, 0) + 2
+                                    self.daily_rejected_ticks_count[sym] = self.daily_rejected_ticks_count.get(sym, 0) + 2
+                                    logger.warning(
+                                        f"Exit confirmation failed for {sym}: 2nd tick ({live_price:.2f}) diverged >3% from 1st ({prev_tick:.2f}). Both ticks rejected."
+                                    )
+                                    continue
+                            else:
+                                # Expired pending confirmation (>10s)
+                                self.pending_exit_confirmations.pop(pos_id, None)
+                        
+                        if not confirmed:
+                            # First bad tick triggering exit: hold pending confirmation for up to 10s
+                            self.pending_exit_confirmations[pos_id] = (live_price, now_tick_ts, exit_type_matched)
+                            logger.warning(
+                                f"WARNING: exit price outside sanity band for {sym}: jumped {pct_jump:.1f}% "
+                                f"(from {last_accepted:.2f} to {live_price:.2f}, limit {sanity_limit}%). Holding for confirmation tick within 10s."
+                            )
+                            continue
+
+                    # If tick was inside sanity band or cutoff exit or confirmed: clear any pending and proceed with exit
+                    self.pending_exit_confirmations.pop(pos_id, None)
+                    if would_reject and is_cutoff_exit:
+                        logger.warning(
+                            f"WARNING: cutoff exit price outside sanity band for {sym}: jumped {pct_jump:.1f}% "
+                            f"(from {last_accepted:.2f} to {live_price:.2f}, limit {sanity_limit}%). Proceeding with immediate cutoff exit."
+                        )
+                    # Proceed with exit using latest tick
+                    pos["current_price"] = live_price
+                    self.last_accepted_tick_time[sym] = now_tick_ts
+                else:
+                    # Regular non-exit tick: apply price sanity guard
+                    if would_reject:
                         self.rejected_ticks_count[sym] = self.rejected_ticks_count.get(sym, 0) + 1
+                        
+                        # Date-based reset for daily rejected-tick counter
+                        today_ist = now_ist.strftime("%Y-%m-%d")
+                        if self.rejected_ticks_date_str != today_ist:
+                            self.daily_rejected_ticks_count = {}
+                            self.rejected_ticks_date_str = today_ist
+                        self.daily_rejected_ticks_count[sym] = self.daily_rejected_ticks_count.get(sym, 0) + 1
+
                         logger.warning(
                             f"WARNING: Price sanity rejected tick for {sym}: jumped {pct_jump:.1f}% "
-                            f"(from {last_accepted:.2f} to {live_price:.2f}, limit {self.price_sanity_pct}%). "
+                            f"(from {last_accepted:.2f} to {live_price:.2f}, limit {sanity_limit}%). "
                             f"Tick skipped, P&L unchanged (Rejections: {self.rejected_ticks_count[sym]})."
                         )
-                        if self.rejected_ticks_count[sym] >= 3:
+                        # Reset consecutive good tracker on rejection
+                        self.suspect_consecutive_good.pop(sym, None)
+                        if self.rejected_ticks_count[sym] >= 3 and sym not in self.suspect_symbols:
                             self.suspect_symbols.add(sym)
-                            logger.error(f"DATA_SUSPECT: Symbol {sym} has 3 consecutive rejected ticks. Flagged DATA_SUSPECT, signals blocked.")
+                            logger.info(f"DATA_SUSPECT set for {sym}: 3 consecutive rejected ticks. Flagged DATA_SUSPECT, signals blocked.")
                         continue
 
-                # Reset consecutive rejection count on good tick
-                if sym in self.rejected_ticks_count:
-                    self.rejected_ticks_count[sym] = 0
+                    # Accepted tick: update reference and timestamps
+                    self.last_accepted_tick_time[sym] = now_tick_ts
+                    pos["current_price"] = live_price
 
-                pos["current_price"] = live_price
+                    # Reset consecutive rejection count on good tick
+                    if sym in self.rejected_ticks_count:
+                        self.rejected_ticks_count[sym] = 0
+
+                    # ITEM 4 & ADDENDUM E: DATA_SUSPECT AUTO-CLEAR
+                    # Clear when 3 consecutive ticks are within PRICE_SANITY_CLEAR_PCT (default 2%) of each other
+                    if sym in self.suspect_symbols:
+                        recent_ticks = self.suspect_consecutive_good.get(sym, [])
+                        recent_ticks.append(live_price)
+                        if len(recent_ticks) > 3:
+                            recent_ticks = recent_ticks[-3:]
+                        self.suspect_consecutive_good[sym] = recent_ticks
+                        
+                        if len(recent_ticks) == 3:
+                            # Verify all 3 consecutive ticks are within PRICE_SANITY_CLEAR_PCT of each other
+                            t1, t2, t3 = recent_ticks
+                            j12 = abs(t2 - t1) / t1 * 100.0 if t1 > 0 else 0.0
+                            j23 = abs(t3 - t2) / t2 * 100.0 if t2 > 0 else 0.0
+                            j13 = abs(t3 - t1) / t1 * 100.0 if t1 > 0 else 0.0
+                            clear_limit = self.price_sanity_clear_pct
+                            if max(j12, j23, j13) <= clear_limit:
+                                self.suspect_symbols.discard(sym)
+                                self.suspect_consecutive_good.pop(sym, None)
+                                logger.info(f"DATA_SUSPECT cleared for {sym}: 3 consecutive ticks within {clear_limit}% band.")
 
                 if is_opt:
                     underlying_gain = (entry - live_price) if is_put else (live_price - entry)
@@ -830,6 +1006,20 @@ class LivePaperTracker:
                 (f"{date_ist_str}%",)
             ).fetchone()
             return round(float(row["total_pnl"] if row else 0.0), 2)
+
+    def get_rejected_ticks_telemetry(self) -> Dict[str, Any]:
+        """Returns daily rejected-tick counter metrics per symbol and overall total."""
+        today_ist = get_ist_now().strftime("%Y-%m-%d")
+        if self.rejected_ticks_date_str != today_ist:
+            self.daily_rejected_ticks_count = {}
+            self.rejected_ticks_date_str = today_ist
+        total_rejected = sum(self.daily_rejected_ticks_count.values())
+        return {
+            "date": today_ist,
+            "total_rejected_ticks": total_rejected,
+            "per_symbol": dict(self.daily_rejected_ticks_count),
+            "suspect_symbols": list(self.suspect_symbols)
+        }
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
         """Dispatches instant NTFY push notification FIRST before populating into paper app."""

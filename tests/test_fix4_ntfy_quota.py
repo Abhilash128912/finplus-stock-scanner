@@ -88,3 +88,4 @@ def test_priority_alerts_bypass_cap(tmp_path):
         assert res_priority is True
         assert mock_post.call_count == 1
         assert dispatcher.get_sent_count_today() == 221
+

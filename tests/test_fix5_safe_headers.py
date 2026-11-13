@@ -73,3 +73,4 @@ def test_send_title_with_chart_emoji_delivered_no_latin1_error():
     assert delivered is True
     assert "📈" not in captured_headers["Title"]
     assert "Institutional Long Breakout" in captured_headers["Title"]
+

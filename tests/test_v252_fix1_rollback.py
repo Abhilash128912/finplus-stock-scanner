@@ -71,3 +71,4 @@ def test_close_failure_rollback_and_retry(tmp_path):
         with tracker._get_connection() as conn:
             cnt = conn.execute("SELECT COUNT(*) as c FROM closed_paper_trades WHERE position_id = ?", (pos_id,)).fetchone()["c"]
             assert cnt == 1, "Exactly 1 row should exist in closed_paper_trades"
+

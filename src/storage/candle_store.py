@@ -173,7 +173,7 @@ class CandleStore:
             "volume": new_vol
         }
 
-    def get_candles(self, symbol: str, timeframe: str = "15m", limit: int = 150) -> List[Dict[str, Any]]:
+    def get_candles(self, symbol: str, timeframe: str = "15m", limit: int = 600) -> List[Dict[str, Any]]:
         """
         Retrieves candles formatted specifically for TradingView Lightweight Charts:
         [{ 'time': epoch, 'open': float, 'high': float, 'low': float, 'close': float, 'volume': int }]
@@ -203,7 +203,7 @@ class CandleStore:
             })
         return chart_bars
 
-    def get_candles_as_dataframe(self, symbol: str, timeframe: str = "15m", limit: int = 150) -> pd.DataFrame:
+    def get_candles_as_dataframe(self, symbol: str, timeframe: str = "15m", limit: int = 600) -> pd.DataFrame:
         """Retrieves candles formatted as a pandas DataFrame matching yfinance structure."""
         bars = self.get_candles(symbol, timeframe=timeframe, limit=limit)
         if not bars:

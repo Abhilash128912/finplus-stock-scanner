@@ -46,3 +46,4 @@ def test_holiday_skips_refresh_and_signals():
             # Universe scan on holiday must return empty / no fresh active trade signals
             results = scheduler.scan_universe_now()
             assert len(results) == 0, "No signals should be generated on an official exchange holiday"
+

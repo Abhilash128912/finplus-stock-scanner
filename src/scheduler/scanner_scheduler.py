@@ -281,9 +281,22 @@ class ScannerScheduler:
                                     force=True
                                 )
                             elif slot_id == "15:00_SUMMARY":
+                                rej_tot = 0
+                                if self.paper_tracker and hasattr(self.paper_tracker, "get_rejected_ticks_telemetry"):
+                                    rej_tot = self.paper_tracker.get_rejected_ticks_telemetry().get("total_rejected_ticks", 0)
                                 delivered = await asyncio.to_thread(
                                     self.dispatcher.send_end_of_trade_summary,
                                     shortlist=self.latest_shortlist,
+                                    force=True,
+                                    rejected_ticks_total=rej_tot
+                                )
+                            elif slot_id == "15:45_SELF_REPORT":
+                                rej_tot = 0
+                                if self.paper_tracker and hasattr(self.paper_tracker, "get_rejected_ticks_telemetry"):
+                                    rej_tot = self.paper_tracker.get_rejected_ticks_telemetry().get("total_rejected_ticks", 0)
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_1545_self_report,
+                                    rejected_ticks_total=rej_tot,
                                     force=True
                                 )
                             else: # All 30m Pulses (09:30, 10:00, 10:30, ...)

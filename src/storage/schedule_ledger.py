@@ -41,6 +41,7 @@ SCHEDULED_MILESTONES = [
     {"slot_id": "14:00_PULSE", "target_h": 14, "target_m": 0, "name": "02:00 PM 30m Pulse"},
     {"slot_id": "14:30_PULSE", "target_h": 14, "target_m": 30, "name": "02:30 PM 30m Pulse"},
     {"slot_id": "15:00_SUMMARY", "target_h": 15, "target_m": 0, "name": "03:00 PM End of Trade Summary"},
+    {"slot_id": "15:45_SELF_REPORT", "target_h": 15, "target_m": 45, "name": "03:45 PM Post-Market Self-Report"},
 ]
 
 

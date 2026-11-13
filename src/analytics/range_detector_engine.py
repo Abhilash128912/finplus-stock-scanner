@@ -31,8 +31,8 @@ def calc_atr(df: pd.DataFrame, length: int = 500) -> pd.Series:
     tr3 = (low - prev_close).abs()
     tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
     
-    eff_len = min(length, max(14, len(df) // 2))
-    return calc_rma(tr, eff_len)
+    # Exact ATR length without silent downscaling
+    return calc_rma(tr, length)
 
 def calc_intraday_vwap(df: pd.DataFrame) -> pd.Series:
     typical_price = (df['High'] + df['Low'] + df['Close']) / 3.0
@@ -44,17 +44,23 @@ def calc_intraday_vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol
 
 class RangeDetectorEngine:
-    def __init__(self, length: int = 20, mult: float = 1.0, atr_len: int = 500):
+    def __init__(self, length: int = 20, mult: float = 1.0, atr_len: int = 500, min_history_bars: int = 520):
         self.length = length
         self.mult = mult
         self.atr_len = atr_len
+        self.min_history_bars = min_history_bars
+        self.skipped_insufficient_history_count = 0
 
     def evaluate_instrument(self, raw_df: pd.DataFrame, meta: Dict[str, Any]) -> Dict[str, Any]:
         symbol = meta.get("symbol", "UNKNOWN")
-        if raw_df.empty or len(raw_df) < self.length + 5:
+        if raw_df.empty or len(raw_df) < self.min_history_bars:
+            self.skipped_insufficient_history_count += 1
+            logger.debug(f"insufficient history for {symbol}: has {len(raw_df)} bars (requires {self.min_history_bars})")
             return {
                 "symbol": symbol,
                 "status": "INSUFFICIENT_DATA",
+                "bars_count": len(raw_df),
+                "required_bars": self.min_history_bars,
                 "timestamp_utc": get_utc_iso()
             }
 
@@ -65,8 +71,8 @@ class RangeDetectorEngine:
             last_candle_date = pd.to_datetime(raw_df.index[-1]).date()
             is_hol, hol_name = is_nse_holiday(today_date)
 
-            if is_hol or last_candle_date < today_date:
-                status_desc = f"Exchange Closed ({hol_name})" if is_hol else "Market Closed / Awaiting First Live Candle"
+            if is_hol:
+                status_desc = f"Exchange Closed ({hol_name})"
                 last_price = float(raw_df['Close'].iloc[-1])
                 return {
                     "symbol": symbol,
@@ -80,7 +86,8 @@ class RangeDetectorEngine:
                     "last_price": round(last_price, 2),
                     "timestamp_utc": get_utc_iso(),
                     "intraday_action_badge": "HOLD CASH",
-                    "option_directive_badge": "MARKET CLOSED"
+                    "option_directive_badge": "MARKET CLOSED",
+                    "is_closed_candle": True
                 }
         except Exception:
             pass
@@ -89,8 +96,10 @@ class RangeDetectorEngine:
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # Closed candle slice
-        closed_df = df.iloc[:-1].copy() if len(df) > 30 else df.copy()
+        # ITEM C: CLOSED CANDLES ONLY
+        # Strictly slice off the forming unclosed candle. All range, ATR, EMA50, and breakout logic
+        # must be computed purely on closed bars.
+        closed_df = df.iloc[:-1].copy() if len(df) >= 2 else df.copy()
         
         # Indicators
         closed_df['atr'] = calc_atr(closed_df, self.atr_len) * self.mult

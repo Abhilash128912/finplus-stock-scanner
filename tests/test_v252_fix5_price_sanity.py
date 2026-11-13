@@ -67,3 +67,4 @@ def test_price_sanity_rejects_spike_and_flags_suspect(tmp_path):
     assert tracker.rejected_ticks_count.get("FAKEPUMP") == 3
     # After 3 consecutive rejections, symbol must be in suspect_symbols (DATA_SUSPECT)
     assert "FAKEPUMP" in tracker.suspect_symbols, "Symbol was not flagged DATA_SUSPECT after 3 consecutive rejected ticks!"
+

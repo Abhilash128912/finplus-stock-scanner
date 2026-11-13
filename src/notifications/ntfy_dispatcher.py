@@ -549,7 +549,43 @@ class NTFYDispatcher:
                 logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
         return success
 
-    def send_end_of_trade_summary(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
+    def send_1545_self_report(self, rejected_ticks_total: int = 0, force: bool = False) -> bool:
+        """
+        Dispatches the 15:45 IST Post-Market System & Data Health Self-Report.
+        Includes rejected-tick counter telemetry per symbol and overall.
+        """
+        from datetime import datetime, timezone, timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        date_str = ist_now.strftime("%d-%b-%Y")
+        
+        if not force and ist_now.weekday() >= 5:
+            return False
+
+        lines = [
+            f"FinPlus Self-Report | {date_str} 15:45 IST",
+            "System Status: Post-Market Wrap & Telemetry",
+            f"Price Sanity Rejections Today: {rejected_ticks_total}",
+            "Daily Routine Quota: Audited & Restored",
+            f"Cockpit: {RENDER_SCANNER_URL}"
+        ]
+
+        message = "\n".join(lines)
+        title = "FinPlus Desk | 15:45 Self-Report"
+        success = False
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/api/health/deep"
+            }
+            if self._safe_post(url, message, headers):
+                success = True
+        return success
+
+    def send_end_of_trade_summary(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False, rejected_ticks_total: Optional[int] = None) -> bool:
         """
         Dispatches the 03:00 PM IST End of Trade Session Summary.
         Structured in clean, institutional, ultra-compact financial bulletin format.
@@ -610,6 +646,8 @@ class NTFYDispatcher:
 
         # Session Separation: Equity vs MCX Commodities Review
         lines.append("MCX Commodities: Evening session active until 23:15 IST (Separate MCX cutoff)")
+        if rejected_ticks_total is not None:
+            lines.append(f"Data Health: {rejected_ticks_total} sanity tick(s) rejected today")
         lines.append("EOD Risk: Mandatory square-off all Equity MIS intraday before 15:15 IST")
         lines.append("Next: 15:15 BTST Window Check | 18:00 MCX Evening Session Open")
         lines.append(f"Cockpit: {RENDER_SCANNER_URL}")

@@ -5,6 +5,31 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.5.3] - 2026-11-13
+
+### Fixed
+- **P0 - Reference Price Gap Reset (`LivePaperTracker`)**:
+  - Added timestamp tracking of last accepted tick per symbol (`last_accepted_tick_time`).
+  - If the gap since the last accepted tick exceeds 30 seconds, automatically accepts the incoming tick as the new reference price without percentage rejection and logs INFO `"reference reset after gap"`. Prevents broker cooldown or network pauses from triggering false spike rejections.
+- **P0 - Unblocked Real Exits Guard (`LivePaperTracker`)**:
+  - Strictly exempted stop-loss hits, target hits, and 15:00 equity / MCX cutoff square-offs from price sanity rejection.
+  - Exits always execute using the latest tick; if the tick falls outside the normal sanity band, logs WARNING `"exit price outside sanity band"` while still cleanly closing the trade and persisting to the closed trade ledger.
+- **P0 - Segment-Specific Sanity Bands (`LivePaperTracker`)**:
+  - Implemented configurable separate limits for instrument classes:
+    - Cash equities: `PRICE_SANITY_MAX_PCT_CASH` (default 15.0%).
+    - Options: `PRICE_SANITY_MAX_PCT_OPTION` (default 40.0%), keeping the 3x entry premium cap.
+    - MCX Commodities: `PRICE_SANITY_MAX_PCT_MCX` (default 10.0%).
+- **P1 - DATA_SUSPECT Circuit Breaker Auto-Clear (`LivePaperTracker`)**:
+  - Automatically clears `DATA_SUSPECT` status when 3 consecutive incoming ticks are within the sanity band of each other.
+  - Emits INFO log upon setting and clearing `DATA_SUSPECT`.
+  - Restricted `DATA_SUSPECT` enforcement to strictly blocking NEW trade entries; never blocks position updates or exits.
+- **P1 - Daily Rejected-Tick Telemetry & 15:45 Self-Report (`LivePaperTracker`, `APIServer`, `NTFYDispatcher`, `ScheduleLedger`)**:
+  - Tracks rejected tick counts per symbol per day (`daily_rejected_ticks_count`), resetting cleanly on new IST calendar dates.
+  - Exposed total and per-symbol rejected-tick telemetry in `/api/health/deep` under the `rejected_ticks` key.
+  - Added `15:45_SELF_REPORT` milestone to `ScheduleLedger` and `NTFYDispatcher` to report daily price sanity rejections and system health.
+
+---
+
 ## [2.5.2] - 2026-11-13
 
 ### Fixed

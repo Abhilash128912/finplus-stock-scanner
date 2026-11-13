@@ -67,3 +67,4 @@ def test_tiered_quota_enforcement(tmp_path):
         assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN") is False
         assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE") is False
         assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS") is False
+
