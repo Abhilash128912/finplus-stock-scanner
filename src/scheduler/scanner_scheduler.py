@@ -53,12 +53,21 @@ class ScannerScheduler:
         
         logger.info(f"Starting universe scan ({len(universe)} dynamic instruments: F&O Options + Intraday Cash)...")
         
-        # Batch prefetch candles in chunks of 35 (cuts 7-min scan down to ~25s and eliminates rate limits)
+        # Batch prefetch candles in chunks of 35 (cuts scan down to ~25s and eliminates rate limits)
         all_tickers = [item.get("yf_ticker") for item in universe if item.get("yf_ticker")]
         try:
             self.feed.prefetch_batch_15m_candles(all_tickers, period="5d")
         except Exception as e:
             logger.warning(f"Batch prefetch exception: {e}")
+
+        # Batch prefetch ALL live quotes from INDmoney broker API upfront in one fast sweep
+        all_symbols = [item.get("symbol") for item in universe if item.get("symbol")]
+        ind_quotes_map = {}
+        if self.indmoney_feed:
+            try:
+                ind_quotes_map = self.indmoney_feed.fetch_batch_quotes(all_symbols)
+            except Exception as e:
+                logger.warning(f"INDmoney batch prefetch error: {e}")
 
         for item in universe:
             ticker = item.get("yf_ticker")
@@ -70,9 +79,10 @@ class ScannerScheduler:
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
                 
-                # Fetch instantaneous live tick from INDmoney broker API (or fast_info fallback)
+                # Fetch instantaneous live tick from INDmoney broker API cache (or fast_info fallback)
                 try:
-                    ind_quote = self.indmoney_feed.get_single_quote(sym) if self.indmoney_feed else None
+                    cached_quote = ind_quotes_map.get(sym)
+                    ind_quote = cached_quote.get("ltp") if cached_quote else None
                     if ind_quote and ind_quote > 0:
                         live_p = round(float(ind_quote), 2)
                         eval_res["live_ltp"] = live_p

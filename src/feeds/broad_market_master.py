@@ -139,6 +139,18 @@ class BroadMarketMaster:
             if remaining_needed > 0:
                 other_valid = valid[~valid.index.isin(quality_df.index)].sort_values(by="turnover_cr", ascending=False)
                 combined_df = pd.concat([quality_df, other_valid.head(remaining_needed)])
+                
+                # If still below top_n (because Excel had null close/volume for remaining rows), pad from broader df
+                still_needed = top_n - len(combined_df)
+                if still_needed > 0:
+                    included_symbols = set(combined_df["clean_sym"])
+                    remaining_df = df[df["Symbol"].notnull()].copy()
+                    remaining_df["clean_sym"] = remaining_df["Symbol"].astype(str).str.strip().str.upper()
+                    remaining_df = remaining_df[
+                        (~remaining_df["clean_sym"].isin(LARGE_CAP_SYMBOLS)) &
+                        (~remaining_df["clean_sym"].isin(included_symbols))
+                    ]
+                    combined_df = pd.concat([combined_df, remaining_df.head(still_needed)])
             else:
                 combined_df = quality_df.head(top_n)
 

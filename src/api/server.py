@@ -273,3 +273,183 @@ async def sync_paper_positions():
     scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
 
+
+# -------------------------------------------------------------
+# Independent Candle Store & Real-Time Charting Engine
+# -------------------------------------------------------------
+@app.get("/api/candles/{symbol}")
+async def get_candles_endpoint(symbol: str, timeframe: str = "15m", limit: int = 150):
+    """Returns stored/synthesized candles for a symbol formatted for TradingView Lightweight Charts."""
+    from src.storage.candle_store import CandleStore
+    cs = CandleStore()
+    clean = symbol.split(" ")[0].upper()
+    bars = cs.get_candles(clean, timeframe=timeframe, limit=limit)
+    
+    # If not enough local candles yet, populate on-demand
+    if len(bars) < 10:
+        try:
+            df = scheduler.feed.fetch_15m_candles(f"{clean}.NS", period="5d")
+            if not df.empty:
+                bars = cs.get_candles(clean, timeframe=timeframe, limit=limit)
+        except Exception:
+            pass
+
+    return {
+        "symbol": clean,
+        "timeframe": timeframe,
+        "count": len(bars),
+        "bars": bars
+    }
+
+
+@app.get("/chart/{symbol}", response_class=HTMLResponse)
+async def serve_symbol_chart(symbol: str):
+    """Renders interactive dark-mode TradingView Lightweight Charts canvas with zero-delay local candles."""
+    clean = symbol.split(" ")[0].upper()
+    
+    # Find active breakout levels from latest scan results
+    levels = {}
+    for r in scheduler.latest_scan_results:
+        if r.get("symbol") == clean:
+            levels = {
+                "range_top": r.get("range_top"),
+                "range_bottom": r.get("range_bottom"),
+                "vwap": r.get("vwap"),
+                "ema50": r.get("ema50"),
+                "ltp": r.get("live_ltp") or r.get("last_price")
+            }
+            break
+
+    html_content = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinPlus+ Chart | {clean}</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            background-color: #0b0f19;
+            color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, monospace;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }}
+        header {{
+            background: #111827;
+            padding: 10px 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #1f2937;
+        }}
+        .sym-title {{ font-size: 1.15rem; font-weight: 700; color: #38bdf8; display: flex; align-items: center; gap: 8px; }}
+        .badge {{ background: #059669; color: #fff; font-size: 0.75rem; padding: 2px 7px; border-radius: 4px; }}
+        .legend {{ display: flex; gap: 14px; font-size: 0.8rem; color: #94a3b8; }}
+        .legend span b {{ color: #f8fafc; }}
+        #tv_chart {{ flex: 1; width: 100%; }}
+    </style>
+</head>
+<body>
+    <header>
+        <div class="sym-title">
+            <span>{clean} (15m Intraday)</span>
+            <span class="badge">0-DELAY BROKER FEED</span>
+        </div>
+        <div class="legend" id="hud_legend">
+            <span>LTP: <b id="hud_ltp">{levels.get('ltp', '--')}</b></span>
+            <span style="color:#10b981;">Range Top (Breakout): <b id="hud_rt">{levels.get('range_top', '--')}</b></span>
+            <span style="color:#ef4444;">Range Bottom (Breakdown): <b id="hud_rb">{levels.get('range_bottom', '--')}</b></span>
+            <span style="color:#a855f7;">VWAP: <b id="hud_vwap">{levels.get('vwap', '--')}</b></span>
+        </div>
+    </header>
+    <div id="tv_chart"></div>
+
+    <script>
+        const chartContainer = document.getElementById('tv_chart');
+        const chart = LightweightCharts.createChart(chartContainer, {{
+            layout: {{
+                background: {{ color: '#0b0f19' }},
+                textColor: '#94a3b8',
+                fontSize: 12,
+            }},
+            grid: {{
+                vertLines: {{ color: '#161e2e' }},
+                horzLines: {{ color: '#161e2e' }},
+            }},
+            crosshair: {{
+                mode: LightweightCharts.CrosshairMode.Normal,
+            }},
+            timeScale: {{
+                borderColor: '#1f2937',
+                timeVisible: true,
+                secondsVisible: false,
+            }},
+            rightPriceScale: {{
+                borderColor: '#1f2937',
+            }},
+        }});
+
+        const candleSeries = chart.addCandlestickSeries({{
+            upColor: '#10b981',
+            downColor: '#ef4444',
+            borderVisible: false,
+            wickUpColor: '#10b981',
+            wickDownColor: '#ef4444',
+        }});
+
+        const rangeTop = {levels.get('range_top') or 'null'};
+        const rangeBottom = {levels.get('range_bottom') or 'null'};
+
+        if (rangeTop) {{
+            candleSeries.createPriceLine({{
+                price: rangeTop,
+                color: '#10b981',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: 'RANGE TOP (BUY)',
+            }});
+        }}
+
+        if (rangeBottom) {{
+            candleSeries.createPriceLine({{
+                price: rangeBottom,
+                color: '#ef4444',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: 'RANGE BOTTOM (SELL)',
+            }});
+        }}
+
+        async function loadCandles() {{
+            try {{
+                const res = await fetch('/api/candles/{clean}?timeframe=15m&limit=150');
+                const data = await res.json();
+                if (data.bars && data.bars.length > 0) {{
+                    candleSeries.setData(data.bars);
+                    const lastBar = data.bars[data.bars.length - 1];
+                    document.getElementById('hud_ltp').textContent = 'Rs ' + Number(lastBar.close).toFixed(2);
+                }}
+            }} catch(e) {{
+                console.error("Candle load error:", e);
+            }}
+        }}
+
+        loadCandles();
+        setInterval(loadCandles, 5000); // 5-second live refresh
+
+        window.addEventListener('resize', () => {{
+            chart.applyOptions({{ width: chartContainer.clientWidth, height: chartContainer.clientHeight }});
+        }});
+    </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content)
+
+

@@ -79,12 +79,18 @@ class MarketDataFeed:
             try:
                 raw_df = yf.download(chunk, period=period, interval="15m", group_by="ticker", progress=False, threads=True)
                 if raw_df is not None and not raw_df.empty:
+                    from src.storage.candle_store import CandleStore
+                    cs = CandleStore()
                     if len(chunk) == 1:
                         ticker = chunk[0]
                         df = raw_df.copy()
                         if isinstance(df.columns, pd.MultiIndex):
                             df.columns = df.columns.get_level_values(0)
                         self._cache[ticker] = {'df': df, 'ts': now}
+                        try:
+                            cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
+                        except Exception:
+                            pass
                         downloaded += 1
                     else:
                         for ticker in chunk:
@@ -93,28 +99,40 @@ class MarketDataFeed:
                                     df = raw_df[ticker].dropna(how="all").copy()
                                     if not df.empty:
                                         self._cache[ticker] = {'df': df, 'ts': now}
+                                        try:
+                                            cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
+                                        except Exception:
+                                            pass
                                         downloaded += 1
                             except Exception:
                                 pass
             except Exception as e:
                 logger.error(f"Batch candle chunk {i // chunk_size + 1} failed: {e}")
 
-        logger.info(f"Prefetch complete: {downloaded}/{len(needed)} tickers updated in cache.")
+        logger.info(f"Prefetch complete: {downloaded}/{len(needed)} tickers updated in cache and persistent candle store.")
         return downloaded
 
     def fetch_15m_candles(self, ticker: str, period: str = "5d") -> pd.DataFrame:
-        """Fetches 15-minute intraday bars with in-memory caching."""
+        """Fetches 15-minute intraday bars with in-memory caching and persistent DB fallback."""
         now = time.time()
         if ticker in self._cache:
             entry = self._cache[ticker]
             if (now - entry['ts']) < self.cache_ttl:
                 return entry['df']
                 
+        clean_sym = ticker.replace(".NS", "")
+        from src.storage.candle_store import CandleStore
+        cs = CandleStore()
+
         try:
             logger.info(f"Downloading 15m candles for {ticker} (Period: {period})...")
             df = yf.download(ticker, period=period, interval="15m", progress=False)
             if df.empty:
-                logger.warning(f"Empty data returned for {ticker}")
+                logger.warning(f"Empty data returned for {ticker}. Checking local candle store...")
+                local_df = cs.get_candles_as_dataframe(clean_sym, "15m")
+                if not local_df.empty:
+                    self._cache[ticker] = {'df': local_df, 'ts': now}
+                    return local_df
                 return pd.DataFrame()
                 
             if isinstance(df.columns, pd.MultiIndex):
@@ -124,9 +142,17 @@ class MarketDataFeed:
                 'df': df,
                 'ts': now
             }
+            try:
+                cs.save_dataframe_candles(clean_sym, "15m", df)
+            except Exception:
+                pass
             return df
         except Exception as e:
-            logger.error(f"Error downloading {ticker}: {e}")
+            logger.error(f"Error downloading {ticker}: {e}. Falling back to local candle store...")
+            local_df = cs.get_candles_as_dataframe(clean_sym, "15m")
+            if not local_df.empty:
+                self._cache[ticker] = {'df': local_df, 'ts': now}
+                return local_df
             if ticker in self._cache:
                 return self._cache[ticker]['df']
             return pd.DataFrame()

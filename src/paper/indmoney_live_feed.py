@@ -178,7 +178,7 @@ class INDMoneyLiveFeed:
 
         scrip_list = list(scrip_to_sym.keys())
         results = {}
-        chunk_size = 15
+        chunk_size = 35
 
         for i in range(0, len(scrip_list), chunk_size):
             chunk = scrip_list[i:i + chunk_size]
@@ -186,7 +186,7 @@ class INDMoneyLiveFeed:
             url = f"{self.BASE_URL}{self.QUOTES_ENDPOINT}?scrip-codes={joined}"
 
             try:
-                resp = requests.get(url, headers=headers, timeout=3.0)
+                resp = requests.get(url, headers=headers, timeout=4.0)
                 if resp.status_code == 200:
                     payload = resp.json()
                     data = payload.get("data", {})
@@ -207,8 +207,40 @@ class INDMoneyLiveFeed:
                                     "volume": int(raw.get("volume", 0)),
                                     "source": "INDstocks Live Broker API"
                                 }
-                elif resp.status_code in (401, 403, 429):
-                    logger.warning(f"INDstocks quote returned HTTP {resp.status_code}. Setting 60s cooldown.")
+                elif resp.status_code in (401, 403):
+                    logger.warning(f"INDstocks returned HTTP {resp.status_code}. Auto-refreshing session token via headless TOTP...")
+                    try:
+                        self.auth_client.generate_fresh_token()
+                        headers = self.auth_client.get_auth_headers()
+                        # Retry current chunk with fresh credentials
+                        retry_resp = requests.get(url, headers=headers, timeout=4.0)
+                        if retry_resp.status_code == 200:
+                            payload = retry_resp.json()
+                            data = payload.get("data", {})
+                            for scrip, raw in data.items():
+                                sym = scrip_to_sym.get(scrip)
+                                if sym and raw:
+                                    ltp = float(raw.get("live_price", 0.0))
+                                    if ltp > 0:
+                                        results[sym] = {
+                                            "symbol": sym,
+                                            "scrip_code": scrip,
+                                            "ltp": ltp,
+                                            "change_pct": float(raw.get("day_change_percentage", 0.0)),
+                                            "day_high": float(raw.get("day_high", ltp)),
+                                            "day_low": float(raw.get("day_low", ltp)),
+                                            "day_open": float(raw.get("day_open", ltp)),
+                                            "prev_close": float(raw.get("prev_close", ltp)),
+                                            "volume": int(raw.get("volume", 0)),
+                                            "source": "INDstocks Live Broker API"
+                                        }
+                            continue
+                    except Exception as refresh_err:
+                        logger.error(f"Failed to auto-refresh token via TOTP: {refresh_err}")
+                    self._broker_cooldown_until = now + 60.0
+                    break
+                elif resp.status_code == 429:
+                    logger.warning("INDstocks quote returned HTTP 429 rate limit. Setting 60s cooldown.")
                     self._broker_cooldown_until = now + 60.0
                     break
             except Exception as e:
