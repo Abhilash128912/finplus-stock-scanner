@@ -45,3 +45,4 @@ def test_daily_latch_deduplication(tmp_path):
     assert ledger.is_symbol_latched_today(date_str, symbol) is True
     # Different symbol on same day can still latch
     assert ledger.try_latch_daily_breakout(date_str, "TCS", 1, 3800.0) is True
+

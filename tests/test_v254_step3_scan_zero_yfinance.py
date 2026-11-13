@@ -111,3 +111,4 @@ def test_broker_stale_with_open_position_triggers_fallback_and_blocks_new_entry(
     assert eval_res["signal_direction"] == 0, "YF_FALLBACK data must not produce directional entry signal!"
     assert eval_res["feed_status"] == "YF_FALLBACK"
     assert "VETOED" in eval_res["regime_confluence"]
+

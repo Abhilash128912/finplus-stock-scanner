@@ -33,3 +33,4 @@ def test_lux_real_parity_against_tradingview_export():
         
         assert abs(res["range_top"] - expected_top) <= 0.05 * expected_top, f"Mismatch in box top for {csv_file.name}"
         assert abs(res["range_bottom"] - expected_bot) <= 0.05 * expected_bot, f"Mismatch in box bottom for {csv_file.name}"
+

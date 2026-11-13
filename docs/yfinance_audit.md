@@ -40,3 +40,4 @@ Prior to v2.5.4 gateway migration, `yfinance` was imported directly in four dist
    - **429 Circuit Breaker**: If any Yahoo call returns HTTP 429, trip circuit breaker for **15 minutes**; block all Yahoo calls and fallback to cached data.
 4. **Persistent Audit Ledger**:
    - Every single call is recorded in `yfinance_usage` SQLite table (`data/schedule_ledger.db`).
+

@@ -34,3 +34,4 @@
    - Proprietary enhancement that detects secondary consolidation pivots inside the 15m session, allowing earlier entries before wide ATR moves are exhausted.
 3. **Items 12, 13 & 14 (Confluence Gates & SQLite Latch)**:
    - Institutional reliability layers: 50 EMA and VWAP prevent fakeouts, and the SQLite latch enforces strict single-alert idempotency per symbol per day.
+

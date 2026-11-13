@@ -25,3 +25,4 @@ def test_yfinance_gateway_is_sole_importer():
                             violations.append(f"{p}:{idx} -> {stripped}")
 
     assert not violations, f"Direct yfinance imports found outside gateway:\n" + "\n".join(violations)
+

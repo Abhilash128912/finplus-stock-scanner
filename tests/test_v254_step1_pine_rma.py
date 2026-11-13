@@ -48,3 +48,4 @@ def test_atr_seeding_exact_pine_parity():
             valid_mask = ~ref_atr.isna()
             max_diff = (engine_atr[valid_mask] - ref_atr[valid_mask]).abs().max()
             assert max_diff < 0.0001, f"Parity failed for {sym_name} length {length}: max_diff={max_diff}"
+
