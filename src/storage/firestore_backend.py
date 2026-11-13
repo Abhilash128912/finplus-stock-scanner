@@ -70,6 +70,10 @@ class FirestoreBackend:
         self.last_flush_time = 0.0
         self.pending_writes: Dict[str, Dict[str, Any]] = {} # doc_path -> data
 
+        # Restore and Sync Telemetry
+        self.last_restore_result: Dict[str, Any] = {}
+        self.last_candle_sync_time: Optional[str] = None
+
         self._init_client()
         self._initialized = True
 
@@ -313,11 +317,13 @@ class FirestoreBackend:
                     uploaded += 1
 
         dur = time.time() - start_ts
+        self.last_candle_sync_time = get_utc_iso()
         logger.info(f"Firestore candle sync completed: {uploaded}/{len(symbols)} symbols uploaded in {dur:.1f}s.")
         return {
             "status": "SUCCESS",
             "symbols_uploaded": uploaded,
             "total_symbols": len(symbols),
+            "timestamp_utc": self.last_candle_sync_time,
             "duration_sec": round(dur, 2)
         }
 
@@ -435,31 +441,37 @@ class FirestoreBackend:
         # Record total reads used during restore
         self.record_usage(reads=reads_used)
         dur = time.time() - start_ts
+        restore_res = {
+            "source": "firestore",
+            "status": "SUCCESS",
+            "symbols_restored": restored_symbols,
+            "bars_restored": restored_candles_count,
+            "trades_restored": restored_trades,
+            "reads_used": reads_used,
+            "duration_sec": round(dur, 2),
+            "timestamp_utc": get_utc_iso()
+        }
+        self.last_restore_result = restore_res
         logger.info(
             f"STARTUP RESTORE FINISHED: {restored_symbols} symbols ({restored_candles_count} bars), "
             f"{restored_trades} paper trades restored in {dur:.2f}s (Reads used: {reads_used})."
         )
 
-        return {
-            "status": "SUCCESS",
-            "restored_symbols": restored_symbols,
-            "restored_bars": restored_candles_count,
-            "restored_trades": restored_trades,
-            "reads_used": reads_used,
-            "duration_sec": round(dur, 2)
-        }
+        return restore_res
 
     # -------------------------------------------------------------
     # 4. TELEMETRY & HEALTH
     # -------------------------------------------------------------
     def get_telemetry(self) -> Dict[str, Any]:
-        """Returns Firestore connection and daily quota usage telemetry."""
+        """Returns Firestore connection, restore history, sync time, and daily quota usage telemetry."""
         self._check_day_rollover()
         return {
             "status": self.mode,
             "is_connected": self.is_connected,
             "env_prefix": self.env_prefix,
             "date_ist": self.current_ist_date,
+            "last_restore": self.last_restore_result or {"source": "none", "status": "NO_RESTORE_RUN"},
+            "last_candle_sync_time": self.last_candle_sync_time,
             "reads_today": self.reads_today,
             "max_reads_per_day": MAX_READS_PER_DAY,
             "writes_today": self.writes_today,

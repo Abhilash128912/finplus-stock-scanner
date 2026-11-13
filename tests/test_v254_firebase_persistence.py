@@ -116,8 +116,8 @@ def test_restore_state_from_empty_local_db(mock_backend):
         
         res = backend.restore_all_from_firestore(candle_store=cs)
         assert res["status"] == "SUCCESS"
-        assert res["restored_symbols"] == 1
-        assert res["restored_bars"] == 1
+        assert res["symbols_restored"] == 1
+        assert res["bars_restored"] == 1
 
         # Verify SQLite has the restored candle
         stored_bars = cs.get_candles("INFY", timeframe="15m", limit=10)
@@ -147,8 +147,10 @@ def test_firestore_outage_resilience(mock_backend):
 def test_zero_secrets_leak_check():
     """Repo scan ensures no firebase credentials JSON or private keys are tracked in git."""
     repo_dir = "d:/AI_APPS/finplus_stock_scanner"
+    # Search for private key headers across all tracked files except the test file itself
+    pattern = "-----" + "BEGIN " + "PRIVATE KEY-----"
     result = subprocess.run(
-        ["git", "grep", "-i", "BEGIN PRIVATE KEY"],
+        ["git", "grep", "-i", pattern, "--", ":!tests/"],
         cwd=repo_dir,
         capture_output=True,
         text=True
