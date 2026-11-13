@@ -206,16 +206,22 @@ class ScannerScheduler:
 
                         try:
                             if slot_id == "09:00_AGENDA":
-                                delivered = self.dispatcher.send_morning_tactical_briefing(
-                                    shortlist=self.latest_shortlist, force=True
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_morning_tactical_briefing,
+                                    shortlist=self.latest_shortlist,
+                                    force=True
                                 )
                             elif slot_id == "15:00_SUMMARY":
-                                delivered = self.dispatcher.send_end_of_trade_summary(
-                                    shortlist=self.latest_shortlist, force=True
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_end_of_trade_summary,
+                                    shortlist=self.latest_shortlist,
+                                    force=True
                                 )
                             else: # All 30m Pulses (09:30, 10:00, 10:30, ...)
-                                delivered = self.dispatcher.send_30m_shortlist_pulse(
-                                    self.latest_shortlist, force=True
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_30m_shortlist_pulse,
+                                    self.latest_shortlist,
+                                    force=True
                                 )
                         except Exception as e:
                             err_msg = str(e)

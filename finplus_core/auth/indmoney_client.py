@@ -170,22 +170,23 @@ class INDMoneyAuthClient:
         Requests a new 24-hour access token from the INDstocks API using MPIN and TOTP.
         Enforces a 60-second client-side cooldown to protect broker rate-limits.
         """
-        # Check if another app in the suite already generated a valid token within the last 60 seconds
+        # Respect broker's 60-second generation rate limit by sleeping if needed rather than crashing
+        now_ts = time.time()
         latest_env_tok = self._reload_token_from_env()
         if latest_env_tok:
             claims = self.decode_jwt_claims(latest_env_tok)
             iat = claims.get("iat", 0)
-            if (time.time() - iat) < 60.0:
-                logger.info("Shared token in config/.env was issued %ds ago by another app. Reusing without broker call.", int(time.time() - iat))
-                self.access_token = latest_env_tok
-                return latest_env_tok
+            since_last_iat = now_ts - iat
+            if 0 <= since_last_iat < 60.0:
+                wait_needed = int(60.0 - since_last_iat) + 1
+                logger.info("Broker 60s cooldown active (token issued %ds ago). Sleeping %ds before requesting fresh token...", int(since_last_iat), wait_needed)
+                time.sleep(wait_needed)
 
         elapsed = time.time() - self._last_token_request_time
-        if elapsed < 60.0 and self._last_token_request_time > 0:
+        if 0 <= elapsed < 60.0 and self._last_token_request_time > 0:
             wait_needed = int(60.0 - elapsed) + 1
-            raise RateLimitCooldownError(
-                f"Rate limit cooldown active. Please wait {wait_needed}s before requesting a new token."
-            )
+            logger.info("Local 60s cooldown active. Sleeping %ds before requesting fresh token...", wait_needed)
+            time.sleep(wait_needed)
 
         totp_code = self.generate_current_totp()
         url = f"{self.BASE_URL}{self.TOKEN_ENDPOINT}"

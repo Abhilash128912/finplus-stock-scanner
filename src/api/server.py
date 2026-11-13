@@ -155,7 +155,8 @@ async def deep_health_check():
         "market_open_ist": market_open,
         "engine": {
             "is_running": is_engine_alive,
-            "tracked_universe_count": len(scheduler.latest_scan_results),
+            "tracked_universe_count": len(scheduler.feed.get_all_universe_items()) if scheduler.feed else 0,
+            "scanned_candidates_count": len(scheduler.latest_scan_results),
             "scan_age_seconds": scan_age_secs,
             "shortlist_active": bool(scheduler.latest_shortlist),
         },

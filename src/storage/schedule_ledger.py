@@ -96,31 +96,61 @@ class ScheduleLedger:
 
         curr_h = ist_now.hour
         curr_m = ist_now.minute
+        curr_total_mins = curr_h * 60 + curr_m
 
         due_events = []
         with self._get_connection() as conn:
             rows = conn.execute("""
                 SELECT slot_id, target_time_ist, status, attempts 
                 FROM daily_schedule_ledger 
-                WHERE date_str = ? AND status IN ('PENDING', 'FAILED')
+                WHERE date_str = ? AND status IN ('PENDING', 'FAILED') AND attempts < 3
             """, (date_str,)).fetchall()
 
             for r in rows:
+                slot_id = r["slot_id"]
                 parts = r["target_time_ist"].split(":")
                 t_h = int(parts[0])
                 t_m = int(parts[1])
+                target_total_mins = t_h * 60 + t_m
 
-                # Check if current wall-clock is at or past the milestone
-                if (curr_h > t_h) or (curr_h == t_h and curr_m >= t_m):
-                    # For pulses, do not fire old morning pulses after 15:30
-                    if curr_h > 15 and r["slot_id"] != "15:00_SUMMARY":
+                # Current time is at or past target time
+                if curr_total_mins >= target_total_mins:
+                    late_by_mins = curr_total_mins - target_total_mins
+
+                    # 1. 09:00 Agenda becomes stale if more than 35 minutes late (after 09:35 IST)
+                    if slot_id == "09:00_AGENDA" and late_by_mins > 35:
+                        conn.execute("""
+                            UPDATE daily_schedule_ledger
+                            SET status = 'EXPIRED_STALE', error_message = 'Expired: Past morning session window'
+                            WHERE date_str = ? AND slot_id = ?
+                        """, (date_str, slot_id))
                         continue
+
+                    # 2. 30m Pulses become stale if superseded by a later milestone (> 35 mins late)
+                    if "PULSE" in slot_id and late_by_mins > 35:
+                        conn.execute("""
+                            UPDATE daily_schedule_ledger
+                            SET status = 'EXPIRED_STALE', error_message = 'Expired: Superseded by later interval'
+                            WHERE date_str = ? AND slot_id = ?
+                        """, (date_str, slot_id))
+                        continue
+
+                    # 3. 15:00 Summary expires if late past 16:30 IST
+                    if slot_id == "15:00_SUMMARY" and late_by_mins > 90:
+                        conn.execute("""
+                            UPDATE daily_schedule_ledger
+                            SET status = 'EXPIRED_STALE', error_message = 'Expired: Past post-market hours'
+                            WHERE date_str = ? AND slot_id = ?
+                        """, (date_str, slot_id))
+                        continue
+
                     due_events.append({
                         "slot_id": r["slot_id"],
                         "target_time_ist": r["target_time_ist"],
                         "status": r["status"],
                         "attempts": r["attempts"]
                     })
+            conn.commit()
 
         return due_events
 
