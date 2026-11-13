@@ -7,7 +7,7 @@ and strict 30-minute NTFY pulse dispatching.
 
 import time
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Tuple, Set
 from src.feeds.market_data_feed import MarketDataFeed
 from src.analytics.range_detector_engine import RangeDetectorEngine
 from src.analytics.regime_interceptor import App1RegimeInterceptor
@@ -30,7 +30,22 @@ class ScannerScheduler:
             top_n_fno_stocks=150,
             top_n_cash_stocks=750
         )
-        self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=500)
+        # Live detector uses ATR 100 as temporary value per Step 1 requirement (ATR 500 cannot be supported without 522 bars in cache)
+        self.detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=100)
+        logger.info("[ScannerScheduler] LIVE range detector initialized with ATR 100 (min_history_bars=122).")
+
+        # Shadow Variants (Step 4 & Amendment): side-by-side evaluation matrix
+        self.shadow_variants = {
+            "ATR_14_W5": RangeDetectorEngine(length=20, mult=1.0, atr_len=14, break_window_bars=5),
+            "ATR_50_W5": RangeDetectorEngine(length=20, mult=1.0, atr_len=50, break_window_bars=5),
+            "ATR_100_W5": self.detector, # Live baseline
+            "ATR_500_W5": RangeDetectorEngine(length=20, mult=1.0, atr_len=500, break_window_bars=5),
+            "ATR_LEGACY_HALF": RangeDetectorEngine(length=20, mult=1.0, atr_len=500, break_window_bars=5, legacy_half_mode=True),
+            "ATR_100_W1": RangeDetectorEngine(length=20, mult=1.0, atr_len=100, break_window_bars=1),
+            "ATR_100_W2": RangeDetectorEngine(length=20, mult=1.0, atr_len=100, break_window_bars=2),
+        }
+        self.live_hold_buffer: Dict[str, Tuple[float, float, int]] = {} # symbol -> (price, trigger_ts, direction)
+        self.MAX_CHASE_PCT = 0.70 # Lateness threshold (log only)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
         self.shortlist_engine = ShortlistEngine()
         self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
@@ -82,15 +97,45 @@ class ScannerScheduler:
                 self.is_stale_feed = True
                 logger.warning(f"Feed data is {int(feed_age)}s old (>60s). Feed marked STALE_FEED.")
 
+        # Determine active open symbols and top-3 priority symbols for fallback guard
+        open_symbols = set()
+        if hasattr(self, "paper_tracker") and self.paper_tracker:
+            open_symbols = {p["symbol"].split()[0].upper() for p in self.paper_tracker.active_positions.values()}
+
+        top3_symbols = set()
+        if hasattr(self, "latest_shortlist") and self.latest_shortlist:
+            for k in ["best_intraday_stock", "best_stock_option", "sensex_radar", "nifty_radar"]:
+                it = self.latest_shortlist.get(k)
+                if it and it.get("symbol"):
+                    top3_symbols.add(it["symbol"].split()[0].upper())
+
+        priority_symbols = open_symbols | top3_symbols
+        feed_age_sec = (time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)) if self.indmoney_feed else 999.0
+
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
+            is_priority = (sym.upper() in priority_symbols)
             try:
-                df = self.feed.fetch_15m_candles(ticker, period="5d")
+                # Use INDmoney/CandleStore first; only allow FALLBACK_GUARD on priority symbols when broker stale > 180s
+                df = self.feed.fetch_15m_candles(
+                    ticker,
+                    period="5d",
+                    allow_fallback_guard=True,
+                    broker_stale_seconds=feed_age_sec,
+                    is_priority_symbol=is_priority
+                )
                 if df.empty:
                     continue
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
+
+                # Fallback guard rule: Any detector output using YF_FALLBACK prices must NOT create a new entry signal
+                if df.attrs.get("data_source") == "YF_FALLBACK":
+                    eval_res["feed_status"] = "YF_FALLBACK"
+                    eval_res["signal_direction"] = 0
+                    eval_res["regime_confluence"] = "VETOED (YF_FALLBACK)"
+                    logger.warning(f"Symbol {sym} evaluated with YF_FALLBACK data. Blocked new entry signal.")
 
                 # If feed is stale, tag signal STALE_FEED and block new directional signals
                 if self.is_stale_feed:
@@ -113,22 +158,60 @@ class ScannerScheduler:
                             move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
                             eval_res["move_from_breakout_pct"] = move_from_top_pct
                     else:
-                        live_ticker = self.feed._get_ticker(ticker) if hasattr(self.feed, '_get_ticker') else None
-                        if live_ticker and hasattr(live_ticker, 'fast_info'):
-                            fast_p = getattr(live_ticker.fast_info, 'last_price', None)
-                            if fast_p and fast_p > 0:
-                                live_p = round(float(fast_p), 2)
-                                eval_res["live_ltp"] = live_p
-                                eval_res["candle_close"] = eval_res["last_price"]
-                                eval_res["last_price"] = live_p
-                                eval_res["price_source"] = "Exchange Feed"
-                                if eval_res.get("range_top"):
-                                    r_top = eval_res["range_top"]
-                                    move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
-                                    eval_res["move_from_breakout_pct"] = move_from_top_pct
+                        # Direct yfinance call removed per v2.5.4 gateway mandate.
+                        pass
                 except Exception:
                     pass
                 
+                # Step 4 (v2.6.0 SHADOW MODE): Evaluate shadow variants and record into range_variants table
+                import datetime
+                today_ist_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+                for var_name, var_detector in self.shadow_variants.items():
+                    if var_name == "ATR_100_W5":
+                        shadow_res = eval_res
+                    else:
+                        shadow_res = var_detector.evaluate_instrument(df, item)
+
+                    sh_sig = shadow_res.get("signal_direction", 0)
+                    sh_top = shadow_res.get("range_top")
+                    sh_bot = shadow_res.get("range_bottom")
+                    sh_mid = shadow_res.get("range_mid")
+                    sh_live_p = eval_res.get("live_ltp", eval_res.get("last_price", 0.0))
+
+                    # Lateness computation: % above range top (or below range bot)
+                    lat_pct = 0.0
+                    lat_block = False
+                    if sh_sig == 1 and sh_top and sh_top > 0 and sh_live_p > sh_top:
+                        lat_pct = round(((sh_live_p - sh_top) / sh_top) * 100.0, 2)
+                        lat_block = (lat_pct > self.MAX_CHASE_PCT)
+                    elif sh_sig == -1 and sh_bot and sh_bot > 0 and sh_live_p < sh_bot:
+                        lat_pct = round(((sh_bot - sh_live_p) / sh_bot) * 100.0, 2)
+                        lat_block = (lat_pct > self.MAX_CHASE_PCT)
+
+                    if lat_block:
+                        logger.info(f"[SHADOW_LATENESS_GATE] {var_name} on {sym}: lateness {lat_pct}% exceeds {self.MAX_CHASE_PCT}%. (LOG ONLY - NOT BLOCKED)")
+
+                    # Record to range_variants table
+                    self.ledger.record_range_variant_eval({
+                        "date_str": today_ist_str,
+                        "symbol": sym,
+                        "variant_name": var_name,
+                        "timeframe": "15m",
+                        "atr_len_configured": shadow_res.get("atr_len_configured", var_detector.atr_len),
+                        "atr_len_effective": shadow_res.get("atr_len_effective", var_detector.atr_len),
+                        "range_len": var_detector.length,
+                        "break_window_bars": var_detector.break_window_bars,
+                        "range_top": sh_top,
+                        "range_bottom": sh_bot,
+                        "range_mid": sh_mid,
+                        "live_price": sh_live_p,
+                        "signal_direction": sh_sig,
+                        "lateness_pct": lat_pct,
+                        "lateness_would_block": lat_block,
+                        "confluence_score": shadow_res.get("confluence_score", 0),
+                        "status": shadow_res.get("status", "EVALUATED")
+                    })
+
                 # Cross-reference with App #1 (Fail-Closed 2s Timeout)
                 sig_dir = eval_res.get("signal_direction", 0)
                 conf_status, conf_badge, regime_data = self.interceptor.evaluate_confluence(
@@ -299,6 +382,14 @@ class ScannerScheduler:
                                     rejected_ticks_total=rej_tot,
                                     force=True
                                 )
+                            elif slot_id in ("08:30_HISTORY_BACKFILL", "16:00_HISTORY_BACKFILL"):
+                                # Run off-hours history backfill runner via YFinanceGateway with HISTORY_BACKFILL
+                                logger.info(f"Triggering scheduled off-hours backfill runner ({slot_id})...")
+                                universe = self.feed.get_all_universe_items() if self.feed else []
+                                all_t = [it.get("yf_ticker") for it in universe if it.get("yf_ticker")]
+                                cnt = await asyncio.to_thread(self.feed.prefetch_batch_15m_candles, all_t, period="60d", chunk_size=20)
+                                logger.info(f"Off-hours backfill finished: updated {cnt} symbols in CandleStore.")
+                                delivered = True
                             else: # All 30m Pulses (09:30, 10:00, 10:30, ...)
                                 delivered = await asyncio.to_thread(
                                     self.dispatcher.send_30m_shortlist_pulse,

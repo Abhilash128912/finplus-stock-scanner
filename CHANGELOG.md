@@ -5,6 +5,55 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.6.0] - 2026-11-13 (SHADOW MODE)
+
+### Added
+- **P0 - Configurable LuxAlgo Parameters & Shadow Comparison Matrix (`RangeDetectorEngine`, `ScannerScheduler`, `ScheduleLedger`)**:
+  - Made range length, ATR length, width multiplier, and `break_window_bars` fully configurable.
+  - Initialized side-by-side shadow variants: `ATR_14_W5`, `ATR_50_W5`, `ATR_100_W5` (live baseline), `ATR_500_W5`, `ATR_LEGACY_HALF` (historical half-length baseline), `ATR_100_W1`, and `ATR_100_W2`.
+  - Added persistent SQLite table `range_variants` in `schedule_ledger.db` to log shadow outputs without changing live alert directives.
+- **P1 - Non-Blocking Lateness Gate Metric (`ScannerScheduler`)**:
+  - Implemented `MAX_CHASE_PCT = 0.70%` lateness check. Computed on breakout signals relative to range top/bottom.
+  - Operates in strict **LOG-ONLY** shadow mode (`[SHADOW_LATENESS_GATE]`) without blocking live alerts, logging which signals would be filtered for upcoming parameter selection.
+- **P1 - Shadow Statistics Reporting (`APIServer`, `NTFYDispatcher`, `ScheduleLedger`)**:
+  - Exposed aggregate shadow variant metrics in `/api/health/deep` under the `shadow_variants` key.
+  - Attached shadow variant totals and breakdown to the `15:45_SELF_REPORT` milestone.
+
+---
+
+## [2.5.4] - 2026-11-13
+
+### Fixed
+- **P0 - Sole Importer Architecture & YFinance Gateway (`YFinanceGateway`)**:
+  - Created `src/gateway/yfinance_gateway.py` as the **sole authorized importer** of `yfinance` in the codebase.
+  - Enforced mandatory reason codes: `HISTORY_BACKFILL`, `NEW_SYMBOL`, `FALLBACK_GUARD`.
+  - Established a 250 requests/day ceiling with a persistent audit ledger table `yfinance_usage` in `data/schedule_ledger.db`.
+  - Implemented an automatic 15-minute circuit breaker (`900s` pause) upon encountering any HTTP 429 rate limit.
+  - Replaced all raw `yfinance` calls across `market_data_feed.py`, `live_paper_tracker.py`, `server.py`, and `ntfy_dispatcher.py` with gateway methods. Added `tests/test_v254_step3_sole_importer.py` to prevent regression.
+- **P0 - Scan Path Flipped to INDmoney/CandleStore First (`MarketDataFeed`, `ScannerScheduler`)**:
+  - Completely removed Yahoo prefetching (`prefetch_batch_15m_candles`) from the scan cycle during market hours.
+  - Closed 15m bars are served purely from `CandleStore` (INDmoney tick accumulator) and local SQLite cache, achieving **0 yfinance calls across healthy scan cycles**.
+- **P0 - Fallback Guard Restrictions (`MarketDataFeed`, `ScannerScheduler`)**:
+  - Restricted Yahoo live fallback strictly to scenarios where the broker is stale for > 3 minutes (180s) **AND** the symbol has an open position or is in the top-3 candidates.
+  - Dataframes fetched during fallback are strictly tagged `YF_FALLBACK`.
+  - Enforced that any detector output using `YF_FALLBACK` is vetoed and cannot generate new directional entry signals.
+- **P1 - Scheduled Off-Hours History Backfill Runner (`ScheduleLedger`, `ScannerScheduler`)**:
+  - Added `08:30_HISTORY_BACKFILL` and `16:00_HISTORY_BACKFILL` milestones to `ScheduleLedger`.
+  - Fetches deeper history (60d) via gateway off-hours once per day without impacting market-hour performance or rate limits.
+- **P1 - Pine Script RMA Seeding Parity (`RangeDetectorEngine`)**:
+  - Replaced `ewm(adjust=False)` with exact Pine Script `ta.rma` seeding: initial value is the SMA of the first `length` true ranges, followed by recursive RMA update. Max difference against reference Pine calculation < 0.0001.
+- **P1 - History Rule (`RangeDetectorEngine`)**:
+  - Replaced fixed 520 minimum bars with dynamic rule: `min_history_bars = atr_len + range_len + 2`.
+  - LIVE detector configured to ATR 100 as a temporary baseline pending full off-hours backfill.
+- **P1 - Resolved Exit Confirmation Buffer (`LivePaperTracker`)**:
+  - In-band exits execute immediately.
+  - Bad ticks triggering exits are held in a 10s buffer; if confirmed by a second tick within 3% within 10s, the position closes. If unconfirmed within 10s, the buffer is discarded, the position remains open, and a warning is logged.
+  - 15:00 equity and MCX cutoff square-offs always exit immediately without confirmation buffer.
+- **P1 - Daily Breakout Deduplication Latch (`ScheduleLedger`, `RangeDetectorEngine`)**:
+  - Added `daily_breakout_latch` SQLite table with `UNIQUE (date_str, symbol)` to mathematically prevent repeat breakout alerts for the same symbol across cycles on the same day.
+
+---
+
 ## [2.5.3] - 2026-11-13
 
 ### Fixed

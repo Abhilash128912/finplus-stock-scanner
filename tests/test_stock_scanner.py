@@ -53,14 +53,14 @@ class TestStockScanner(unittest.TestCase):
 
     def test_02_range_detector_math_closed_candle(self):
         """Verify LuxAlgo compression and breakout evaluation strictly on closed candles."""
-        dates = pd.date_range("2026-11-01 09:15", periods=50, freq="15min", tz="Asia/Kolkata")
+        dates = pd.date_range("2026-11-01 09:15", periods=60, freq="15min", tz="Asia/Kolkata")
         
         df_coiled = pd.DataFrame({
-            "Open": [100.0] * 50,
-            "High": [100.5] * 50,
-            "Low": [99.5] * 50,
-            "Close": [100.0] * 50,
-            "Volume": [1000] * 50
+            "Open": [100.0] * 60,
+            "High": [100.5] * 60,
+            "Low": [99.5] * 60,
+            "Close": [100.0] * 60,
+            "Volume": [1000] * 60
         }, index=dates)
         
         detector = RangeDetectorEngine(length=20, mult=1.0, atr_len=14)

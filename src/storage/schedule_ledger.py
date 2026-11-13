@@ -28,6 +28,7 @@ DB_PATH = DB_DIR / "schedule_ledger.db"
 # Official schedule milestones on NSE/BSE weekdays
 # Target time is (hour, minute) in IST
 SCHEDULED_MILESTONES = [
+    {"slot_id": "08:30_HISTORY_BACKFILL", "target_h": 8, "target_m": 30, "name": "08:30 AM Off-Hours History Backfill"},
     {"slot_id": "09:00_AGENDA", "target_h": 9, "target_m": 0, "name": "09:00 AM Today's Agenda Briefing"},
     {"slot_id": "09:30_PULSE_FIRST", "target_h": 9, "target_m": 30, "name": "09:30 AM First Status & Suggestions"},
     {"slot_id": "10:00_PULSE", "target_h": 10, "target_m": 0, "name": "10:00 AM 30m Pulse"},
@@ -42,6 +43,7 @@ SCHEDULED_MILESTONES = [
     {"slot_id": "14:30_PULSE", "target_h": 14, "target_m": 30, "name": "02:30 PM 30m Pulse"},
     {"slot_id": "15:00_SUMMARY", "target_h": 15, "target_m": 0, "name": "03:00 PM End of Trade Summary"},
     {"slot_id": "15:45_SELF_REPORT", "target_h": 15, "target_m": 45, "name": "03:45 PM Post-Market Self-Report"},
+    {"slot_id": "16:00_HISTORY_BACKFILL", "target_h": 16, "target_m": 0, "name": "04:00 PM Post-Market History Backfill"},
 ]
 
 
@@ -81,6 +83,42 @@ class ScheduleLedger:
                     date_str TEXT PRIMARY KEY,
                     messages_sent INTEGER NOT NULL DEFAULT 0,
                     updated_at TEXT
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS daily_breakout_latch (
+                    date_str TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    break_direction INTEGER NOT NULL,
+                    break_price REAL NOT NULL,
+                    latched_at_utc TEXT NOT NULL,
+                    PRIMARY KEY (date_str, symbol),
+                    UNIQUE (date_str, symbol)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS range_variants (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    scan_time_utc TEXT NOT NULL,
+                    date_str TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    variant_name TEXT NOT NULL,
+                    timeframe TEXT NOT NULL,
+                    atr_len_configured INTEGER NOT NULL,
+                    atr_len_effective INTEGER NOT NULL,
+                    range_len INTEGER NOT NULL,
+                    break_window_bars INTEGER NOT NULL,
+                    range_top REAL,
+                    range_bottom REAL,
+                    range_mid REAL,
+                    live_price REAL,
+                    signal_direction INTEGER NOT NULL,
+                    lateness_pct REAL,
+                    lateness_would_block INTEGER NOT NULL,
+                    confluence_score INTEGER,
+                    status TEXT NOT NULL
                 )
             """)
             conn.commit()
@@ -278,3 +316,97 @@ class ScheduleLedger:
                 ORDER BY target_time_ist ASC
             """, (date_str,)).fetchall()
             return [dict(r) for r in rows]
+
+    def try_latch_daily_breakout(self, date_str: str, symbol: str, break_direction: int, break_price: float) -> bool:
+        """
+        Atomically records a symbol's breakout for a specific calendar trading day.
+        Returns True if this is the FIRST breakout scored today for this symbol.
+        Returns False if the symbol already has an alert/break scored today (SQLite latch).
+        Prevents duplicate alerts from firing across consecutive 5s or 30m scan cycles.
+        """
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    INSERT OR IGNORE INTO daily_breakout_latch (date_str, symbol, break_direction, break_price, latched_at_utc)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (date_str, symbol, break_direction, break_price, now_utc))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"Error latching daily breakout for {symbol} on {date_str}: {e}")
+            return False
+
+    def is_symbol_latched_today(self, date_str: str, symbol: str) -> bool:
+        """Checks if a symbol has already been latched today."""
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM daily_breakout_latch WHERE date_str = ? AND symbol = ?
+            """, (date_str, symbol)).fetchone()
+            return row is not None
+
+    def record_range_variant_eval(self, eval_data: Dict[str, Any]):
+        """Records shadow variant evaluation for performance comparison in range_variants table."""
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO range_variants (
+                        scan_time_utc, date_str, symbol, variant_name, timeframe,
+                        atr_len_configured, atr_len_effective, range_len, break_window_bars,
+                        range_top, range_bottom, range_mid, live_price, signal_direction,
+                        lateness_pct, lateness_would_block, confluence_score, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now_utc,
+                    eval_data.get("date_str", ""),
+                    eval_data.get("symbol", ""),
+                    eval_data.get("variant_name", ""),
+                    eval_data.get("timeframe", "15m"),
+                    eval_data.get("atr_len_configured", 0),
+                    eval_data.get("atr_len_effective", 0),
+                    eval_data.get("range_len", 20),
+                    eval_data.get("break_window_bars", 5),
+                    eval_data.get("range_top"),
+                    eval_data.get("range_bottom"),
+                    eval_data.get("range_mid"),
+                    eval_data.get("live_price"),
+                    eval_data.get("signal_direction", 0),
+                    eval_data.get("lateness_pct", 0.0),
+                    1 if eval_data.get("lateness_would_block") else 0,
+                    eval_data.get("confluence_score", 0),
+                    eval_data.get("status", "EVALUATED")
+                ))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error recording range variant: {e}")
+
+    def get_shadow_variant_stats(self, date_str: Optional[str] = None) -> Dict[str, Any]:
+        """Returns aggregate metrics across shadow variants for health endpoints and self-reports."""
+        if not date_str:
+            date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            total_evals = conn.execute("SELECT COUNT(*) FROM range_variants WHERE date_str = ?", (date_str,)).fetchone()[0]
+            by_variant = {}
+            rows = conn.execute("""
+                SELECT variant_name, 
+                       COUNT(*) as total,
+                       SUM(CASE WHEN signal_direction != 0 THEN 1 ELSE 0 END) as breaks,
+                       SUM(CASE WHEN lateness_would_block = 1 THEN 1 ELSE 0 END) as lateness_blocks,
+                       AVG(lateness_pct) as avg_lateness
+                FROM range_variants 
+                WHERE date_str = ?
+                GROUP BY variant_name
+            """, (date_str,)).fetchall()
+            for r in rows:
+                by_variant[r["variant_name"]] = {
+                    "evals": r["total"],
+                    "breaks": r["breaks"],
+                    "lateness_blocks": r["lateness_blocks"],
+                    "avg_lateness_pct": round(r["avg_lateness"] or 0.0, 2)
+                }
+            return {
+                "date_str": date_str,
+                "total_evaluated": total_evals,
+                "variants": by_variant
+            }

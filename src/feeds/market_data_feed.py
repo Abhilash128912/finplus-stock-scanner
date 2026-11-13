@@ -7,13 +7,15 @@ Ingests historical 15m candles and real-time quotes across two strictly decouple
 
 import time
 import pandas as pd
-import yfinance as yf
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timezone
 
 from src.feeds.fno_contract_master import FNOContractMaster
 from src.feeds.broad_market_master import BroadMarketMaster
 from src.utils.time_and_logger import setup_logger, get_utc_iso
+from src.gateway.yfinance_gateway import YFinanceGateway
+from src.storage.candle_store import CandleStore
+from src.utils.indian_market_calendar import is_equity_market_open_ist
 
 logger = setup_logger("MarketDataFeed")
 
@@ -27,6 +29,8 @@ class MarketDataFeed:
         top_n_cash_stocks: int = 750,
     ):
         self.cache_ttl = cache_ttl_seconds
+        self.gateway = YFinanceGateway()
+        self.candle_store = CandleStore()
         
         # 1. Stock Options Universe (F&O Lot <= 500 + Reliance + Sensex/Nifty)
         self.fno_master = FNOContractMaster(max_lot_size=max_lot_size)
@@ -60,125 +64,116 @@ class MarketDataFeed:
         return self.universe
 
     def _get_ticker(self, ticker: str):
-        """Returns yfinance Ticker object with cached ticker handle."""
-        return yf.Ticker(ticker)
+        """Deprecated direct handle. Ticker queries should route via YFinanceGateway."""
+        return None
 
     def prefetch_batch_15m_candles(self, tickers: List[str], period: str = "5d", chunk_size: int = 35) -> int:
         """
-        Batch downloads 15m candles in chunks of 35 tickers using multi-threaded yfinance.
-        Populates self._cache in ~25s for the entire universe and eliminates rate limits.
+        During market hours: Yahoo prefetching is completely DISABLED (0 Yahoo calls).
+        Closed 15m bars are loaded directly from CandleStore and in-memory cache.
+        Outside market hours: Used only by scheduled off-hours backfill runner with HISTORY_BACKFILL.
         """
         now = time.time()
+        # In market hours, strictly 0 Yahoo calls. Populate cache from CandleStore!
+        if is_equity_market_open_ist():
+            loaded = 0
+            for ticker in tickers:
+                clean = ticker.replace(".NS", "")
+                if ticker not in self._cache or (now - self._cache[ticker]['ts']) >= self.cache_ttl:
+                    df = self.candle_store.get_candles_as_dataframe(clean, "15m", limit=600)
+                    if not df.empty:
+                        self._cache[ticker] = {'df': df, 'ts': now}
+                        loaded += 1
+            return loaded
+
+        # Off-hours backfill logic routed through gateway with HISTORY_BACKFILL
         needed = [t for t in tickers if t and (t not in self._cache or (now - self._cache[t]['ts']) >= self.cache_ttl)]
         if not needed:
             return 0
 
-        logger.info(f"Prefetching batch candles for {len(needed)} tickers (chunks of {chunk_size})...")
+        logger.info(f"[HISTORY_BACKFILL] Prefetching batch candles for {len(needed)} tickers (chunks of {chunk_size})...")
         downloaded = 0
-
         for i in range(0, len(needed), chunk_size):
             chunk = needed[i:i + chunk_size]
             raw_df = None
-            max_retries = 2
-            backoffs = [2.0, 6.0]
-
-            for attempt in range(max_retries + 1):
-                try:
-                    raw_df = yf.download(chunk, period=period, interval="15m", group_by="ticker", progress=False, threads=True)
-                    if raw_df is not None and not raw_df.empty:
-                        break
-                except Exception as ex:
-                    if attempt < max_retries:
-                        sleep_s = backoffs[attempt]
-                        logger.warning(f"Batch chunk failed ({ex}). Retrying in {sleep_s}s (Attempt {attempt + 1}/{max_retries})...")
-                        time.sleep(sleep_s)
-                    else:
-                        logger.error(f"Batch candle chunk failed after {max_retries} retries: {ex}")
-
-            from src.storage.candle_store import CandleStore
-            cs = CandleStore()
+            try:
+                raw_df = self.gateway.download(chunk, reason="HISTORY_BACKFILL", period=period, interval="15m", group_by="ticker", threads=True)
+            except Exception as ex:
+                logger.warning(f"Gateway download error for chunk {chunk}: {ex}")
 
             if raw_df is not None and not raw_df.empty:
                 if len(chunk) == 1:
-                    ticker = chunk[0]
+                    t = chunk[0]
                     df = raw_df.copy()
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
-                    self._cache[ticker] = {'df': df, 'ts': now}
-                    try:
-                        cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
-                    except Exception:
-                        pass
+                    self._cache[t] = {'df': df, 'ts': now}
+                    self.candle_store.save_dataframe_candles(t.replace(".NS", ""), "15m", df)
                     downloaded += 1
                 else:
-                    for ticker in chunk:
+                    for t in chunk:
                         try:
-                            if hasattr(raw_df.columns, "levels") and ticker in raw_df.columns.levels[0]:
-                                df = raw_df[ticker].dropna(how="all").copy()
+                            if hasattr(raw_df.columns, "levels") and t in raw_df.columns.levels[0]:
+                                df = raw_df[t].dropna(how="all").copy()
                                 if not df.empty:
-                                    self._cache[ticker] = {'df': df, 'ts': now}
-                                    try:
-                                        cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
-                                    except Exception:
-                                        pass
+                                    self._cache[t] = {'df': df, 'ts': now}
+                                    self.candle_store.save_dataframe_candles(t.replace(".NS", ""), "15m", df)
                                     downloaded += 1
                         except Exception:
                             pass
             else:
-                # Yahoo failed after retries: fallback to CandleStore for tickers in chunk
-                for ticker in chunk:
-                    clean = ticker.replace(".NS", "")
-                    local_df = cs.get_candles_as_dataframe(clean, "15m")
+                # Gateway failed or 429: fallback to CandleStore
+                for t in chunk:
+                    clean = t.replace(".NS", "")
+                    local_df = self.candle_store.get_candles_as_dataframe(clean, "15m")
                     if not local_df.empty:
-                        self._cache[ticker] = {'df': local_df, 'ts': now}
-                        self.fallback_tickers_this_cycle.add(ticker)
-                        logger.warning(f"[FALLBACK_CANDLESTORE] Yahoo unavailable for {ticker}. Serving {len(local_df)} bars from CandleStore.")
+                        self._cache[t] = {'df': local_df, 'ts': now}
+                        self.fallback_tickers_this_cycle.add(t)
                         downloaded += 1
-
-        logger.info(f"Prefetch complete: {downloaded}/{len(needed)} tickers updated in cache and persistent candle store.")
         return downloaded
 
-    def fetch_15m_candles(self, ticker: str, period: str = "5d") -> pd.DataFrame:
-        """Fetches 15-minute intraday bars with in-memory caching and persistent DB fallback."""
+    def fetch_15m_candles(self, ticker: str, period: str = "5d", allow_fallback_guard: bool = False, broker_stale_seconds: float = 0.0, is_priority_symbol: bool = False) -> pd.DataFrame:
+        """
+        INDmoney / CandleStore FIRST data resolution:
+        1. Checks in-memory cache.
+        2. Checks SQLite CandleStore.
+        3. Only contacts gateway (FALLBACK_GUARD) if broker is stale > 3 minutes (180s)
+           AND symbol has an open position or is in top-3 candidates.
+        4. Otherwise returns local data tagged appropriately.
+        """
         now = time.time()
         if ticker in self._cache:
             entry = self._cache[ticker]
             if (now - entry['ts']) < self.cache_ttl:
                 return entry['df']
-                
-        clean_sym = ticker.replace(".NS", "")
-        from src.storage.candle_store import CandleStore
-        cs = CandleStore()
 
-        try:
-            logger.info(f"Downloading 15m candles for {ticker} (Period: {period})...")
-            df = yf.download(ticker, period=period, interval="15m", progress=False)
-            if df.empty:
-                logger.warning(f"Empty data returned for {ticker}. Checking local candle store...")
-                local_df = cs.get_candles_as_dataframe(clean_sym, "15m")
-                if not local_df.empty:
-                    self._cache[ticker] = {'df': local_df, 'ts': now}
-                    return local_df
-                return pd.DataFrame()
-                
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
-                
-            self._cache[ticker] = {
-                'df': df,
-                'ts': now
-            }
-            try:
-                cs.save_dataframe_candles(clean_sym, "15m", df)
-            except Exception:
-                pass
-            return df
-        except Exception as e:
-            logger.error(f"Error downloading {ticker}: {e}. Falling back to local candle store...")
-            local_df = cs.get_candles_as_dataframe(clean_sym, "15m")
-            if not local_df.empty:
-                self._cache[ticker] = {'df': local_df, 'ts': now}
-                return local_df
-            if ticker in self._cache:
-                return self._cache[ticker]['df']
-            return pd.DataFrame()
+        clean_sym = ticker.replace(".NS", "")
+        # Step 1: Check CandleStore
+        local_df = self.candle_store.get_candles_as_dataframe(clean_sym, "15m", limit=600)
+        if not local_df.empty and not allow_fallback_guard:
+            self._cache[ticker] = {'df': local_df, 'ts': now}
+            return local_df
+
+        # Step 2: Fallback Guard check (broker stale > 180s AND priority symbol)
+        if allow_fallback_guard and broker_stale_seconds > 180.0 and is_priority_symbol:
+            logger.warning(f"FALLBACK_GUARD ACTIVATED for {ticker}: Broker stale {int(broker_stale_seconds)}s (>180s) on priority symbol.")
+            df = self.gateway.download(ticker, reason="FALLBACK_GUARD", period=period, interval="15m")
+            if not df.empty:
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+                # Tag dataframe with YF_FALLBACK
+                df.attrs["data_source"] = "YF_FALLBACK"
+                self._cache[ticker] = {'df': df, 'ts': now}
+                self.fallback_tickers_this_cycle.add(ticker)
+                try:
+                    self.candle_store.save_dataframe_candles(clean_sym, "15m", df)
+                except Exception:
+                    pass
+                return df
+
+        # If not falling back to Yahoo, return local_df (or empty)
+        if not local_df.empty:
+            self._cache[ticker] = {'df': local_df, 'ts': now}
+            return local_df
+
+        return pd.DataFrame()

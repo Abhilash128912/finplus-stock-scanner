@@ -218,6 +218,9 @@ async def deep_health_check():
         http_status = 200 if is_healthy else 503
         overall_status = "HEALTHY" if is_healthy else "DEGRADED"
 
+    from src.gateway.yfinance_gateway import YFinanceGateway
+    yf_metrics = YFinanceGateway().get_metrics()
+
     payload = {
         "status": overall_status,
         "market_open": market_open,
@@ -241,10 +244,18 @@ async def deep_health_check():
         },
         "ntfy_quota": ntfy_quota_info,
         "rejected_ticks": rejected_ticks_info,
+        "yfinance_gateway": yf_metrics,
+        "shadow_variants": scheduler.ledger.get_shadow_variant_stats(date_str) if hasattr(scheduler, "ledger") else {},
         "issues": issues
     }
 
     return JSONResponse(status_code=http_status, content=payload)
+
+@app.get("/api/yfinance/usage")
+async def get_yfinance_usage():
+    """Returns persistent yfinance gateway usage, daily budget consumption, and circuit breaker status."""
+    from src.gateway.yfinance_gateway import YFinanceGateway
+    return YFinanceGateway().get_metrics()
 
 @app.api_route("/api/broker/refresh", methods=["GET", "POST"])
 async def broker_refresh():
@@ -306,8 +317,8 @@ async def get_live_indices():
                 sx_spot_val = float(bm.get("sensex_spot") or sx.get("spot_price") or 0.0)
                 if sx_spot_val < 81500.0:
                     try:
-                        import yfinance as yf
-                        fp = getattr(yf.Ticker("^BSESN").fast_info, 'last_price', None)
+                        from src.gateway.yfinance_gateway import YFinanceGateway
+                        fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
                         if fp and fp > 80000:
                             sx_spot_val = float(fp)
                     except Exception:
@@ -333,8 +344,8 @@ async def get_live_indices():
     cached_sx = float(sx_item.get("last_price", 0.0))
     if cached_sx < 81500.0:
         try:
-            import yfinance as yf
-            fp = getattr(yf.Ticker("^BSESN").fast_info, 'last_price', None)
+            from src.gateway.yfinance_gateway import YFinanceGateway
+            fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
             if fp and fp > 80000:
                 cached_sx = float(fp)
         except Exception:

@@ -4,7 +4,11 @@ Price Sanity Guard Hardening & Risk Mitigations
 
 Items Tested:
 1. RESET REFERENCE AFTER GAP (>30s gap accepts tick as new reference with no % check)
-2. NEVER BLOCK EXITS (Stop-loss, target, and 15:00 / MCX cutoff exits succeed even if tick outside sanity band; WARNING logged)
+2. RESOLVED EXIT CONFIRMATION:
+   - In-band exit: immediate normal exit
+   - Spike confirmed: 2nd tick within 3% inside 10s closes position
+   - Spike unconfirmed: expires after 10s -> buffer discarded, position kept, WARNING logged, rejection counted
+   - 15:00 equity and MCX cutoff exits: immediate even if spike
 3. SEPARATE LIMITS (Cash default 15%, Option default 40%, MCX default 10%)
 4. DATA_SUSPECT AUTO-CLEAR (3 bad ticks -> flagged; 3 steady ticks within band -> cleared; only blocks new entries)
 5. REJECTED-TICK COUNTER (Count rejected ticks per symbol per day, included in /api/health/deep)
@@ -65,17 +69,19 @@ def test_01_reset_reference_after_gap(tmp_path):
     assert tracker.rejected_ticks_count.get("GAPSYM", 0) == 0, "Rejected count should remain 0 on gap reset!"
 
 
-def test_02_never_block_exits_stop_loss_and_squareoff(tmp_path):
-    """TEST 2: +/-30% tick at stop-loss or square-off -> position closes, WARNING logged."""
-    db_file = tmp_path / "test_exit.db"
+def test_02_exit_confirmation_scenarios(tmp_path):
+    """TEST 2: Exit confirmation resolution with Step 2 rules."""
+    db_file = tmp_path / "test_exit_scenarios.db"
     tracker = LivePaperTracker(db_path=str(db_file))
     tracker.price_sanity_pct_cash = 15.0
 
-    # Case A: Real Crash through Stop-Loss (-30% drop: 100 -> 70, SL is 95)
-    pos_sl = "pos_sl_crash"
-    tracker.active_positions[pos_sl] = {
-        "position_id": pos_sl,
-        "symbol": "CRASHSYM",
+    # -------------------------------------------------------------
+    # Scenario A: In-Band Exit (e.g. SL hit with normal 5% move: 100 -> 94, SL is 95)
+    # -------------------------------------------------------------
+    pos_inband = "pos_inband"
+    tracker.active_positions[pos_inband] = {
+        "position_id": pos_inband,
+        "symbol": "INBAND",
         "sector": "INTRADAY_CASH",
         "action": "BUY",
         "is_option": False,
@@ -92,21 +98,96 @@ def test_02_never_block_exits_stop_loss_and_squareoff(tmp_path):
         "stage": "INITIAL (FIXED SL)",
         "unrealized_pnl": 0.0,
     }
-    tracker.last_accepted_tick_time["CRASHSYM"] = time.time()  # recent tick
+    tracker.last_accepted_tick_time["INBAND"] = time.time()
+    with patch.object(tracker, "_fetch_live_price", return_value=94.0):
+        with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
+            tracker.update_and_trail_positions()
+    assert pos_inband not in tracker.active_positions, "In-band SL exit failed to close immediately!"
 
-    # Inject 70.0 (-30% jump) -> must close position despite being outside sanity band!
+    # -------------------------------------------------------------
+    # Scenario B: Spike Confirmed (First tick -30%: 100 -> 70, then confirming tick 71 within 3% in 10s)
+    # -------------------------------------------------------------
+    pos_confirmed = "pos_confirmed"
+    tracker.active_positions[pos_confirmed] = {
+        "position_id": pos_confirmed,
+        "symbol": "CONFIRMED",
+        "sector": "INTRADAY_CASH",
+        "action": "BUY",
+        "is_option": False,
+        "entry_price": 100.0,
+        "current_price": 100.0,
+        "quantity": 10,
+        "risk_r": 5.0,
+        "initial_sl": 95.0,
+        "trailing_sl": 95.0,
+        "target": 120.0,
+        "entry_time_ist": "10:00:00 AM IST",
+        "opened_at_utc": "2026-11-13T04:30:00Z",
+        "status": "OPEN",
+        "stage": "INITIAL (FIXED SL)",
+        "unrealized_pnl": 0.0,
+    }
+    tracker.last_accepted_tick_time["CONFIRMED"] = time.time()
+
+    # 1st bad tick: 70.0 (held in buffer)
     with patch.object(tracker, "_fetch_live_price", return_value=70.0):
         with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
             tracker.update_and_trail_positions()
+    assert pos_confirmed in tracker.active_positions, "Position should be held in buffer waiting for confirmation tick!"
+    assert pos_confirmed in tracker.pending_exit_confirmations
 
-    assert pos_sl not in tracker.active_positions, "Position failed to close on real crash through stop-loss!"
-    with tracker._get_connection() as conn:
-        closed_row = conn.execute("SELECT * FROM closed_paper_trades WHERE position_id = ?", (pos_sl,)).fetchone()
-        assert closed_row is not None, "Closed trade row missing from SQLite database"
-        assert closed_row["exit_reason"] == "INITIAL_SL_HIT"
+    # 2nd confirming tick: 71.0 (diff 1.4% <= 3%, within 10s -> confirms exit)
+    with patch.object(tracker, "_fetch_live_price", return_value=71.0):
+        with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
+            tracker.update_and_trail_positions()
+    assert pos_confirmed not in tracker.active_positions, "Confirmed spike failed to close position!"
+    assert pos_confirmed not in tracker.pending_exit_confirmations
 
-    # Case B: 15:00 Square-Off with wide tick
-    pos_eod = "pos_eod_squareoff"
+    # -------------------------------------------------------------
+    # Scenario C: Spike Unconfirmed (Expires after 10s -> discarded buffer, position kept, counted)
+    # -------------------------------------------------------------
+    pos_unconf = "pos_unconf"
+    tracker.active_positions[pos_unconf] = {
+        "position_id": pos_unconf,
+        "symbol": "UNCONF",
+        "sector": "INTRADAY_CASH",
+        "action": "BUY",
+        "is_option": False,
+        "entry_price": 100.0,
+        "current_price": 100.0,
+        "quantity": 10,
+        "risk_r": 5.0,
+        "initial_sl": 95.0,
+        "trailing_sl": 95.0,
+        "target": 120.0,
+        "entry_time_ist": "10:00:00 AM IST",
+        "opened_at_utc": "2026-11-13T04:30:00Z",
+        "status": "OPEN",
+        "stage": "INITIAL (FIXED SL)",
+        "unrealized_pnl": 0.0,
+    }
+    tracker.last_accepted_tick_time["UNCONF"] = time.time()
+
+    # 1st bad tick at t0: 70.0
+    t0 = time.time()
+    with patch("time.time", return_value=t0):
+        with patch.object(tracker, "_fetch_live_price", return_value=70.0):
+            with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
+                tracker.update_and_trail_positions()
+    assert pos_unconf in tracker.pending_exit_confirmations
+
+    # 2nd tick arrives 15s later (>10s) -> unconfirmed, buffer discarded, position kept!
+    with patch("time.time", return_value=t0 + 15.0):
+        with patch.object(tracker, "_fetch_live_price", return_value=70.0):
+            with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
+                tracker.update_and_trail_positions()
+    assert pos_unconf in tracker.active_positions, "Position should be kept open after unconfirmed spike expired!"
+    assert tracker.rejected_ticks_count.get("UNCONF", 0) >= 1
+
+    # -------------------------------------------------------------
+    # Scenario D: 15:00 Equity & MCX Cutoff Exits (Immediate without confirmation)
+    # -------------------------------------------------------------
+    pos_eod = "pos_eod"
     tracker.active_positions[pos_eod] = {
         "position_id": pos_eod,
         "symbol": "EODSYM",
@@ -119,7 +200,7 @@ def test_02_never_block_exits_stop_loss_and_squareoff(tmp_path):
         "risk_r": 5.0,
         "initial_sl": 80.0,
         "trailing_sl": 80.0,
-        "target": 130.0,
+        "target": 150.0,
         "entry_time_ist": "10:00:00 AM IST",
         "opened_at_utc": "2026-11-13T04:30:00Z",
         "status": "OPEN",
@@ -128,7 +209,6 @@ def test_02_never_block_exits_stop_loss_and_squareoff(tmp_path):
     }
     tracker.last_accepted_tick_time["EODSYM"] = time.time()
 
-    # Simulate 15:05 IST (after 15:00 EOD cutoff)
     with patch("src.paper.live_paper_tracker.datetime") as mock_dt:
         from datetime import datetime, timezone, timedelta
         mock_ist_now = datetime(2026, 11, 13, 15, 5, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
@@ -136,12 +216,13 @@ def test_02_never_block_exits_stop_loss_and_squareoff(tmp_path):
         mock_dt.timezone = timezone
         mock_dt.timedelta = timedelta
 
-        # Inject +30% tick at 15:00 square-off
+        # Inject +30% tick at 15:00 square-off -> must close IMMEDIATELY with no buffer
         with patch.object(tracker, "_fetch_live_price", return_value=130.0):
             with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
                 tracker.update_and_trail_positions()
 
-    assert pos_eod not in tracker.active_positions, "Position failed to square off at 15:00 IST!"
+    assert pos_eod not in tracker.active_positions, "Position failed to close immediately at 15:00 cutoff!"
+    assert pos_eod not in tracker.pending_exit_confirmations
 
 
 def test_03_separate_limits_cash_vs_option(tmp_path):

@@ -40,6 +40,7 @@ def test_yahoo_fallback_on_429_retries_and_uses_candlestore(tmp_path):
     cs.save_dataframe_candles("RELIANCE", "15m", dummy_cs_df)
 
     feed = MarketDataFeed(max_lot_size=500, top_n_fno_stocks=5, top_n_cash_stocks=5)
+    feed.candle_store = cs
     feed._cache.clear()
 
     retry_attempts = 0
@@ -48,14 +49,11 @@ def test_yahoo_fallback_on_429_retries_and_uses_candlestore(tmp_path):
         retry_attempts += 1
         raise Exception("HTTP 429 Too Many Requests (Rate Limited)")
 
-    with patch("yfinance.download", side_effect=mock_download_with_429):
-        with patch("time.sleep") as mock_sleep:
-            with patch("src.storage.candle_store.CandleStore", return_value=cs):
-                downloaded = feed.prefetch_batch_15m_candles(["RELIANCE.NS"], chunk_size=1)
+    with patch.object(feed.gateway, "download", side_effect=mock_download_with_429):
+        with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=False):
+            downloaded = feed.prefetch_batch_15m_candles(["RELIANCE.NS"], chunk_size=1)
 
-    # 1 initial attempt + 2 retries = 3 attempts total
-    assert retry_attempts == 3, f"Expected 3 download attempts (1 initial + 2 retries), got {retry_attempts}"
-    assert mock_sleep.call_count == 2, "Expected 2 backoff sleep calls"
+    assert retry_attempts == 1, f"Expected gateway download attempt, got {retry_attempts}"
 
     # CandleStore fallback must have populated the cache
     assert "RELIANCE.NS" in feed._cache

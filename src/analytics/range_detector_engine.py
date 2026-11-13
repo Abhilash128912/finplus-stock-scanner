@@ -17,8 +17,25 @@ from src.utils.time_and_logger import get_utc_iso, setup_logger
 logger = setup_logger("RangeDetectorEngine")
 
 def calc_rma(series: pd.Series, length: int) -> pd.Series:
-    alpha = 1.0 / length
-    return series.ewm(alpha=alpha, adjust=False).mean()
+    """
+    Exact Pine Script ta.rma parity:
+    First value = SMA of the first `length` true ranges.
+    Subsequent values = (prev * (length - 1) + tr) / length.
+    Replaces ewm(adjust=False) to achieve zero seeding divergence.
+    """
+    vals = series.to_numpy(dtype=float)
+    rma = np.empty_like(vals)
+    rma[:] = np.nan
+    
+    if len(vals) < length:
+        return pd.Series(rma, index=series.index)
+        
+    first_sma = np.mean(vals[:length])
+    rma[length - 1] = first_sma
+    for i in range(length, len(vals)):
+        rma[i] = (rma[i - 1] * (length - 1) + vals[i]) / length
+        
+    return pd.Series(rma, index=series.index)
 
 def calc_atr(df: pd.DataFrame, length: int = 500) -> pd.Series:
     high = df['High']
@@ -44,12 +61,16 @@ def calc_intraday_vwap(df: pd.DataFrame) -> pd.Series:
     return cum_tp_vol / cum_vol
 
 class RangeDetectorEngine:
-    def __init__(self, length: int = 20, mult: float = 1.0, atr_len: int = 500, min_history_bars: int = 520):
+    def __init__(self, length: int = 20, mult: float = 1.0, atr_len: int = 100, min_history_bars: Optional[int] = None, break_window_bars: int = 5, legacy_half_mode: bool = False):
         self.length = length
         self.mult = mult
         self.atr_len = atr_len
-        self.min_history_bars = min_history_bars
+        self.break_window_bars = break_window_bars
+        self.legacy_half_mode = legacy_half_mode
+        # Minimum bars rule: atr_len + range_len + 2, not a fixed 520
+        self.min_history_bars = min_history_bars if min_history_bars is not None else (self.atr_len + self.length + 2)
         self.skipped_insufficient_history_count = 0
+        logger.info(f"Initialized RangeDetectorEngine: length={self.length}, mult={self.mult}, atr_len={self.atr_len}, min_history_bars={self.min_history_bars}, break_window={self.break_window_bars}, legacy_half={self.legacy_half_mode}")
 
     def evaluate_instrument(self, raw_df: pd.DataFrame, meta: Dict[str, Any]) -> Dict[str, Any]:
         symbol = meta.get("symbol", "UNKNOWN")
@@ -101,8 +122,14 @@ class RangeDetectorEngine:
         # must be computed purely on closed bars.
         closed_df = df.iloc[:-1].copy() if len(df) >= 2 else df.copy()
         
+        # ATR length resolution (configurable vs effective)
+        if self.legacy_half_mode:
+            eff_atr_len = min(500, max(14, len(closed_df) // 2))
+        else:
+            eff_atr_len = self.atr_len
+
         # Indicators
-        closed_df['atr'] = calc_atr(closed_df, self.atr_len) * self.mult
+        closed_df['atr'] = calc_atr(closed_df, eff_atr_len) * self.mult
         closed_df['sma'] = closed_df['Close'].rolling(self.length).mean()
         closed_df['vwap'] = calc_intraday_vwap(closed_df)
         closed_df['vol_ma20'] = closed_df['Volume'].rolling(20).mean()
@@ -163,7 +190,7 @@ class RangeDetectorEngine:
                 
             prev_count = count
             
-            if not np.isnan(bx_top) and n <= bx_right + 5:
+            if not np.isnan(bx_top) and n <= bx_right + self.break_window_bars:
                 if os_state == 0:
                     if closes[n] > bx_top:
                         os_state = 1
@@ -595,6 +622,12 @@ class RangeDetectorEngine:
             "points_breakdown": points_breakdown,
             "signal_direction": signal_direction,
             "reason": reason,
+            
+            # ATR Metadata (Configured vs Effective)
+            "atr_len_configured": self.atr_len,
+            "atr_len_effective": eff_atr_len,
+            "break_window_bars": self.break_window_bars,
+            "legacy_half_mode": self.legacy_half_mode,
             
             # Explicit Option & Intraday Action Fields
             "call_strike": call_strike_name,

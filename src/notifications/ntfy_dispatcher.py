@@ -234,13 +234,10 @@ class NTFYDispatcher:
                 sx_chg = float(sx.get("pct_change_pdc", 0.0))
             else:
                 try:
-                    import yfinance as yf
-                    fp = getattr(yf.Ticker("^BSESN").fast_info, 'last_price', None)
+                    from src.gateway.yfinance_gateway import YFinanceGateway
+                    fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
                     if fp and fp > 80000:
                         sx_spot = float(fp)
-                        prev_c = getattr(yf.Ticker("^BSESN").fast_info, 'previous_close', None)
-                        if prev_c and prev_c > 0:
-                            sx_chg = round(((sx_spot - prev_c) / prev_c) * 100.0, 2)
                 except Exception:
                     pass
         if sx_spot == 0.0:
@@ -549,25 +546,35 @@ class NTFYDispatcher:
                 logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
         return success
 
-    def send_1545_self_report(self, rejected_ticks_total: int = 0, force: bool = False) -> bool:
+    def send_1545_self_report(self, rejected_ticks_total: int = 0, force: bool = False, shadow_stats: Optional[Dict[str, Any]] = None) -> bool:
         """
         Dispatches the 15:45 IST Post-Market System & Data Health Self-Report.
-        Includes rejected-tick counter telemetry per symbol and overall.
+        Includes rejected-tick counter telemetry per symbol and overall, plus yfinance usage and shadow stats.
         """
         from datetime import datetime, timezone, timedelta
+        from src.gateway.yfinance_gateway import YFinanceGateway
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         date_str = ist_now.strftime("%d-%b-%Y")
         
         if not force and ist_now.weekday() >= 5:
             return False
 
+        yf_metrics = YFinanceGateway().get_metrics()
+        yf_calls = yf_metrics.get("calls_today", 0)
+        yf_budget = yf_metrics.get("daily_budget", 250)
+
         lines = [
             f"FinPlus Self-Report | {date_str} 15:45 IST",
             "System Status: Post-Market Wrap & Telemetry",
             f"Price Sanity Rejections Today: {rejected_ticks_total}",
+            f"yfinance Gateway Calls Today: {yf_calls}/{yf_budget}",
+            f"yfinance Circuit Breaker: {'PAUSED' if yf_metrics.get('is_paused') else 'HEALTHY'}",
             "Daily Routine Quota: Audited & Restored",
             f"Cockpit: {RENDER_SCANNER_URL}"
         ]
+
+        if shadow_stats:
+            lines.append(f"Shadow Variants Evaluated: {shadow_stats.get('total_evaluated', 0)}")
 
         message = "\n".join(lines)
         title = "FinPlus Desk | 15:45 Self-Report"

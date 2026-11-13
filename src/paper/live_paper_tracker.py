@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-import yfinance as yf
+from src.gateway.yfinance_gateway import YFinanceGateway
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 from src.notifications.ntfy_dispatcher import safe_headers
@@ -500,30 +500,24 @@ class LivePaperTracker:
                 except Exception:
                     continue
 
-            # Real-Time Benchmark Calculation (WTI Crude, Henry Hub NatGas, COMEX Gold)
+            # Real-Time Benchmark Calculation (WTI Crude, Henry Hub NatGas, COMEX Gold) via Gateway
             try:
+                gw = YFinanceGateway()
                 usdinr = 88.50
-                try:
-                    usd_fi = getattr(yf.Ticker("USDINR=X"), "fast_info", None)
-                    usd_val = getattr(usd_fi, "last_price", None)
-                    if usd_val and float(usd_val) > 70:
-                        usdinr = float(usd_val)
-                except Exception:
-                    pass
+                usd_val = gw.get_fast_price("USDINR=X", reason="FALLBACK_GUARD")
+                if usd_val and float(usd_val) > 70:
+                    usdinr = float(usd_val)
 
                 if "CRUDE" in clean_sym:
-                    cl_fi = getattr(yf.Ticker("CL=F"), "fast_info", None)
-                    cl_val = getattr(cl_fi, "last_price", None)
+                    cl_val = gw.get_fast_price("CL=F", reason="FALLBACK_GUARD")
                     if cl_val and float(cl_val) > 0:
                         return round(float(cl_val) * usdinr, 2)
                 elif "NATGAS" in clean_sym:
-                    ng_fi = getattr(yf.Ticker("NG=F"), "fast_info", None)
-                    ng_val = getattr(ng_fi, "last_price", None)
+                    ng_val = gw.get_fast_price("NG=F", reason="FALLBACK_GUARD")
                     if ng_val and float(ng_val) > 0:
                         return round(float(ng_val) * usdinr, 2)
                 elif "GOLD" in clean_sym:
-                    gc_fi = getattr(yf.Ticker("GC=F"), "fast_info", None)
-                    gc_val = getattr(gc_fi, "last_price", None)
+                    gc_val = gw.get_fast_price("GC=F", reason="FALLBACK_GUARD")
                     if gc_val and float(gc_val) > 0:
                         return round((float(gc_val) * usdinr / 31.1034768) * 1.15, 2)
             except Exception:
@@ -559,21 +553,13 @@ class LivePaperTracker:
             "MIDCAP": "NIFTY_MID_SELECT.NS",
         }
 
-        # 3. Yahoo Finance Live Quote for Equities & Underlying Stocks
+        # 3. Fallback Live Quote via YFinanceGateway (only if broker failed)
         try:
+            gw = YFinanceGateway()
             yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
-            t = yf.Ticker(yf_ticker)
-            fi = getattr(t, "fast_info", None)
-            if fi:
-                lp = getattr(fi, "last_price", None)
-                if lp and float(lp) > 0:
-                    return round(float(lp), 2)
-
-            hist = t.history(period="1d", interval="1m")
-            if not hist.empty:
-                val = float(hist["Close"].dropna().iloc[-1])
-                if val > 0:
-                    return round(val, 2)
+            lp = gw.get_fast_price(yf_ticker, reason="FALLBACK_GUARD")
+            if lp and float(lp) > 0:
+                return round(float(lp), 2)
         except Exception:
             pass
 
@@ -731,8 +717,13 @@ class LivePaperTracker:
                                     )
                                     continue
                             else:
-                                # Expired pending confirmation (>10s)
+                                # Expired pending confirmation (>10s): discard buffer, keep position, log WARNING, count it
                                 self.pending_exit_confirmations.pop(pos_id, None)
+                                self.rejected_ticks_count[sym] = self.rejected_ticks_count.get(sym, 0) + 1
+                                self.daily_rejected_ticks_count[sym] = self.daily_rejected_ticks_count.get(sym, 0) + 1
+                                logger.warning(
+                                    f"Exit confirmation expired for {sym}: no confirming tick arrived within 10s of first spike ({prev_tick:.2f}). Discarded buffer, position kept open."
+                                )
                         
                         if not confirmed:
                             # First bad tick triggering exit: hold pending confirmation for up to 10s
