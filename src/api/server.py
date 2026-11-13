@@ -55,6 +55,25 @@ scheduler_task = None
 async def startup_event():
     global scheduler_task
     logger.info("Booting FinPlus+ Stock Scanner Server (Port 8001)...")
+
+    # Log DATA_DIR persistence telemetry
+    data_dir_env = os.getenv("DATA_DIR")
+    data_dir = Path(data_dir_env) if data_dir_env else (Path(_APP_ROOT) / "data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    is_writable = os.access(data_dir, os.W_OK)
+    db_files = ["candles.db", "schedule_ledger.db", "paper_trading.db"]
+    sizes_info = []
+    for db_name in db_files:
+        p = data_dir / db_name
+        if p.exists():
+            sizes_info.append(f"{db_name} ({p.stat().st_size / 1024.0:.1f} KB)")
+        else:
+            sizes_info.append(f"{db_name} (NOT FOUND)")
+    logger.info(
+        f"PERSISTENCE STARTUP: DATA_DIR='{data_dir}' (env_set={bool(data_dir_env)}, writable={is_writable}) | "
+        f"Databases: {', '.join(sizes_info)}"
+    )
+
     scheduler_task = asyncio.create_task(scheduler.start_loop())
     # Warm up broker authentication in background thread
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
@@ -208,6 +227,13 @@ async def deep_health_check():
         subsystem_status["price_sanity"] = "DATA_SUSPECT" if suspect_cnt > 0 else "HEALTHY"
     else:
         subsystem_status["price_sanity"] = "HEALTHY"
+
+    # 7. Render Ephemeral Disk Check
+    if "RENDER" in os.environ and not os.getenv("DATA_DIR"):
+        issues.append(
+            "EPHEMERAL_DISK_WARNING: Running on Render with ephemeral disk. DATA_DIR is not set; "
+            "persistent data (.db files) will be lost on container restart. Mount a Render Persistent Disk and set DATA_DIR."
+        )
 
     # Off-hours rule: Return 200 outside market hours, weekends, and holidays
     if not market_open or is_weekend or is_hol:

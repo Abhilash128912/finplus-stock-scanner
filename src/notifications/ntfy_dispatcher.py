@@ -591,14 +591,19 @@ class NTFYDispatcher:
             return False
 
         yf_metrics = YFinanceGateway().get_metrics()
-        yf_calls = yf_metrics.get("calls_today", 0)
-        yf_budget = yf_metrics.get("daily_budget", 250)
+        strict_calls = yf_metrics.get("strict_calls_today", 0)
+        strict_budget = yf_metrics.get("max_calls_per_day", 250)
+        legacy_calls = yf_metrics.get("legacy_scan_calls_today", 0)
+        legacy_budget = yf_metrics.get("max_legacy_scan_calls_per_day", 3000)
+        legacy_active = "ACTIVE" if yf_metrics.get("legacy_scan_active") else "OFF"
 
         lines = [
             f"FinPlus Self-Report | {date_str} 15:45 IST",
             "System Status: Post-Market Wrap & Telemetry",
             f"Price Sanity Rejections Today: {rejected_ticks_total}",
-            f"yfinance Gateway Calls Today: {yf_calls}/{yf_budget}",
+            f"Legacy Yahoo Scan Path: {legacy_active}",
+            f"yfinance Strict Calls (Backfill/Fallback): {strict_calls}/{strict_budget}",
+            f"yfinance Legacy Scan Calls: {legacy_calls}/{legacy_budget}",
             f"yfinance Circuit Breaker: {'PAUSED' if yf_metrics.get('is_paused') else 'HEALTHY'}",
             "Daily Routine Quota: Audited & Restored",
             f"Cockpit: {RENDER_SCANNER_URL}"

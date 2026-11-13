@@ -438,29 +438,101 @@ class ScannerScheduler:
                 logger.error(f"Error in Clock Dispatcher loop: {e}")
                 await asyncio.sleep(10)
 
+    async def run_paced_history_backfill(self, target_coverage: float = 0.90, chunk_size: int = 30, pause_seconds: float = 15.0):
+        """
+        Background paced history backfill.
+        If universe coverage is under 90%, downloads missing symbols in paced chunks (15-20s pause)
+        via YFinanceGateway with reason="HISTORY_BACKFILL".
+        Runs non-blocking alongside live scans, persisting progress so restarts resume automatically.
+        """
+        try:
+            universe = self.feed.get_all_universe_items() if self.feed else []
+            if not universe:
+                return
+
+            universe_tickers = {}
+            for item in universe:
+                sym = item.get("symbol", "").split(" ")[0].upper()
+                ticker = item.get("yf_ticker", f"{sym}.NS")
+                if sym and ticker:
+                    universe_tickers[sym] = ticker
+
+            all_symbols = list(universe_tickers.keys())
+            target_bars = 522 # ATR 500
+
+            with self.candle_store._get_connection() as conn:
+                rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
+            counts = {r[0].upper(): r[1] for r in rows}
+
+            covered_count = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
+            cov_ratio = (covered_count / len(all_symbols)) if all_symbols else 1.0
+
+            if cov_ratio >= target_coverage:
+                logger.info(f"STARTUP BACKFILL: Coverage is already {cov_ratio*100:.1f}% (>= {target_coverage*100:.0f}%). No backfill needed.")
+                return
+
+            missing_symbols = [s for s in all_symbols if counts.get(s, 0) < target_bars]
+            logger.info(
+                f"STARTUP BACKFILL ACTIVATED: Coverage {cov_ratio*100:.1f}% is below target {target_coverage*100:.0f}%. "
+                f"{len(missing_symbols)} symbols to backfill in chunks of {chunk_size} (pacing {pause_seconds}s). "
+                "Legacy scan path remains ON to serve market data meanwhile."
+            )
+
+            chunks = [missing_symbols[i:i + chunk_size] for i in range(0, len(missing_symbols), chunk_size)]
+            for idx, chunk_syms in enumerate(chunks, 1):
+                if not self.is_running:
+                    break
+
+                chunk_tickers = [universe_tickers[s] for s in chunk_syms]
+                raw_df = await asyncio.to_thread(
+                    self.feed.gateway.download,
+                    chunk_tickers,
+                    reason="HISTORY_BACKFILL",
+                    caller="ScannerScheduler.startup_backfill",
+                    trigger_detail=f"Startup chunk {idx}/{len(chunks)}",
+                    period="30d",
+                    interval="15m",
+                    group_by="ticker",
+                    threads=True
+                )
+
+                if raw_df is not None and not raw_df.empty:
+                    if len(chunk_tickers) == 1:
+                        sym = chunk_syms[0]
+                        df = raw_df.copy()
+                        if isinstance(df.columns, pd.MultiIndex):
+                            df.columns = df.columns.get_level_values(0)
+                        self.candle_store.save_dataframe_candles(sym, "15m", df)
+                    else:
+                        for sym, t in zip(chunk_syms, chunk_tickers):
+                            try:
+                                if hasattr(raw_df.columns, "levels") and t in raw_df.columns.levels[0]:
+                                    df = raw_df[t].dropna(how="all").copy()
+                                    if not df.empty:
+                                        self.candle_store.save_dataframe_candles(sym, "15m", df)
+                            except Exception:
+                                pass
+
+                # Check interim coverage
+                with self.candle_store._get_connection() as conn:
+                    rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
+                counts = {r[0].upper(): r[1] for r in rows}
+                cur_cov = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
+                logger.info(f"[STARTUP BACKFILL] Chunk {idx}/{len(chunks)} saved. Universe coverage: {cur_cov}/{len(all_symbols)} ({cur_cov/len(all_symbols)*100:.1f}%)")
+
+                if idx < len(chunks):
+                    await asyncio.sleep(pause_seconds)
+
+            logger.info("STARTUP BACKFILL COMPLETED.")
+        except Exception as err:
+            logger.error(f"Error in startup backfill task: {err}")
+
     async def _scanner_worker_loop(self):
         """Background universe data refresher with startup history sanity check."""
         logger.info("Scanner Data Worker Loop active.")
         
-        # 2d & Note 3: Startup history check. If history is missing (empty or wiped database), run a one-time backfill
-        try:
-            total_bars = 0
-            with self.candle_store._get_connection() as conn:
-                row = conn.execute("SELECT COUNT(*) FROM candles").fetchone()
-                total_bars = row[0] if row else 0
-
-            if total_bars < 500:
-                logger.warning(
-                    f"STARTUP HISTORY CHECK: Local CandleStore has only {total_bars} bars (wiped or fresh disk). "
-                    "Triggering one-time startup backfill through gateway within daily budget..."
-                )
-                universe = self.feed.get_all_universe_items() if self.feed else []
-                # Priority symbols first (FNO & top cash)
-                priority_t = [it.get("yf_ticker") for it in universe[:50] if it.get("yf_ticker")]
-                cnt = await asyncio.to_thread(self.feed.prefetch_batch_15m_candles, priority_t, period="30d", chunk_size=20)
-                logger.info(f"Startup backfill complete: {cnt} priority symbols populated in CandleStore.")
-        except Exception as startup_err:
-            logger.error(f"Error during startup history check: {startup_err}")
+        # Launch paced history backfill in background if coverage < 90%
+        asyncio.create_task(self.run_paced_history_backfill())
 
         # Perform initial scan in background worker so start_loop does not block clock dispatcher
         try:

@@ -136,3 +136,38 @@ def test_over_budget_blocked_and_scan_continues_on_cache(tmp_path):
     stats = gw.get_today_stats()
     assert stats["calls"] == 3
     assert stats["blocked"] == 1
+
+def test_legacy_scan_separate_budget_does_not_exhaust_strict_budget(tmp_path):
+    """TEST: LEGACY_SCAN calls use their own ceiling and never consume strict budget."""
+    db_file = tmp_path / "test_gw_legacy_budget.db"
+    gw = YFinanceGateway(db_path=str(db_file), max_calls_per_day=2, max_legacy_scan_calls_per_day=5)
+    gw.max_calls_per_day = 2
+    gw.max_legacy_scan_calls_per_day = 5
+
+    dummy_df = pd.DataFrame({"Close": [100.0, 101.0]})
+    with patch("yfinance.download", return_value=dummy_df):
+        # 3 LEGACY_SCAN calls (would have blown strict budget of 2)
+        res_l1 = gw.download("RELIANCE.NS", reason="LEGACY_SCAN")
+        res_l2 = gw.download("TCS.NS", reason="LEGACY_SCAN")
+        res_l3 = gw.download("INFY.NS", reason="LEGACY_SCAN")
+        assert not res_l1.empty
+        assert not res_l2.empty
+        assert not res_l3.empty
+
+        stats_mid = gw.get_today_stats()
+        assert stats_mid["legacy_scan_calls"] == 3
+        assert stats_mid["strict_calls"] == 0, "LEGACY_SCAN must not consume strict budget!"
+
+        # Strict budget should still have its full 2 calls available
+        res_s1 = gw.download("HDFCBANK.NS", reason="HISTORY_BACKFILL")
+        res_s2 = gw.download("ICICIBANK.NS", reason="HISTORY_BACKFILL")
+        assert not res_s1.empty
+        assert not res_s2.empty
+
+        # 3rd strict call should be blocked (strict budget = 2)
+        res_s3 = gw.download("SBIN.NS", reason="HISTORY_BACKFILL")
+        assert res_s3.empty, "3rd strict call should be blocked"
+
+        # But 4th LEGACY_SCAN call can still succeed (4 <= 5)
+        res_l4 = gw.download("WIPRO.NS", reason="LEGACY_SCAN")
+        assert not res_l4.empty, "Legacy scan must continue to function!"

@@ -35,7 +35,7 @@ from src.utils.time_and_logger import setup_logger, get_utc_iso
 
 logger = setup_logger("YFinanceGateway")
 
-VALID_REASONS = {"HISTORY_BACKFILL", "NEW_SYMBOL", "FALLBACK_GUARD"}
+VALID_REASONS = {"HISTORY_BACKFILL", "NEW_SYMBOL", "FALLBACK_GUARD", "LEGACY_SCAN"}
 DB_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data"))
 DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DB_DIR / "schedule_ledger.db"
@@ -55,7 +55,8 @@ class YFinanceGateway:
         enabled: bool = True,
         max_calls_per_day: int = 250,
         max_tickers_per_day: int = 5000,
-        fallback_max_per_day: int = 100
+        fallback_max_per_day: int = 100,
+        max_legacy_scan_calls_per_day: int = 3000
     ):
         if getattr(self, "_initialized", False) and self.db_path == db_path:
             return
@@ -64,6 +65,7 @@ class YFinanceGateway:
         self.max_calls_per_day = max_calls_per_day
         self.max_tickers_per_day = max_tickers_per_day
         self.fallback_max_per_day = fallback_max_per_day
+        self.max_legacy_scan_calls_per_day = max_legacy_scan_calls_per_day
         self.circuit_broken_until_ts: float = 0.0
         self.fallback_active: bool = False
         self.last_call_utc: Optional[str] = None
@@ -71,7 +73,8 @@ class YFinanceGateway:
         self._initialized = True
         logger.info(
             f"Initialized YFinanceGateway (Enabled: {self.enabled}, MaxCalls: {self.max_calls_per_day}, "
-            f"MaxTickers: {self.max_tickers_per_day}, MaxFallback: {self.fallback_max_per_day}, DB: {self.db_path})"
+            f"MaxTickers: {self.max_tickers_per_day}, MaxFallback: {self.fallback_max_per_day}, "
+            f"MaxLegacyScanCalls: {self.max_legacy_scan_calls_per_day}, DB: {self.db_path})"
         )
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -125,17 +128,25 @@ class YFinanceGateway:
             row = conn.execute("""
                 SELECT 
                     COUNT(*) as total_calls,
-                    SUM(symbols_count) as total_symbols,
+                    SUM(CASE WHEN reason_code != 'LEGACY_SCAN' THEN 1 ELSE 0 END) as strict_calls,
+                    SUM(CASE WHEN reason_code != 'LEGACY_SCAN' THEN symbols_count ELSE 0 END) as strict_symbols,
+                    SUM(CASE WHEN reason_code = 'LEGACY_SCAN' THEN 1 ELSE 0 END) as legacy_scan_calls,
+                    SUM(CASE WHEN reason_code = 'LEGACY_SCAN' THEN symbols_count ELSE 0 END) as legacy_scan_symbols,
                     SUM(CASE WHEN reason_code = 'FALLBACK_GUARD' THEN 1 ELSE 0 END) as fallback_calls,
                     SUM(CASE WHEN result = 'BLOCKED' THEN 1 ELSE 0 END) as blocked_calls
                 FROM yfinance_usage 
                 WHERE date_str = ?
             """, (today_str,)).fetchone()
             return {
-                "calls": row["total_calls"] or 0,
-                "symbols": row["total_symbols"] or 0,
+                "calls": row["strict_calls"] or 0,
+                "symbols": row["strict_symbols"] or 0,
+                "strict_calls": row["strict_calls"] or 0,
+                "strict_symbols": row["strict_symbols"] or 0,
+                "legacy_scan_calls": row["legacy_scan_calls"] or 0,
+                "legacy_scan_symbols": row["legacy_scan_symbols"] or 0,
                 "fallback_calls": row["fallback_calls"] or 0,
-                "blocked": row["blocked_calls"] or 0
+                "blocked": row["blocked_calls"] or 0,
+                "total_calls": row["total_calls"] or 0
             }
 
     def is_paused(self) -> Tuple[bool, int]:
@@ -212,20 +223,26 @@ class YFinanceGateway:
             return pd.DataFrame()
 
         today_stats = self.get_today_stats()
-        if today_stats["calls"] >= self.max_calls_per_day:
-            logger.warning(f"yfinance call BLOCKED: daily calls budget ({self.max_calls_per_day}) exhausted")
-            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily call budget exhausted")
-            return pd.DataFrame()
+        if reason == "LEGACY_SCAN":
+            if today_stats["legacy_scan_calls"] >= self.max_legacy_scan_calls_per_day:
+                logger.warning(f"yfinance call BLOCKED: daily legacy scan budget ({self.max_legacy_scan_calls_per_day}) exhausted")
+                self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily legacy scan budget exhausted")
+                return pd.DataFrame()
+        else:
+            if today_stats["strict_calls"] >= self.max_calls_per_day:
+                logger.warning(f"yfinance call BLOCKED: daily calls budget ({self.max_calls_per_day}) exhausted")
+                self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily call budget exhausted")
+                return pd.DataFrame()
 
-        if (today_stats["symbols"] + symbols_count) > self.max_tickers_per_day:
-            logger.warning(f"yfinance call BLOCKED: daily ticker budget ({self.max_tickers_per_day}) exhausted")
-            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily ticker budget exhausted")
-            return pd.DataFrame()
+            if (today_stats["strict_symbols"] + symbols_count) > self.max_tickers_per_day:
+                logger.warning(f"yfinance call BLOCKED: daily ticker budget ({self.max_tickers_per_day}) exhausted")
+                self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily ticker budget exhausted")
+                return pd.DataFrame()
 
-        if reason == "FALLBACK_GUARD" and today_stats["fallback_calls"] >= self.fallback_max_per_day:
-            logger.warning(f"yfinance call BLOCKED: daily fallback budget ({self.fallback_max_per_day}) exhausted")
-            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Fallback budget exhausted")
-            return pd.DataFrame()
+            if reason == "FALLBACK_GUARD" and today_stats["fallback_calls"] >= self.fallback_max_per_day:
+                logger.warning(f"yfinance call BLOCKED: daily fallback budget ({self.fallback_max_per_day}) exhausted")
+                self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Fallback budget exhausted")
+                return pd.DataFrame()
 
         # One INFO log line per call
         logger.info(f"YFINANCE_CALL: reason={reason}, caller={caller}, count={symbols_count}, symbols={symbols_str}, period={period}, interval={interval}")
@@ -275,8 +292,12 @@ class YFinanceGateway:
             return None
 
         today_stats = self.get_today_stats()
-        if today_stats["calls"] >= self.max_calls_per_day:
-            return None
+        if reason == "LEGACY_SCAN":
+            if today_stats["legacy_scan_calls"] >= self.max_legacy_scan_calls_per_day:
+                return None
+        else:
+            if today_stats["strict_calls"] >= self.max_calls_per_day:
+                return None
 
         logger.info(f"YFINANCE_CALL: method=fast_price, reason={reason}, caller={caller}, ticker={ticker}")
         try:
@@ -303,6 +324,7 @@ class YFinanceGateway:
         """Returns deep telemetry for /api/health/deep and /api/yfinance/usage."""
         today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         paused, rem = self.is_paused()
+        today_stats = self.get_today_stats()
         with self._get_connection() as conn:
             rows = conn.execute("""
                 SELECT reason_code, 
@@ -322,14 +344,22 @@ class YFinanceGateway:
                 }
             last_row = conn.execute("SELECT utc_time, reason_code, caller, result FROM yfinance_usage ORDER BY id DESC LIMIT 1").fetchone()
 
+        legacy_active = os.getenv("ENABLE_LEGACY_YAHOO_SCAN_PATH", "true").lower() == "true"
+
         return {
             "yfinance_enabled": self.enabled,
             "max_calls_per_day": self.max_calls_per_day,
+            "strict_calls_today": today_stats["strict_calls"],
             "max_tickers_per_day": self.max_tickers_per_day,
             "fallback_max_per_day": self.fallback_max_per_day,
+            "max_legacy_scan_calls_per_day": self.max_legacy_scan_calls_per_day,
+            "legacy_scan_calls_today": today_stats["legacy_scan_calls"],
+            "legacy_scan_active": legacy_active,
+            "LEGACY_SCAN_ACTIVE": legacy_active,
             "is_paused": paused,
             "paused_until_seconds": rem,
             "fallback_active": self.fallback_active,
             "last_call_utc": self.last_call_utc or (last_row["utc_time"] if last_row else None),
-            "reasons": reasons_telemetry
+            "reasons": reasons_telemetry,
+            "today_stats": today_stats
         }

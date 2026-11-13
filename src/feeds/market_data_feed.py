@@ -91,18 +91,20 @@ class MarketDataFeed:
                         loaded += 1
             return loaded
 
-        # Off-hours backfill logic routed through gateway with HISTORY_BACKFILL
+        # Off-hours backfill or safety-valve legacy scan logic routed through gateway
         needed = [t for t in tickers if t and (t not in self._cache or (now - self._cache[t]['ts']) >= self.cache_ttl)]
         if not needed:
             return 0
 
-        logger.info(f"[HISTORY_BACKFILL] Prefetching batch candles for {len(needed)} tickers (chunks of {chunk_size})...")
+        is_market_open = is_equity_market_open_ist()
+        reason_code = "LEGACY_SCAN" if is_market_open else "HISTORY_BACKFILL"
+        logger.info(f"[{reason_code}] Prefetching batch candles for {len(needed)} tickers (chunks of {chunk_size})...")
         downloaded = 0
         for i in range(0, len(needed), chunk_size):
             chunk = needed[i:i + chunk_size]
             raw_df = None
             try:
-                raw_df = self.gateway.download(chunk, reason="HISTORY_BACKFILL", period=period, interval="15m", group_by="ticker", threads=True)
+                raw_df = self.gateway.download(chunk, reason=reason_code, caller="MarketDataFeed", period=period, interval="15m", group_by="ticker", threads=True)
             except Exception as ex:
                 logger.warning(f"Gateway download error for chunk {chunk}: {ex}")
 
