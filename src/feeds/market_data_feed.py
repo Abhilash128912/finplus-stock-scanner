@@ -39,6 +39,8 @@ class MarketDataFeed:
         # Combined tracked list with clear categories
         self.universe: List[Dict[str, Any]] = self.fno_universe + self.cash_universe
         self._cache = {}
+        self.fallback_tickers_this_cycle: set = set()
+        self.last_fallback_alert_time: float = 0.0
         
         logger.info(
             f"MarketDataFeed initialized: {len(self.fno_universe)} F&O/Index Option instruments "
@@ -76,38 +78,62 @@ class MarketDataFeed:
 
         for i in range(0, len(needed), chunk_size):
             chunk = needed[i:i + chunk_size]
-            try:
-                raw_df = yf.download(chunk, period=period, interval="15m", group_by="ticker", progress=False, threads=True)
-                if raw_df is not None and not raw_df.empty:
-                    from src.storage.candle_store import CandleStore
-                    cs = CandleStore()
-                    if len(chunk) == 1:
-                        ticker = chunk[0]
-                        df = raw_df.copy()
-                        if isinstance(df.columns, pd.MultiIndex):
-                            df.columns = df.columns.get_level_values(0)
-                        self._cache[ticker] = {'df': df, 'ts': now}
+            raw_df = None
+            max_retries = 2
+            backoffs = [2.0, 6.0]
+
+            for attempt in range(max_retries + 1):
+                try:
+                    raw_df = yf.download(chunk, period=period, interval="15m", group_by="ticker", progress=False, threads=True)
+                    if raw_df is not None and not raw_df.empty:
+                        break
+                except Exception as ex:
+                    if attempt < max_retries:
+                        sleep_s = backoffs[attempt]
+                        logger.warning(f"Batch chunk failed ({ex}). Retrying in {sleep_s}s (Attempt {attempt + 1}/{max_retries})...")
+                        time.sleep(sleep_s)
+                    else:
+                        logger.error(f"Batch candle chunk failed after {max_retries} retries: {ex}")
+
+            from src.storage.candle_store import CandleStore
+            cs = CandleStore()
+
+            if raw_df is not None and not raw_df.empty:
+                if len(chunk) == 1:
+                    ticker = chunk[0]
+                    df = raw_df.copy()
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    self._cache[ticker] = {'df': df, 'ts': now}
+                    try:
+                        cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
+                    except Exception:
+                        pass
+                    downloaded += 1
+                else:
+                    for ticker in chunk:
                         try:
-                            cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
+                            if hasattr(raw_df.columns, "levels") and ticker in raw_df.columns.levels[0]:
+                                df = raw_df[ticker].dropna(how="all").copy()
+                                if not df.empty:
+                                    self._cache[ticker] = {'df': df, 'ts': now}
+                                    try:
+                                        cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
+                                    except Exception:
+                                        pass
+                                    downloaded += 1
                         except Exception:
                             pass
+            else:
+                # Yahoo failed after retries: fallback to CandleStore for tickers in chunk
+                for ticker in chunk:
+                    clean = ticker.replace(".NS", "")
+                    local_df = cs.get_candles_as_dataframe(clean, "15m")
+                    if not local_df.empty:
+                        self._cache[ticker] = {'df': local_df, 'ts': now}
+                        self.fallback_tickers_this_cycle.add(ticker)
+                        logger.warning(f"[FALLBACK_CANDLESTORE] Yahoo unavailable for {ticker}. Serving {len(local_df)} bars from CandleStore.")
                         downloaded += 1
-                    else:
-                        for ticker in chunk:
-                            try:
-                                if hasattr(raw_df.columns, "levels") and ticker in raw_df.columns.levels[0]:
-                                    df = raw_df[ticker].dropna(how="all").copy()
-                                    if not df.empty:
-                                        self._cache[ticker] = {'df': df, 'ts': now}
-                                        try:
-                                            cs.save_dataframe_candles(ticker.replace(".NS", ""), "15m", df)
-                                        except Exception:
-                                            pass
-                                        downloaded += 1
-                            except Exception:
-                                pass
-            except Exception as e:
-                logger.error(f"Batch candle chunk {i // chunk_size + 1} failed: {e}")
 
         logger.info(f"Prefetch complete: {downloaded}/{len(needed)} tickers updated in cache and persistent candle store.")
         return downloaded

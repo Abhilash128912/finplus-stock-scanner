@@ -46,6 +46,9 @@ class LivePaperTracker:
         self._lock = threading.Lock()
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.symbol_last_close_time: Dict[str, float] = {}
+        self.rejected_ticks_count: Dict[str, int] = {}
+        self.suspect_symbols: set = set()
+        self.price_sanity_pct = float(os.getenv("PRICE_SANITY_MAX_PCT", "15.0"))
         self.is_running = False
         self.indmoney_feed = INDMoneyLiveFeed()
         self._init_db()
@@ -280,6 +283,9 @@ class LivePaperTracker:
         cash = shortlist.get("best_intraday_stock")
         if cash and cash.get("confluence_score", 0) >= 80 and "APPROVED" in cash.get("regime_confluence", ""):
             sym = cash.get("symbol")
+            if sym in self.suspect_symbols:
+                logger.warning(f"Blocking fresh entry for {sym}: marked DATA_SUSPECT due to consecutive price jumps.")
+                return
             pts = cash.get("points_breakdown", {})
             vol_pts = pts.get("volume_pts", 0)
             rvol = float(cash.get("relative_volume", 0.0) or 0.0)
@@ -567,8 +573,11 @@ class LivePaperTracker:
         now_ist = datetime.datetime.now(tz=IST)
         hour = now_ist.hour
         minute = now_ist.minute
+        # Equity cutoff 15:00 IST; MCX cutoff configurable (default 23:15 IST)
+        mcx_cutoff_hour = int(os.getenv("MCX_CUTOFF_HOUR", "23"))
+        mcx_cutoff_minute = int(os.getenv("MCX_CUTOFF_MINUTE", "15"))
         is_equity_eod = (hour == 15 and minute >= 0) or (hour > 15)
-        is_mcx_eod = (hour == 23 and minute >= 15) or (hour > 23)
+        is_mcx_eod = (hour == mcx_cutoff_hour and minute >= mcx_cutoff_minute) or (hour > mcx_cutoff_hour)
 
         equity_sectors = (
             "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",
@@ -596,6 +605,28 @@ class LivePaperTracker:
                 live_price = self._fetch_live_price(sym, sector)
                 if not live_price or live_price <= 0:
                     continue
+
+                # PRICE SANITY GUARD:
+                # 1. Reject any tick that jumps more than price_sanity_pct (default 15%) in one tick from last accepted price
+                # 2. Reject option premium > 3x entry cap
+                last_accepted = pos.get("current_price", entry)
+                if last_accepted > 0:
+                    pct_jump = abs(live_price - last_accepted) / last_accepted * 100.0
+                    if pct_jump > self.price_sanity_pct:
+                        self.rejected_ticks_count[sym] = self.rejected_ticks_count.get(sym, 0) + 1
+                        logger.warning(
+                            f"WARNING: Price sanity rejected tick for {sym}: jumped {pct_jump:.1f}% "
+                            f"(from {last_accepted:.2f} to {live_price:.2f}, limit {self.price_sanity_pct}%). "
+                            f"Tick skipped, P&L unchanged (Rejections: {self.rejected_ticks_count[sym]})."
+                        )
+                        if self.rejected_ticks_count[sym] >= 3:
+                            self.suspect_symbols.add(sym)
+                            logger.error(f"DATA_SUSPECT: Symbol {sym} has 3 consecutive rejected ticks. Flagged DATA_SUSPECT, signals blocked.")
+                        continue
+
+                # Reset consecutive rejection count on good tick
+                if sym in self.rejected_ticks_count:
+                    self.rejected_ticks_count[sym] = 0
 
                 pos["current_price"] = live_price
 
@@ -750,23 +781,31 @@ class LivePaperTracker:
         closed_utc = get_utc_iso()
 
         inserted = False
-        with self._get_connection() as conn:
-            cursor = conn.execute("""
-                INSERT OR IGNORE INTO closed_paper_trades (
-                    trade_id, position_id, symbol, sector, action,
-                    is_option, entry_price, exit_price, quantity,
-                    gross_pnl, total_charges, net_pnl, exit_reason,
-                    entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                trade_id, pos_id, pos["symbol"], pos["sector"], pos["action"],
-                pos["is_option"], pos["entry_price"], pos["exit_price"], qty,
-                gross_pnl, charges, net_pnl, exit_reason,
-                pos["entry_time_ist"], exit_time_ist, pos["opened_at_utc"], closed_utc
-            ))
-            conn.execute("DELETE FROM active_paper_positions WHERE position_id = ?", (pos_id,))
-            conn.commit()
-            inserted = (cursor.rowcount == 1)
+        try:
+            with self._get_connection() as conn:
+                cursor = conn.execute("""
+                    INSERT OR IGNORE INTO closed_paper_trades (
+                        trade_id, position_id, symbol, sector, action,
+                        is_option, entry_price, exit_price, quantity,
+                        gross_pnl, total_charges, net_pnl, exit_reason,
+                        entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    trade_id, pos_id, pos["symbol"], pos["sector"], pos["action"],
+                    pos["is_option"], pos["entry_price"], pos["exit_price"], qty,
+                    gross_pnl, charges, net_pnl, exit_reason,
+                    pos["entry_time_ist"], exit_time_ist, pos["opened_at_utc"], closed_utc
+                ))
+                conn.execute("DELETE FROM active_paper_positions WHERE position_id = ?", (pos_id,))
+                conn.commit()
+                inserted = (cursor.rowcount == 1)
+        except Exception as db_err:
+            # If DB error occurs (disk full, DB locked, etc.), rollback memory: restore position to open list
+            with self._lock:
+                pos["status"] = "OPEN"
+                self.active_positions[pos_id] = pos
+            logger.error(f"ERROR inserting closed trade {trade_id} ({pos['symbol']}): {db_err}. Rolled back position to active list for retry.")
+            return False
 
         clean_base = pos["symbol"].split(" ")[0].upper()
         self.symbol_last_close_time[clean_base] = time.time()
@@ -777,7 +816,8 @@ class LivePaperTracker:
             self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
             return True
         else:
-            logger.warning(f"PAPER TRADE DUPLICATE IGNORED: {pos['symbol']} ({trade_id}) already in closed ledger.")
+            # rowcount == 0 means duplicate: log at DEBUG, no alert
+            logger.debug(f"PAPER TRADE DUPLICATE IGNORED: {pos['symbol']} ({trade_id}) already in closed ledger.")
             return False
 
     def get_daily_realized_pnl(self, date_ist_str: Optional[str] = None) -> float:

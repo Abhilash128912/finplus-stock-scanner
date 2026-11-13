@@ -176,6 +176,26 @@ class ScannerScheduler:
 
         # Dispatch 30m pulse (enforcing 30m cooldown)
         self.dispatcher.send_30m_shortlist_pulse(shortlist)
+
+        # Check fallback ratio: If >10% of tickers fell back to CandleStore in one cycle, alert via NTFY (priority, max once/hour)
+        if self.feed and hasattr(self.feed, "fallback_tickers_this_cycle"):
+            fb_count = len(self.feed.fallback_tickers_this_cycle)
+            tot_count = max(1, len(all_tickers))
+            fb_ratio = fb_count / tot_count
+            now_ts = time.time()
+            if fb_ratio > 0.10 and (now_ts - getattr(self.feed, "last_fallback_alert_time", 0.0)) > 3600.0:
+                self.feed.last_fallback_alert_time = now_ts
+                logger.warning(f"HIGH FALLBACK RATIO: {fb_count}/{tot_count} ({fb_ratio:.1%}) tickers using CandleStore fallback.")
+                for topic in self.dispatcher.topics:
+                    self.dispatcher._safe_post(
+                        f"https://ntfy.sh/{topic}",
+                        f"Yahoo Finance degraded: {fb_count}/{tot_count} ({fb_ratio:.1%}) tickers falling back to CandleStore.",
+                        {"Title": "FinPlus Feed Alert | CandleStore Fallback", "Priority": "4"},
+                        alert_type="ROUTINE",
+                        is_priority=True
+                    )
+            # Reset fallback set for next cycle
+            self.feed.fallback_tickers_this_cycle.clear()
         
         logger.info(f"Completed universe scan ({len(results)} items evaluated). Shortlist updated.")
         return results
@@ -196,28 +216,42 @@ class ScannerScheduler:
         while self.is_running:
             try:
                 ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
-                # Weekdays only (Monday = 0 to Friday = 4)
-                if ist_now.weekday() < 5:
-                    date_str = ist_now.strftime("%Y-%m-%d")
-                    ist_now_str = ist_now.strftime("%I:%M %p IST")
+                date_str = ist_now.strftime("%Y-%m-%d")
+                ist_now_str = ist_now.strftime("%I:%M %p IST")
 
-                    # Proactive Token Refresh at 08:45 AM IST on trading days
-                    if (ist_now.hour == 8 and ist_now.minute >= 45) or (ist_now.hour >= 9):
-                        if self._last_proactive_refresh_date != date_str:
-                            self._last_proactive_refresh_date = date_str
-                            logger.info(f"08:45 IST Proactive Token Warmup triggered for trading day {date_str}...")
-                            if self.indmoney_feed and self.indmoney_feed.auth_client:
-                                try:
-                                    await asyncio.to_thread(self.indmoney_feed.auth_client.get_valid_token, auto_refresh=True)
-                                    logger.info("08:45 IST Proactive Token Warmup successful.")
-                                    self.is_stale_feed = False
-                                except Exception as auth_err:
-                                    logger.error(f"08:45 IST Proactive Token Warmup failed: {auth_err}. Marking feed STALE_FEED.")
-                                    self.is_stale_feed = True
+                # Check for official NSE Holiday
+                is_hol, hol_name = is_nse_holiday(ist_now.date())
+                is_weekend = (ist_now.weekday() >= 5)
 
-                    # Check for official NSE Holiday
-                    is_hol, hol_name = is_nse_holiday(ist_now.date())
-                    if is_hol:
+                if is_hol or is_weekend:
+                    reason = f"Weekend ({ist_now.strftime('%A')})" if is_weekend else f"NSE Holiday ({hol_name})"
+                    if date_str != self._last_proactive_refresh_date:
+                        self._last_proactive_refresh_date = date_str
+                        logger.info(f"Market closed today: {reason}")
+
+                    if is_hol and not is_weekend:
+                        slot_hol = f"{date_str}_holiday_alert"
+                        if ist_now.hour >= 9 and slot_hol not in self._dispatched_slots:
+                            self._dispatched_slots.add(slot_hol)
+                            logger.info(f"NSE Holiday Gate: Today is {hol_name}. Dispatching holiday notice...")
+                            self.dispatcher.send_holiday_notice(hol_name)
+                    await asyncio.sleep(60)
+                    continue
+
+                # Weekdays only on open trading days:
+                # Proactive Token Refresh at 08:45 AM IST on trading days
+                if (ist_now.hour == 8 and ist_now.minute >= 45) or (ist_now.hour >= 9):
+                    if self._last_proactive_refresh_date != date_str:
+                        self._last_proactive_refresh_date = date_str
+                        logger.info(f"08:45 IST Proactive Token Warmup triggered for trading day {date_str}...")
+                        if self.indmoney_feed and self.indmoney_feed.auth_client:
+                            try:
+                                await asyncio.to_thread(self.indmoney_feed.auth_client.get_valid_token, auto_refresh=True)
+                                logger.info("08:45 IST Proactive Token Warmup successful.")
+                                self.is_stale_feed = False
+                            except Exception as auth_err:
+                                logger.error(f"08:45 IST Proactive Token Warmup failed: {auth_err}. Marking feed STALE_FEED.")
+                                self.is_stale_feed = True
                         slot_hol = f"{date_str}_holiday_alert"
                         if ist_now.hour >= 9 and slot_hol not in self._dispatched_slots:
                             self._dispatched_slots.add(slot_hol)

@@ -65,9 +65,16 @@ class ScheduleLedger:
                     dispatched_at_ist TEXT,
                     attempts INTEGER NOT NULL DEFAULT 0,
                     error_message TEXT,
-                    PRIMARY KEY (date_str, slot_id)
+                    updated_at_utc TEXT,
+                    PRIMARY KEY (date_str, slot_id),
+                    UNIQUE (date_str, slot_id)
                 )
             """)
+            # Check if updated_at_utc column exists in existing tables, add if missing
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(daily_schedule_ledger)").fetchall()]
+            if "updated_at_utc" not in cols:
+                conn.execute("ALTER TABLE daily_schedule_ledger ADD COLUMN updated_at_utc TEXT")
+
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS ntfy_daily_quota (
                     date_str TEXT PRIMARY KEY,
@@ -76,6 +83,50 @@ class ScheduleLedger:
                 )
             """)
             conn.commit()
+
+        # On startup, recover stuck IN_FLIGHT rows older than 2 minutes to PENDING
+        self.recover_stuck_in_flight_rows()
+
+    def recover_stuck_in_flight_rows(self, max_stuck_seconds: int = 120) -> int:
+        """
+        On startup or initialization, resets IN_FLIGHT rows older than max_stuck_seconds (default 2 mins)
+        back to PENDING so they are retried. Counts this reset as an attempt and maintains the max 3 attempts rule.
+        """
+        now = datetime.datetime.now(datetime.timezone.utc)
+        recovered = 0
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT date_str, slot_id, attempts, updated_at_utc
+                FROM daily_schedule_ledger
+                WHERE status = 'IN_FLIGHT'
+            """).fetchall()
+
+            for r in rows:
+                updated_at_str = r["updated_at_utc"]
+                should_reset = True
+                if updated_at_str:
+                    try:
+                        up_dt = datetime.datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                        elapsed = (now - up_dt).total_seconds()
+                        should_reset = elapsed >= max_stuck_seconds
+                    except Exception:
+                        should_reset = True
+
+                if should_reset:
+                    # Reset to PENDING if attempts < 3, else mark FAILED
+                    new_status = 'PENDING' if r["attempts"] < 3 else 'FAILED'
+                    conn.execute("""
+                        UPDATE daily_schedule_ledger
+                        SET status = ?, error_message = 'Reset stuck IN_FLIGHT on startup', updated_at_utc = ?
+                        WHERE date_str = ? AND slot_id = ?
+                    """, (new_status, now.isoformat(), r["date_str"], r["slot_id"]))
+                    recovered += 1
+
+            conn.commit()
+
+        if recovered > 0:
+            logger.info(f"ScheduleLedger startup recovery: reset {recovered} stuck IN_FLIGHT rows to PENDING.")
+        return recovered
 
     def get_ntfy_sent_count(self, date_str: str) -> int:
         """Retrieves persistent daily message count for date_str."""
@@ -182,33 +233,36 @@ class ScheduleLedger:
         return due_events
 
     def mark_in_flight(self, date_str: str, slot_id: str) -> bool:
-        """Atomically claims an event for dispatch to prevent race conditions."""
+        """Atomically claims an event for dispatch to prevent race conditions. Never claims COMPLETED rows."""
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._get_connection() as conn:
             cursor = conn.execute("""
                 UPDATE daily_schedule_ledger
-                SET status = 'IN_FLIGHT', attempts = attempts + 1
+                SET status = 'IN_FLIGHT', attempts = attempts + 1, updated_at_utc = ?
                 WHERE date_str = ? AND slot_id = ? AND status IN ('PENDING', 'FAILED')
-            """, (date_str, slot_id))
+            """, (now_utc, date_str, slot_id))
             conn.commit()
             return cursor.rowcount > 0
 
     def mark_completed(self, date_str: str, slot_id: str, dispatched_at_ist: str):
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE daily_schedule_ledger
-                SET status = 'COMPLETED', dispatched_at_ist = ?, error_message = NULL
+                SET status = 'COMPLETED', dispatched_at_ist = ?, error_message = NULL, updated_at_utc = ?
                 WHERE date_str = ? AND slot_id = ?
-            """, (dispatched_at_ist, date_str, slot_id))
+            """, (dispatched_at_ist, now_utc, date_str, slot_id))
             conn.commit()
         logger.info(f"Ledger: {date_str} {slot_id} marked COMPLETED at {dispatched_at_ist}")
 
     def mark_failed(self, date_str: str, slot_id: str, error_msg: str):
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
         with self._get_connection() as conn:
             conn.execute("""
                 UPDATE daily_schedule_ledger
-                SET status = 'FAILED', error_message = ?
+                SET status = 'FAILED', error_message = ?, updated_at_utc = ?
                 WHERE date_str = ? AND slot_id = ?
-            """, (error_msg, date_str, slot_id))
+            """, (error_msg, now_utc, date_str, slot_id))
             conn.commit()
         logger.warning(f"Ledger: {date_str} {slot_id} FAILED ({error_msg})")
 

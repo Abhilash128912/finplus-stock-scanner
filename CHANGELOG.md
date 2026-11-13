@@ -5,6 +5,46 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.5.2] - 2026-11-13
+
+### Fixed
+- **P0 - Close Failure Rollback (`LivePaperTracker`)**:
+  - Implemented transactional rollback if database insertion fails (e.g., disk full, database locked). Restores position to `active_positions` as `OPEN`, logs `ERROR` with `trade_id`, and retries close on the subsequent poll cycle.
+  - Suppressed all "PAPER TRADE CLOSED" logs and alerts until `rowcount == 1`.
+  - Logged duplicate inserts (`rowcount == 0`) at `DEBUG` with zero alerts.
+- **P0 - Schedule Ledger Unique Constraints & IN_FLIGHT Auto-Recovery (`ScheduleLedger`)**:
+  - Added strict `UNIQUE (date_str, slot_id)` constraint with `INSERT OR IGNORE`.
+  - On startup and initialization, automatically resets any stuck `IN_FLIGHT` rows older than 2 minutes back to `PENDING` (maintaining the maximum 3 attempts rule).
+  - Enforced that milestones marked `COMPLETED` can never be re-claimed or re-sent.
+- **P1 - NTFY Tiered Hard Ceiling Quota (`NTFYDispatcher`)**:
+  - Established tiered daily caps reset strictly by IST calendar date:
+    - Routine alerts stop at 220.
+    - Trade open and close alerts are permitted up to 240.
+    - Emergency stop-loss alerts exclusively use quota slots 241 to 248.
+    - Hard ceiling at 248 completely blocks all outgoing pushes and logs a single `WARNING`.
+- **P1 - Decoupled Commodity (MCX) Session Cutoffs (`LivePaperTracker`, `NTFYDispatcher`)**:
+  - Excluded MCX positions (e.g. `GOLDPETAL`) from the 15:00 IST equity square-off.
+  - Implemented configurable MCX cutoff (default 23:15 IST) via `MCX_CUTOFF_HOUR` and `MCX_CUTOFF_MINUTE`.
+  - Separated Equity and MCX reviews in the 15:00 summary dispatch.
+- **P0 - Price Sanity Guard & DATA_SUSPECT Circuit Breaker (`LivePaperTracker`)**:
+  - Rejects any price tick or option premium moving $> 15\%$ (configurable via `PRICE_SANITY_MAX_PCT`) from the last accepted price in a single cycle or exceeding 3x entry cap. Logs `WARNING`, skips tick, and leaves P&L untouched.
+  - Automatically flags symbols with 3 consecutive rejected ticks as `DATA_SUSPECT` and blocks fresh signals.
+- **P1 - Editable Holiday and Weekend Calendar (`indian_market_calendar.py`, `config/nse_holidays.json`, `ScannerScheduler`)**:
+  - Created editable `config/nse_holidays.json` containing full official exchange holidays and special trading sessions (e.g. Diwali Muhurat trading).
+  - Skips scheduler bulletins, 08:45 AM IST token refresh, and signal dispatches on weekends and official holidays.
+  - Logs startup status line: `"Market closed today: reason"`.
+- **P1 - Deep Health Diagnostics Off-Hours & Per-Subsystem Telemetry (`/api/health/deep`, `APIServer`)**:
+  - Returns HTTP 200 outside market hours, weekends, and holidays with `"market_open": false`.
+  - During market hours, returns HTTP 503 only if the broker feed is stale, scheduler is stalled, or token is expired.
+  - Evaluates cached token expiration without issuing broker HTTP requests per health ping.
+  - Exposes discrete per-subsystem health states (`scheduler`, `broker`, `feed`, `ledger`, `notifications`).
+- **P2 - Yahoo Finance Exponential Backoff & CandleStore Fallback (`MarketDataFeed`, `ScannerScheduler`)**:
+  - On failed or rate-limited Yahoo candle chunks, retries up to 2 times with exponential backoff (2s, 6s).
+  - Seamlessly falls back to local `CandleStore` bars for affected tickers, tagging fallback tickers in scan telemetry.
+  - Dispatches an emergency NTFY alert (priority, max once per hour) if $> 10\%$ of universe tickers fall back to `CandleStore`.
+
+---
+
 ## [2.5.1] - 2026-11-13
 
 ### Fixed

@@ -10,7 +10,7 @@ import time
 import requests
 import json
 from typing import Dict, Any, List, Optional
-from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
+from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 from src.storage.schedule_ledger import ScheduleLedger
 
 logger = setup_logger("NTFYDispatcher")
@@ -18,7 +18,9 @@ logger = setup_logger("NTFYDispatcher")
 DEFAULT_TOPICS = ["Finplus-Delta"]
 RENDER_SCANNER_URL = "https://finplus-stock-scanner.onrender.com"
 DEFAULT_NTFY_AUTH_TOKEN = ""
-MAX_DAILY_NOTIFICATIONS = 220  # Safe cap below NTFY's 250 hard limit
+MAX_DAILY_NOTIFICATIONS = 220  # Routine alerts stop at 220
+TRADE_ACTION_CAP = 240         # Trade open and close alerts may use up to 240
+STOP_LOSS_CAP = 248            # Only stop-loss alerts may use 241-248; at 248, block everything
 
 
 def safe_headers(headers: Dict[str, Any], auth_token: Optional[str] = None) -> Dict[str, str]:
@@ -50,33 +52,68 @@ class NTFYDispatcher:
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
         self.ledger = ledger or ScheduleLedger()
+        self._hard_ceiling_warned_date: Optional[str] = None
 
     def get_sent_count_today(self) -> int:
-        """Returns persistent message count for today."""
-        today = time.strftime("%Y-%m-%d")
+        """Returns persistent message count for today in IST."""
+        today = get_ist_now().strftime("%Y-%m-%d")
         return self.ledger.get_ntfy_sent_count(today)
 
     def get_remaining_quota(self) -> int:
-        """Returns remaining message quota before reaching 220 limit."""
+        """Returns remaining message quota before reaching 220 routine limit."""
         used = self.get_sent_count_today()
         return max(0, MAX_DAILY_NOTIFICATIONS - used)
 
-    def _safe_post(self, url: str, message: str, headers: Dict[str, str], is_priority: bool = False) -> bool:
+    def _safe_post(
+        self,
+        url: str,
+        message: str,
+        headers: Dict[str, str],
+        alert_type: str = "ROUTINE",
+        is_priority: bool = False
+    ) -> bool:
         """
-        Dispatches NTFY notification with daily cap (up to 220/day) and Bearer auth.
-        Priority events (stop-loss, trade-close, trade-open) bypass the cap.
-        Persists message count in SQLite table so it survives restarts.
+        Dispatches NTFY notification with tiered daily safety quotas reset by IST date:
+        - Routine alerts stop at 220.
+        - Trade open and close alerts may use up to 240.
+        - Only stop-loss alerts may use 241-248.
+        - At 248, block everything and log WARNING once.
         """
-        today = time.strftime("%Y-%m-%d")
+        today = get_ist_now().strftime("%Y-%m-%d")
         used_today = self.ledger.get_ntfy_sent_count(today)
 
-        # 1. Daily cap (220 messages/day out of 250 free allowed)
-        if not is_priority and used_today >= MAX_DAILY_NOTIFICATIONS:
-            logger.warning(
-                f"NTFY Daily Safety Cap reached ({used_today}/{MAX_DAILY_NOTIFICATIONS}). "
-                "Suppressing routine pulse push to avoid 429 lockout."
-            )
+        # Normalize alert type
+        alert_type_norm = alert_type.upper()
+        if alert_type_norm == "ROUTINE" and is_priority:
+            alert_type_norm = "TRADE_ACTION"
+
+        # Tiered quota enforcement
+        if used_today >= STOP_LOSS_CAP:
+            if self._hard_ceiling_warned_date != today:
+                logger.warning(
+                    f"NTFY Hard Ceiling Reached ({used_today}/{STOP_LOSS_CAP}). "
+                    "All notifications including stop-loss are blocked to prevent broker/NTFY lockout."
+                )
+                self._hard_ceiling_warned_date = today
             return False
+
+        if alert_type_norm == "STOP_LOSS":
+            # Allowed up to 248
+            pass
+        elif alert_type_norm in ("TRADE_ACTION", "TRADE_OPEN", "TRADE_CLOSE"):
+            if used_today >= TRADE_ACTION_CAP:
+                logger.warning(
+                    f"NTFY Trade Action Cap reached ({used_today}/{TRADE_ACTION_CAP}). "
+                    f"Suppressing {alert_type_norm} push to reserve remaining quota for emergency stop-losses."
+                )
+                return False
+        else: # ROUTINE
+            if used_today >= MAX_DAILY_NOTIFICATIONS:
+                logger.warning(
+                    f"NTFY Routine Safety Cap reached ({used_today}/{MAX_DAILY_NOTIFICATIONS}). "
+                    "Suppressing routine pulse push to avoid quota exhaustion."
+                )
+                return False
 
         # Ensure all headers are strictly ASCII to prevent latin-1 UnicodeEncodeError
         out_headers = safe_headers(headers, self.auth_token)
@@ -85,7 +122,7 @@ class NTFYDispatcher:
             resp = requests.post(url, data=message.encode('utf-8'), headers=out_headers, timeout=10)
             if resp.status_code == 200:
                 new_count = self.ledger.increment_ntfy_sent_count(today)
-                logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Priority={is_priority})")
+                logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Type={alert_type_norm})")
                 return True
             else:
                 logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
@@ -571,7 +608,9 @@ class NTFYDispatcher:
         else:
             lines.append("Stock Options: Strict gating active, zero capital exposed")
 
-        lines.append("EOD Risk: Mandatory square-off all MIS intraday before 15:15 IST")
+        # Session Separation: Equity vs MCX Commodities Review
+        lines.append("MCX Commodities: Evening session active until 23:15 IST (Separate MCX cutoff)")
+        lines.append("EOD Risk: Mandatory square-off all Equity MIS intraday before 15:15 IST")
         lines.append("Next: 15:15 BTST Window Check | 18:00 MCX Evening Session Open")
         lines.append(f"Cockpit: {RENDER_SCANNER_URL}")
 

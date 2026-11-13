@@ -104,42 +104,88 @@ async def health_check():
 async def deep_health_check():
     """
     Institutional Deep Health Diagnostic Endpoint.
-    Probes internal worker tasks, broker authentication, persistent ledger, and DB.
-    Returns HTTP 200 if fully healthy; HTTP 503 if any core subsystem is degraded/stalled.
-    Targeted specifically for UptimeRobot monitoring.
+    - Outside market hours, weekends, and holidays: returns HTTP 200 with "market_open": false.
+    - During market hours: returns HTTP 503 only if feed is stale, scheduler is stalled, or token expired.
+    - Checks cached token expiry without calling broker on every ping.
+    - Returns per-subsystem status in the JSON.
     """
     from datetime import datetime, timezone, timedelta
+    from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
+
     ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
     date_str = ist_now.strftime("%Y-%m-%d")
 
-    issues = []
-    
-    # 1. Engine & Scanner Loop Diagnostics
-    is_engine_alive = scheduler.is_running
-    if not is_engine_alive:
-        issues.append("ScannerScheduler is not running")
+    market_open, market_status_reason = is_equity_market_open_ist()
+    is_weekend = (ist_now.weekday() >= 5)
+    is_hol, hol_name = is_nse_holiday(ist_now.date())
 
-    # 2. Broker Connection Diagnostics
-    broker_ok = False
+    issues = []
+    subsystem_status = {}
+
+    # 1. Engine / Scheduler Subsystem
+    is_engine_alive = scheduler.is_running
+    scan_age_secs = 0
+    if scheduler.last_scan_utc:
+        try:
+            last_dt = datetime.fromisoformat(scheduler.last_scan_utc.replace("Z", "+00:00"))
+            scan_age_secs = int((datetime.now(timezone.utc) - last_dt).total_seconds())
+        except Exception:
+            pass
+
+    if not is_engine_alive:
+        subsystem_status["scheduler"] = "STOPPED"
+        if market_open:
+            issues.append("ScannerScheduler is not running")
+    elif market_open and scan_age_secs > 360 and len(scheduler.latest_scan_results) == 0:
+        subsystem_status["scheduler"] = "STALLED"
+        issues.append(f"Scanner has not completed a cycle during market hours ({scan_age_secs}s elapsed)")
+    else:
+        subsystem_status["scheduler"] = "HEALTHY"
+
+    # 2. Broker Connection / Cached Token Validity (No broker HTTP call)
+    token_valid = False
     broker_details = {}
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
         try:
-            broker_ok = scheduler.indmoney_feed.auth_client.is_token_valid()
-            broker_details["token_valid"] = broker_ok
+            # Check cached token expiry without contacting broker
+            token_valid = scheduler.indmoney_feed.auth_client.is_token_valid()
+            broker_details["token_valid"] = token_valid
             broker_details["cached_quotes"] = len(scheduler.indmoney_feed._quote_cache)
+            if not token_valid:
+                subsystem_status["broker"] = "EXPIRED"
+                if market_open:
+                    issues.append("Broker access token is expired")
+            else:
+                subsystem_status["broker"] = "HEALTHY"
         except Exception as e:
-            issues.append(f"Broker client error: {e}")
+            subsystem_status["broker"] = "ERROR"
+            if market_open:
+                issues.append(f"Broker client error: {e}")
             broker_details["error"] = str(e)
     else:
+        subsystem_status["broker"] = "UNAVAILABLE"
         broker_details["status"] = "AuthClient unavailable"
 
-    # 3. Schedule Ledger Diagnostics
+    # 3. Feed Freshness Subsystem
+    feed_stale = getattr(scheduler, "is_stale_feed", False)
+    if feed_stale:
+        subsystem_status["feed"] = "STALE_FEED"
+        if market_open:
+            issues.append("Market data feed is flagged STALE_FEED")
+    else:
+        subsystem_status["feed"] = "HEALTHY"
+
+    # 4. Schedule Ledger Subsystem
     ledger_status = scheduler.ledger.get_ledger_status(date_str)
     failed_milestones = [m["slot_id"] for m in ledger_status if m["status"] == "FAILED"]
     if failed_milestones:
-        issues.append(f"Ledger milestones failed: {', '.join(failed_milestones)}")
+        subsystem_status["ledger"] = "DEGRADED"
+        if market_open:
+            issues.append(f"Ledger milestones failed: {', '.join(failed_milestones)}")
+    else:
+        subsystem_status["ledger"] = "HEALTHY"
 
-    # 4. NTFY Quota Diagnostics
+    # 5. NTFY Quota Subsystem
     ntfy_quota_info = {}
     if scheduler.dispatcher:
         used_q = scheduler.dispatcher.get_sent_count_today()
@@ -149,30 +195,28 @@ async def deep_health_check():
             "remaining": rem_q,
             "cap": 220
         }
+        subsystem_status["notifications"] = "QUOTA_EXHAUSTED" if rem_q <= 0 else "HEALTHY"
+    else:
+        subsystem_status["notifications"] = "DISABLED"
 
-    # 5. Market Hours Liveness Check
-    # If market is open, verify scan has run recently
-    scan_age_secs = 0
-    if scheduler.last_scan_utc:
-        try:
-            last_dt = datetime.fromisoformat(scheduler.last_scan_utc.replace("Z", "+00:00"))
-            scan_age_secs = int((datetime.now(timezone.utc) - last_dt).total_seconds())
-        except Exception:
-            pass
-
-    market_open = is_market_open_ist()
-    if market_open and scan_age_secs > 360 and len(scheduler.latest_scan_results) == 0:
-        issues.append(f"Scanner has not completed a cycle during market hours ({scan_age_secs}s elapsed)")
-
-    is_healthy = len(issues) == 0
-    http_status = 200 if is_healthy else 503
+    # Off-hours rule: Return 200 outside market hours, weekends, and holidays
+    if not market_open or is_weekend or is_hol:
+        http_status = 200
+        overall_status = "HEALTHY_OFF_HOURS"
+    else:
+        is_healthy = (len(issues) == 0)
+        http_status = 200 if is_healthy else 503
+        overall_status = "HEALTHY" if is_healthy else "DEGRADED"
 
     payload = {
-        "status": "HEALTHY" if is_healthy else "DEGRADED",
+        "status": overall_status,
+        "market_open": market_open,
+        "market_open_ist": market_open,
+        "market_reason": market_status_reason,
+        "subsystems": subsystem_status,
         "app": "FinPlus-Stock-Scanner",
         "ist_time": get_ist_time_str(),
         "timestamp_utc": get_utc_iso(),
-        "market_open_ist": market_open,
         "engine": {
             "is_running": is_engine_alive,
             "tracked_universe_count": len(scheduler.feed.get_all_universe_items()) if scheduler.feed else 0,

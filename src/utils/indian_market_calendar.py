@@ -5,10 +5,31 @@ Prevents false breakout generation, stale candle processing, and phantom trades 
 """
 
 import datetime
+import json
+import os
+from pathlib import Path
 from typing import Dict, Any, Tuple, Optional
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
+
+# Path to editable holidays JSON
+CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
+HOLIDAYS_JSON_PATH = CONFIG_DIR / "nse_holidays.json"
+
+# Load holidays and special sessions from config/nse_holidays.json if present
+def load_nse_holidays_from_file() -> Tuple[Dict[str, str], Dict[str, Any]]:
+    """Loads editable holiday list and special sessions from config/nse_holidays.json."""
+    if HOLIDAYS_JSON_PATH.exists():
+        try:
+            with open(HOLIDAYS_JSON_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("holidays", {}), data.get("special_sessions", {})
+        except Exception:
+            pass
+    return {}, {}
+
+_FILE_HOLIDAYS, _FILE_SPECIAL_SESSIONS = load_nse_holidays_from_file()
 
 # Official NSE / BSE Trading Holidays (Equity, F&O, SLB)
 # Formatted as YYYY-MM-DD: Holiday Name
@@ -66,6 +87,8 @@ NSE_TRADING_HOLIDAYS: Dict[str, str] = {
     "2027-11-01": "Diwali Balipratipada",
     "2027-12-25": "Christmas"
 }
+NSE_TRADING_HOLIDAYS.update(_FILE_HOLIDAYS)
+SPECIAL_TRADING_SESSIONS: Dict[str, Any] = _FILE_SPECIAL_SESSIONS
 
 # MCX Holidays where Morning Session (09:00 - 17:00 IST) is closed
 # Evening session opens at 17:00 IST
