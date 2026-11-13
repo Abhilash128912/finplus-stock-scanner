@@ -2,6 +2,7 @@
 FinPlus+ v2.5.4 End-to-End Acceptance Test Suite:
 1. 10 simulated scan cycles with healthy broker -> exactly 0 yfinance calls.
 2. Broker stale 4 minutes with an open position -> exactly one fallback call, tagged YF_FALLBACK, no new entry signal.
+3. Over budget -> blocked, scan continues on cache.
 """
 
 import time
@@ -9,10 +10,12 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 from src.scheduler.scanner_scheduler import ScannerScheduler
 from src.feeds.market_data_feed import MarketDataFeed
+from src.gateway.yfinance_gateway import YFinanceGateway
 
 def test_10_scan_cycles_healthy_broker_zero_yfinance_calls(tmp_path):
     """TEST: 10 scan cycles with healthy broker -> 0 yfinance calls."""
     scheduler = ScannerScheduler()
+    scheduler.feed.legacy_yahoo_scan_path_enabled = False
     # Mock market as open
     scheduler.indmoney_feed = MagicMock()
     scheduler.indmoney_feed.is_stale.return_value = False
@@ -112,3 +115,24 @@ def test_broker_stale_with_open_position_triggers_fallback_and_blocks_new_entry(
     assert eval_res["feed_status"] == "YF_FALLBACK"
     assert "VETOED" in eval_res["regime_confluence"]
 
+def test_over_budget_blocked_and_scan_continues_on_cache(tmp_path):
+    """TEST: Over budget -> blocked, scan continues on cache."""
+    db_file = tmp_path / "test_gw_budget.db"
+    gw = YFinanceGateway(db_path=str(db_file), max_calls_per_day=2)
+    gw.max_calls_per_day = 2
+
+    # Simulate 2 calls
+    dummy_df = pd.DataFrame({"Close": [100.0, 101.0]})
+    with patch("yfinance.download", return_value=dummy_df):
+        res1 = gw.download("RELIANCE.NS", reason="HISTORY_BACKFILL")
+        res2 = gw.download("TCS.NS", reason="HISTORY_BACKFILL")
+        assert not res1.empty
+        assert not res2.empty
+
+        # 3rd call exceeds budget of 2 -> must be BLOCKED
+        res3 = gw.download("INFY.NS", reason="HISTORY_BACKFILL")
+        assert res3.empty, "3rd call should have been blocked by daily budget!"
+
+    stats = gw.get_today_stats()
+    assert stats["calls"] == 3
+    assert stats["blocked"] == 1

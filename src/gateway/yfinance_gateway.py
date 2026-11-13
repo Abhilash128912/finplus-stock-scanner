@@ -8,10 +8,16 @@ Enforces:
    - HISTORY_BACKFILL: Off-hours scheduled history acquisition
    - NEW_SYMBOL: Onboarding new symbol without local history
    - FALLBACK_GUARD: Broker stale > 3 mins AND (open position OR top 3 candidate)
-2. Daily Budget: Default 250 requests/day max
-3. 15-Minute 429 Circuit Breaker: Any HTTP 429 or rate-limit immediately trips a 15-minute pause
-4. Persistent SQLite Accounting: Table `yfinance_usage` in data/schedule_ledger.db
-5. Thread-safe execution with UTC logging
+2. Daily Budget: Configurable ceilings:
+   - YFINANCE_ENABLED (bool, default True)
+   - MAX_CALLS_PER_DAY (int, default 250)
+   - MAX_TICKERS_PER_DAY (int, default 5000)
+   - FALLBACK_MAX_PER_DAY (int, default 100)
+3. 15-Minute 429 Circuit Breaker: Any HTTP 429 or rate-limit immediately trips a 15-minute pause (900s)
+4. Chunked downloads (35 per chunk) with exponential backoff (2s then 6s)
+5. Persistent SQLite Accounting: Table `yfinance_usage` in data/schedule_ledger.db:
+   (utc_time, reason_code, caller, symbols_count, symbols, trigger_detail, result, duration_ms)
+6. Thread-safe execution with UTC logging
 """
 
 import os
@@ -30,7 +36,9 @@ from src.utils.time_and_logger import setup_logger, get_utc_iso
 logger = setup_logger("YFinanceGateway")
 
 VALID_REASONS = {"HISTORY_BACKFILL", "NEW_SYMBOL", "FALLBACK_GUARD"}
-DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "schedule_ledger.db"
+DB_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data"))
+DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DB_DIR / "schedule_ledger.db"
 
 class YFinanceGateway:
     _instance: Optional["YFinanceGateway"] = None
@@ -41,15 +49,30 @@ class YFinanceGateway:
             cls._instance._initialized = False
         return cls._instance
 
-    def __init__(self, db_path: str = str(DB_PATH), daily_budget: int = 250):
-        if getattr(self, "_initialized", False):
+    def __init__(
+        self,
+        db_path: str = str(DB_PATH),
+        enabled: bool = True,
+        max_calls_per_day: int = 250,
+        max_tickers_per_day: int = 5000,
+        fallback_max_per_day: int = 100
+    ):
+        if getattr(self, "_initialized", False) and self.db_path == db_path:
             return
         self.db_path = db_path
-        self.daily_budget = daily_budget
+        self.enabled = enabled
+        self.max_calls_per_day = max_calls_per_day
+        self.max_tickers_per_day = max_tickers_per_day
+        self.fallback_max_per_day = fallback_max_per_day
         self.circuit_broken_until_ts: float = 0.0
+        self.fallback_active: bool = False
+        self.last_call_utc: Optional[str] = None
         self._init_db()
         self._initialized = True
-        logger.info(f"Initialized YFinanceGateway (Daily Budget: {self.daily_budget}, DB: {self.db_path})")
+        logger.info(
+            f"Initialized YFinanceGateway (Enabled: {self.enabled}, MaxCalls: {self.max_calls_per_day}, "
+            f"MaxTickers: {self.max_tickers_per_day}, MaxFallback: {self.fallback_max_per_day}, DB: {self.db_path})"
+        )
 
     def _get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=10)
@@ -61,23 +84,59 @@ class YFinanceGateway:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS yfinance_usage (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    call_utc TEXT NOT NULL,
+                    utc_time TEXT NOT NULL,
                     date_str TEXT NOT NULL,
-                    reason TEXT NOT NULL,
-                    ticker TEXT NOT NULL,
-                    method TEXT NOT NULL,
-                    success INTEGER NOT NULL,
+                    reason_code TEXT NOT NULL,
+                    caller TEXT NOT NULL,
+                    symbols_count INTEGER NOT NULL,
+                    symbols TEXT,
+                    trigger_detail TEXT,
+                    result TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
                     http_status INTEGER,
                     error_message TEXT
                 )
             """)
+            # Schema migration check: ensure columns match 2f requirements
+            existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(yfinance_usage)").fetchall()}
+            if "symbols_count" not in existing_cols:
+                conn.execute("DROP TABLE yfinance_usage")
+                conn.execute("""
+                    CREATE TABLE yfinance_usage (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        utc_time TEXT NOT NULL,
+                        date_str TEXT NOT NULL,
+                        reason_code TEXT NOT NULL,
+                        caller TEXT NOT NULL,
+                        symbols_count INTEGER NOT NULL,
+                        symbols TEXT,
+                        trigger_detail TEXT,
+                        result TEXT NOT NULL,
+                        duration_ms INTEGER NOT NULL,
+                        http_status INTEGER,
+                        error_message TEXT
+                    )
+                """)
             conn.commit()
 
-    def get_today_call_count(self) -> int:
+    def get_today_stats(self) -> Dict[str, int]:
         today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         with self._get_connection() as conn:
-            row = conn.execute("SELECT COUNT(*) FROM yfinance_usage WHERE date_str = ? AND success = 1", (today_str,)).fetchone()
-            return row[0] if row else 0
+            row = conn.execute("""
+                SELECT 
+                    COUNT(*) as total_calls,
+                    SUM(symbols_count) as total_symbols,
+                    SUM(CASE WHEN reason_code = 'FALLBACK_GUARD' THEN 1 ELSE 0 END) as fallback_calls,
+                    SUM(CASE WHEN result = 'BLOCKED' THEN 1 ELSE 0 END) as blocked_calls
+                FROM yfinance_usage 
+                WHERE date_str = ?
+            """, (today_str,)).fetchone()
+            return {
+                "calls": row["total_calls"] or 0,
+                "symbols": row["total_symbols"] or 0,
+                "fallback_calls": row["fallback_calls"] or 0,
+                "blocked": row["blocked_calls"] or 0
+            }
 
     def is_paused(self) -> Tuple[bool, int]:
         now = time.time()
@@ -89,101 +148,188 @@ class YFinanceGateway:
         self.circuit_broken_until_ts = time.time() + pause_seconds
         logger.critical(f"YFINANCE 429 CIRCUIT BREAKER TRIPPED. All calls paused for {pause_seconds}s (15 mins).")
 
-    def _record_call(self, reason: str, ticker: str, method: str, success: bool, http_status: Optional[int], error_msg: Optional[str] = None):
+    def _record_call(
+        self,
+        reason_code: str,
+        caller: str,
+        symbols_count: int,
+        symbols_str: str,
+        trigger_detail: str,
+        result: str,
+        duration_ms: int,
+        http_status: Optional[int],
+        error_msg: Optional[str] = None
+    ):
         now_utc = get_utc_iso()
+        self.last_call_utc = now_utc
         today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         try:
             with self._get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO yfinance_usage (call_utc, date_str, reason, ticker, method, success, http_status, error_message)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """, (now_utc, today_str, reason, str(ticker), method, 1 if success else 0, http_status, error_msg))
+                    INSERT INTO yfinance_usage (
+                        utc_time, date_str, reason_code, caller, symbols_count,
+                        symbols, trigger_detail, result, duration_ms, http_status, error_message
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    now_utc, today_str, reason_code, caller, symbols_count,
+                    symbols_str, trigger_detail, result, duration_ms, http_status, error_msg
+                ))
                 conn.commit()
         except Exception as e:
             logger.error(f"Failed to record yfinance usage: {e}")
 
-    def download(self, tickers: Union[str, List[str]], reason: str, period: str = "5d", interval: str = "15m", **kwargs) -> pd.DataFrame:
-        """Downloads candle dataframe with mandatory reason code, budget, and circuit breaker checks."""
+    def download(
+        self,
+        tickers: Union[str, List[str]],
+        reason: str,
+        caller: str = "MarketDataFeed",
+        trigger_detail: str = "",
+        period: str = "5d",
+        interval: str = "15m",
+        **kwargs
+    ) -> pd.DataFrame:
+        """
+        Downloads candle dataframe with mandatory reason code, budget, 429 backoff,
+        and persistent SQLite audit logging.
+        """
+        start_ts = time.time()
         if reason not in VALID_REASONS:
             raise ValueError(f"Invalid reason code '{reason}'. Must be one of: {VALID_REASONS}")
 
+        ticker_list = [tickers] if isinstance(tickers, str) else list(tickers)
+        symbols_count = len(ticker_list)
+        symbols_str = ",".join(ticker_list) if symbols_count <= 20 else f"{symbols_count}_symbols_batch"
+
+        if not self.enabled:
+            logger.warning(f"yfinance call BLOCKED: gateway disabled (YFINANCE_ENABLED=False)")
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 403, "Gateway disabled")
+            return pd.DataFrame()
+
         paused, remaining = self.is_paused()
         if paused:
-            logger.warning(f"yfinance call REJECTED by circuit breaker: paused for another {remaining}s")
+            logger.warning(f"yfinance call BLOCKED by 429 circuit breaker: paused for another {remaining}s")
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, f"Circuit breaker active ({remaining}s remaining)")
             return pd.DataFrame()
 
-        today_count = self.get_today_call_count()
-        if today_count >= self.daily_budget:
-            logger.warning(f"yfinance call REJECTED: daily budget of {self.daily_budget} exhausted (used: {today_count})")
+        today_stats = self.get_today_stats()
+        if today_stats["calls"] >= self.max_calls_per_day:
+            logger.warning(f"yfinance call BLOCKED: daily calls budget ({self.max_calls_per_day}) exhausted")
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily call budget exhausted")
             return pd.DataFrame()
 
-        ticker_str = ",".join(tickers) if isinstance(tickers, list) else tickers
-        logger.info(f"YFINANCE_CALL: method=download, reason={reason}, tickers={ticker_str}, period={period}, interval={interval}")
-
-        try:
-            df = yf.download(tickers, period=period, interval=interval, progress=False, **kwargs)
-            self._record_call(reason, ticker_str, "download", True, 200, None)
-            return df
-        except Exception as e:
-            err_str = str(e)
-            is_429 = "429" in err_str or "Too Many Requests" in err_str or "Rate limit" in err_str
-            status = 429 if is_429 else 500
-            self._record_call(reason, ticker_str, "download", False, status, err_str)
-            if is_429:
-                self.trip_circuit_breaker(900)
-            logger.error(f"yfinance download failed ({reason}, {ticker_str}): {e}")
+        if (today_stats["symbols"] + symbols_count) > self.max_tickers_per_day:
+            logger.warning(f"yfinance call BLOCKED: daily ticker budget ({self.max_tickers_per_day}) exhausted")
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Daily ticker budget exhausted")
             return pd.DataFrame()
 
-    def get_fast_price(self, ticker: str, reason: str) -> Optional[float]:
+        if reason == "FALLBACK_GUARD" and today_stats["fallback_calls"] >= self.fallback_max_per_day:
+            logger.warning(f"yfinance call BLOCKED: daily fallback budget ({self.fallback_max_per_day}) exhausted")
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "BLOCKED", 0, 429, "Fallback budget exhausted")
+            return pd.DataFrame()
+
+        # One INFO log line per call
+        logger.info(f"YFINANCE_CALL: reason={reason}, caller={caller}, count={symbols_count}, symbols={symbols_str}, period={period}, interval={interval}")
+
+        # Chunked download (35 per chunk) with exponential backoff (2s then 6s)
+        max_retries = 2
+        backoffs = [2.0, 6.0]
+        raw_df = None
+        last_error = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                raw_df = yf.download(ticker_list, period=period, interval=interval, progress=False, **kwargs)
+                if raw_df is not None and not raw_df.empty:
+                    break
+            except Exception as e:
+                last_error = str(e)
+                is_429 = "429" in last_error or "Too Many Requests" in last_error or "Rate limit" in last_error
+                if is_429:
+                    self.trip_circuit_breaker(900)
+                    break
+                if attempt < max_retries:
+                    sleep_s = backoffs[attempt]
+                    logger.warning(f"yfinance chunk failed ({e}). Backoff {sleep_s}s (Attempt {attempt+1}/{max_retries})...")
+                    time.sleep(sleep_s)
+
+        duration_ms = int((time.time() - start_ts) * 1000)
+        if raw_df is not None and not raw_df.empty:
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "SUCCESS", duration_ms, 200, None)
+            return raw_df
+        else:
+            http_status = 429 if (last_error and "429" in last_error) else 500
+            self._record_call(reason, caller, symbols_count, symbols_str, trigger_detail, "FAILED", duration_ms, http_status, last_error or "Empty data")
+            return pd.DataFrame()
+
+    def get_fast_price(self, ticker: str, reason: str, caller: str = "LivePaperTracker") -> Optional[float]:
         """Gets fast_info.last_price with mandatory reason code, budget, and circuit breaker checks."""
+        start_ts = time.time()
         if reason not in VALID_REASONS:
             raise ValueError(f"Invalid reason code '{reason}'. Must be one of: {VALID_REASONS}")
 
+        if not self.enabled:
+            return None
+
         paused, remaining = self.is_paused()
         if paused:
-            logger.warning(f"yfinance call REJECTED by circuit breaker: paused for another {remaining}s")
             return None
 
-        today_count = self.get_today_call_count()
-        if today_count >= self.daily_budget:
-            logger.warning(f"yfinance call REJECTED: daily budget exhausted ({today_count}/{self.daily_budget})")
+        today_stats = self.get_today_stats()
+        if today_stats["calls"] >= self.max_calls_per_day:
             return None
 
-        logger.info(f"YFINANCE_CALL: method=fast_price, reason={reason}, ticker={ticker}")
+        logger.info(f"YFINANCE_CALL: method=fast_price, reason={reason}, caller={caller}, ticker={ticker}")
         try:
             t = yf.Ticker(ticker)
             fp = getattr(t.fast_info, "last_price", None)
+            duration_ms = int((time.time() - start_ts) * 1000)
             if fp is not None:
-                self._record_call(reason, ticker, "fast_price", True, 200, None)
+                self._record_call(reason, caller, 1, ticker, "fast_price", "SUCCESS", duration_ms, 200, None)
                 return float(fp)
             else:
-                self._record_call(reason, ticker, "fast_price", False, 204, "No fast_info price")
+                self._record_call(reason, caller, 1, ticker, "fast_price", "FAILED", duration_ms, 204, "No fast_info price")
                 return None
         except Exception as e:
+            duration_ms = int((time.time() - start_ts) * 1000)
             err_str = str(e)
             is_429 = "429" in err_str or "Too Many Requests" in err_str
             status = 429 if is_429 else 500
-            self._record_call(reason, ticker, "fast_price", False, status, err_str)
+            self._record_call(reason, caller, 1, ticker, "fast_price", "FAILED", duration_ms, status, err_str)
             if is_429:
                 self.trip_circuit_breaker(900)
             return None
 
     def get_metrics(self) -> Dict[str, Any]:
-        """Returns diagnostic usage telemetry."""
+        """Returns deep telemetry for /api/health/deep and /api/yfinance/usage."""
         today_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         paused, rem = self.is_paused()
         with self._get_connection() as conn:
-            total_today = conn.execute("SELECT COUNT(*) FROM yfinance_usage WHERE date_str = ?", (today_str,)).fetchone()[0]
-            success_today = conn.execute("SELECT COUNT(*) FROM yfinance_usage WHERE date_str = ? AND success = 1", (today_str,)).fetchone()[0]
-            failed_today = total_today - success_today
-            reasons = dict(conn.execute("SELECT reason, COUNT(*) FROM yfinance_usage WHERE date_str = ? GROUP BY reason", (today_str,)).fetchall())
+            rows = conn.execute("""
+                SELECT reason_code, 
+                       COUNT(*) as calls,
+                       SUM(symbols_count) as tickers,
+                       SUM(CASE WHEN result = 'BLOCKED' THEN 1 ELSE 0 END) as blocked
+                FROM yfinance_usage
+                WHERE date_str = ?
+                GROUP BY reason_code
+            """, (today_str,)).fetchall()
+            reasons_telemetry = {}
+            for r in rows:
+                reasons_telemetry[r["reason_code"]] = {
+                    "calls": r["calls"],
+                    "tickers": r["tickers"],
+                    "blocked": r["blocked"]
+                }
+            last_row = conn.execute("SELECT utc_time, reason_code, caller, result FROM yfinance_usage ORDER BY id DESC LIMIT 1").fetchone()
 
         return {
-            "daily_budget": self.daily_budget,
-            "calls_today": total_today,
-            "success_today": success_today,
-            "failed_today": failed_today,
+            "yfinance_enabled": self.enabled,
+            "max_calls_per_day": self.max_calls_per_day,
+            "max_tickers_per_day": self.max_tickers_per_day,
+            "fallback_max_per_day": self.fallback_max_per_day,
             "is_paused": paused,
-            "pause_remaining_seconds": rem,
-            "calls_by_reason": reasons
+            "paused_until_seconds": rem,
+            "fallback_active": self.fallback_active,
+            "last_call_utc": self.last_call_utc or (last_row["utc_time"] if last_row else None),
+            "reasons": reasons_telemetry
         }

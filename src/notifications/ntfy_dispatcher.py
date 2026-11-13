@@ -546,6 +546,37 @@ class NTFYDispatcher:
                 logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
         return success
 
+    def send_fallback_guard_alert(self, event_type: str, details: str = "") -> bool:
+        """
+        Dispatches priority NTFY alert at fallback start and end (2f requirement).
+        event_type: 'START' or 'END'
+        """
+        from datetime import datetime, timezone, timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        time_str = ist_now.strftime("%I:%M:%S %p IST")
+
+        if event_type.upper() == "START":
+            title = "FinPlus Feed Alert | Fallback Guard Started"
+            msg = f"Yahoo Fallback Guard ACTIVATED at {time_str}.\nINDmoney broker feed is stale (>3m). Serving positions via gateway fallback.\nDetails: {details}"
+            priority = "4"
+        else:
+            title = "FinPlus Feed Alert | Fallback Guard Ended"
+            msg = f"Yahoo Fallback Guard DEACTIVATED at {time_str}.\nINDmoney broker feed has recovered (2 consecutive good cycles).\nNormal broker feed restored."
+            priority = "3"
+
+        success = False
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": priority,
+                "Markdown": "yes",
+                "X-Markdown": "yes"
+            }
+            if self._safe_post(url, msg, headers, alert_type="ROUTINE", is_priority=True):
+                success = True
+        return success
+
     def send_1545_self_report(self, rejected_ticks_total: int = 0, force: bool = False, shadow_stats: Optional[Dict[str, Any]] = None) -> bool:
         """
         Dispatches the 15:45 IST Post-Market System & Data Health Self-Report.

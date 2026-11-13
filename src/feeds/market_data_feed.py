@@ -5,6 +5,7 @@ Ingests historical 15m candles and real-time quotes across two strictly decouple
 2. Intraday Cash Universe (BroadMarketMaster): Quality, high-liquidity, anti-circuit equities loaded from 'D:\\Nifty 500 stocks.xlsx'.
 """
 
+import os
 import time
 import pandas as pd
 from typing import Dict, Any, List, Optional, Set
@@ -31,6 +32,9 @@ class MarketDataFeed:
         self.cache_ttl = cache_ttl_seconds
         self.gateway = YFinanceGateway()
         self.candle_store = CandleStore()
+        self.last_fallback_batch_time: float = 0.0
+        self.fallback_batch_min_interval: float = 120.0 # Max 1 batch per 2 minutes
+        self.legacy_yahoo_scan_path_enabled: bool = os.getenv("ENABLE_LEGACY_YAHOO_SCAN_PATH", "true").lower() == "true"
         
         # 1. Stock Options Universe (F&O Lot <= 500 + Reliance + Sensex/Nifty)
         self.fno_master = FNOContractMaster(max_lot_size=max_lot_size)
@@ -74,13 +78,14 @@ class MarketDataFeed:
         Outside market hours: Used only by scheduled off-hours backfill runner with HISTORY_BACKFILL.
         """
         now = time.time()
-        # In market hours, strictly 0 Yahoo calls. Populate cache from CandleStore!
-        if is_equity_market_open_ist():
+        # In market hours: If safety valve is OFF, strictly 0 Yahoo calls. Populate cache from CandleStore!
+        # If safety valve is ON (coverage < 90%), legacy scan path remains available to prevent starved scanner.
+        if is_equity_market_open_ist() and not self.legacy_yahoo_scan_path_enabled:
             loaded = 0
             for ticker in tickers:
                 clean = ticker.replace(".NS", "")
                 if ticker not in self._cache or (now - self._cache[ticker]['ts']) >= self.cache_ttl:
-                    df = self.candle_store.get_candles_as_dataframe(clean, "15m", limit=600)
+                    df = self.candle_store.get_candles_as_dataframe(clean, "15m", limit=1000)
                     if not df.empty:
                         self._cache[ticker] = {'df': df, 'ts': now}
                         loaded += 1
@@ -155,21 +160,31 @@ class MarketDataFeed:
             return local_df
 
         # Step 2: Fallback Guard check (broker stale > 180s AND priority symbol)
+        # 2e Requirement: CandleStore has no bar newer than 5 minutes for that symbol, max 1 batch per 2 mins
         if allow_fallback_guard and broker_stale_seconds > 180.0 and is_priority_symbol:
-            logger.warning(f"FALLBACK_GUARD ACTIVATED for {ticker}: Broker stale {int(broker_stale_seconds)}s (>180s) on priority symbol.")
-            df = self.gateway.download(ticker, reason="FALLBACK_GUARD", period=period, interval="15m")
-            if not df.empty:
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                # Tag dataframe with YF_FALLBACK
-                df.attrs["data_source"] = "YF_FALLBACK"
-                self._cache[ticker] = {'df': df, 'ts': now}
-                self.fallback_tickers_this_cycle.add(ticker)
-                try:
-                    self.candle_store.save_dataframe_candles(clean_sym, "15m", df)
-                except Exception:
-                    pass
-                return df
+            latest_bar_epoch = self.candle_store.get_latest_candle_timestamp(clean_sym, "15m")
+            bar_age_sec = (now - latest_bar_epoch) if latest_bar_epoch else 9999.0
+            
+            # Rate limit fallback calls to max 1 batch per 2 minutes (120s)
+            time_since_last_fb = now - self.last_fallback_batch_time
+            if bar_age_sec > 300.0 and (time_since_last_fb >= self.fallback_batch_min_interval or self.last_fallback_batch_time == 0.0):
+                self.last_fallback_batch_time = now
+                logger.warning(
+                    f"FALLBACK_GUARD ACTIVATED for {ticker}: Broker stale {int(broker_stale_seconds)}s (>180s), "
+                    f"latest CandleStore bar is {int(bar_age_sec)}s old (>300s). Querying gateway..."
+                )
+                df = self.gateway.download(ticker, reason="FALLBACK_GUARD", caller="MarketDataFeed", trigger_detail="Broker stale > 3m & CandleStore bar > 5m", period=period, interval="15m")
+                if not df.empty:
+                    if isinstance(df.columns, pd.MultiIndex):
+                        df.columns = df.columns.get_level_values(0)
+                    df.attrs["data_source"] = "YF_FALLBACK"
+                    self._cache[ticker] = {'df': df, 'ts': now}
+                    self.fallback_tickers_this_cycle.add(ticker)
+                    try:
+                        self.candle_store.save_dataframe_candles(clean_sym, "15m", df)
+                    except Exception:
+                        pass
+                    return df
 
         # If not falling back to Yahoo, return local_df (or empty)
         if not local_df.empty:

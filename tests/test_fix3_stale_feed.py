@@ -26,11 +26,11 @@ def test_stale_feed_blocks_signals():
     # Mock feed returning candles with capitalized columns expected by RangeDetectorEngine
     import pandas as pd
     dummy_df = pd.DataFrame({
-        "Open": [100.0] * 30,
-        "High": [105.0] * 30,
-        "Low": [95.0] * 30,
-        "Close": [102.0] * 30,
-        "Volume": [1000] * 30,
+        "Open": [100.0] * 130,
+        "High": [105.0] * 130,
+        "Low": [95.0] * 130,
+        "Close": [102.0] * 130,
+        "Volume": [1000] * 130,
     })
 
     with patch.object(scheduler.feed, "fetch_15m_candles", return_value=dummy_df):
@@ -38,8 +38,9 @@ def test_stale_feed_blocks_signals():
             with patch.object(scheduler.feed, "get_all_universe_items", return_value=[
                 {"symbol": "TESTSYM", "yf_ticker": "TESTSYM.NS", "category": "INTRADAY_CASH"}
             ]):
-                with patch("src.scheduler.scanner_scheduler.is_equity_market_open_ist", return_value=(True, "Market Open")):
-                    results = scheduler.scan_universe_now()
+                with patch.object(scheduler.indmoney_feed, "fetch_batch_quotes", return_value={}):
+                    with patch("src.scheduler.scanner_scheduler.is_equity_market_open_ist", return_value=(True, "Market Open")):
+                        results = scheduler.scan_universe_now()
 
     assert len(results) == 1
     item = results[0]

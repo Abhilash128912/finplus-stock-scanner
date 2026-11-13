@@ -8,6 +8,7 @@ Outputs clean time-series data for TradingView Lightweight Charts canvas.
 """
 
 import os
+import os
 import sqlite3
 import datetime
 from pathlib import Path
@@ -18,7 +19,7 @@ from src.utils.time_and_logger import setup_logger, get_utc_iso
 
 logger = setup_logger("CandleStore")
 
-DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DB_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data"))
 DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DB_DIR / "candles.db"
 
@@ -173,7 +174,16 @@ class CandleStore:
             "volume": new_vol
         }
 
-    def get_candles(self, symbol: str, timeframe: str = "15m", limit: int = 600) -> List[Dict[str, Any]]:
+    def get_latest_candle_timestamp(self, symbol: str, timeframe: str = "15m") -> Optional[int]:
+        """Returns the latest bar epoch timestamp for a given symbol and timeframe."""
+        clean_sym = symbol.split(" ")[0].upper()
+        with self._get_connection() as conn:
+            row = conn.execute("""
+                SELECT MAX(epoch) FROM candles WHERE symbol = ? AND timeframe = ?
+            """, (clean_sym, timeframe)).fetchone()
+            return row[0] if row and row[0] is not None else None
+
+    def get_candles(self, symbol: str, timeframe: str = "15m", limit: int = 1000) -> List[Dict[str, Any]]:
         """
         Retrieves candles formatted specifically for TradingView Lightweight Charts:
         [{ 'time': epoch, 'open': float, 'high': float, 'low': float, 'close': float, 'volume': int }]
@@ -203,7 +213,7 @@ class CandleStore:
             })
         return chart_bars
 
-    def get_candles_as_dataframe(self, symbol: str, timeframe: str = "15m", limit: int = 600) -> pd.DataFrame:
+    def get_candles_as_dataframe(self, symbol: str, timeframe: str = "15m", limit: int = 1000) -> pd.DataFrame:
         """Retrieves candles formatted as a pandas DataFrame matching yfinance structure."""
         bars = self.get_candles(symbol, timeframe=timeframe, limit=limit)
         if not bars:

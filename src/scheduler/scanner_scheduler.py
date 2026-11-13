@@ -61,6 +61,10 @@ class ScannerScheduler:
         self._dispatched_slots: set = set()
         self.is_stale_feed: bool = False
         self._last_proactive_refresh_date: Optional[str] = None
+        self.consecutive_good_broker_cycles: int = 0
+        self.fallback_active: bool = False
+        self.last_fallback_batch_time: float = 0.0
+        self.legacy_yahoo_scan_path_enabled: bool = False # Safety valve config flag
 
     def scan_universe_now(self) -> List[Dict[str, Any]]:
         """Scans all dynamic universe items synchronously (runs in worker pool)."""
@@ -90,12 +94,26 @@ class ScannerScheduler:
             except Exception as e:
                 logger.warning(f"INDmoney batch prefetch error: {e}")
 
-        # Check feed freshness: if feed is stale or data > 60s old during market hours
+        # Track broker health and consecutive good cycles
         if is_open and self.indmoney_feed:
             feed_age = time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)
-            if self.is_stale_feed or feed_age > 60.0:
-                self.is_stale_feed = True
-                logger.warning(f"Feed data is {int(feed_age)}s old (>60s). Feed marked STALE_FEED.")
+            if feed_age <= 60.0 and len(ind_quotes_map) > 0:
+                self.consecutive_good_broker_cycles += 1
+                if self.is_stale_feed:
+                    self.is_stale_feed = False
+                    logger.info("INDmoney feed restored: broker quotes fresh and responsive.")
+                # Fallback ends after 2 consecutive good broker cycles
+                if self.fallback_active and self.consecutive_good_broker_cycles >= 2:
+                    self.fallback_active = False
+                    if hasattr(self.feed, "gateway"):
+                        self.feed.gateway.fallback_active = False
+                    logger.info("FALLBACK_GUARD DEACTIVATED: broker healthy for 2 consecutive cycles.")
+                    self.dispatcher.send_fallback_guard_alert("END", "Broker recovered with fresh quotes.")
+            else:
+                self.consecutive_good_broker_cycles = 0
+                if feed_age > 60.0:
+                    self.is_stale_feed = True
+                    logger.warning(f"Feed data is {int(feed_age)}s old (>60s). Feed marked STALE_FEED.")
 
         # Determine active open symbols and top-3 priority symbols for fallback guard
         open_symbols = set()
@@ -111,6 +129,14 @@ class ScannerScheduler:
 
         priority_symbols = open_symbols | top3_symbols
         feed_age_sec = (time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)) if self.indmoney_feed else 999.0
+
+        # Check if fallback guard is triggering for the first time
+        if feed_age_sec > 180.0 and len(priority_symbols) > 0 and not self.fallback_active:
+            self.fallback_active = True
+            if hasattr(self.feed, "gateway"):
+                self.feed.gateway.fallback_active = True
+            logger.warning(f"FALLBACK_GUARD ACTIVATED: broker stale {int(feed_age_sec)}s (>180s) on priority symbols {priority_symbols}")
+            self.dispatcher.send_fallback_guard_alert("START", f"Broker stale {int(feed_age_sec)}s. Prioritizing {len(priority_symbols)} symbols.")
 
         for item in universe:
             ticker = item.get("yf_ticker")
@@ -413,8 +439,29 @@ class ScannerScheduler:
                 await asyncio.sleep(10)
 
     async def _scanner_worker_loop(self):
-        """Background 516-universe data refresher."""
+        """Background universe data refresher with startup history sanity check."""
         logger.info("Scanner Data Worker Loop active.")
+        
+        # 2d & Note 3: Startup history check. If history is missing (empty or wiped database), run a one-time backfill
+        try:
+            total_bars = 0
+            with self.candle_store._get_connection() as conn:
+                row = conn.execute("SELECT COUNT(*) FROM candles").fetchone()
+                total_bars = row[0] if row else 0
+
+            if total_bars < 500:
+                logger.warning(
+                    f"STARTUP HISTORY CHECK: Local CandleStore has only {total_bars} bars (wiped or fresh disk). "
+                    "Triggering one-time startup backfill through gateway within daily budget..."
+                )
+                universe = self.feed.get_all_universe_items() if self.feed else []
+                # Priority symbols first (FNO & top cash)
+                priority_t = [it.get("yf_ticker") for it in universe[:50] if it.get("yf_ticker")]
+                cnt = await asyncio.to_thread(self.feed.prefetch_batch_15m_candles, priority_t, period="30d", chunk_size=20)
+                logger.info(f"Startup backfill complete: {cnt} priority symbols populated in CandleStore.")
+        except Exception as startup_err:
+            logger.error(f"Error during startup history check: {startup_err}")
+
         # Perform initial scan in background worker so start_loop does not block clock dispatcher
         try:
             await asyncio.to_thread(self.scan_universe_now)

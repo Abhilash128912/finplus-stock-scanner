@@ -12,6 +12,7 @@ Rules:
 4. Duplicate dispatches are mathematically impossible (atomic status lock).
 """
 
+import os
 import sqlite3
 import datetime
 from pathlib import Path
@@ -21,7 +22,7 @@ from src.utils.time_and_logger import setup_logger
 
 logger = setup_logger("ScheduleLedger")
 
-DB_DIR = Path(__file__).resolve().parent.parent.parent / "data"
+DB_DIR = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data"))
 DB_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DB_DIR / "schedule_ledger.db"
 
