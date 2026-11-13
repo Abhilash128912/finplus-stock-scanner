@@ -56,6 +56,15 @@ async def startup_event():
     global scheduler_task
     logger.info("Booting FinPlus+ Stock Scanner Server (Port 8001)...")
     scheduler_task = asyncio.create_task(scheduler.start_loop())
+    # Warm up broker authentication in background thread
+    if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
+        async def _warmup_broker():
+            try:
+                await asyncio.to_thread(scheduler.indmoney_feed.auth_client.get_valid_token, True)
+                logger.info("Broker token warmed up successfully on startup.")
+            except Exception as e:
+                logger.warning(f"Broker startup warmup notice: {e}")
+        asyncio.create_task(_warmup_broker())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -169,6 +178,18 @@ async def deep_health_check():
     }
 
     return JSONResponse(status_code=http_status, content=payload)
+
+@app.api_route("/api/broker/refresh", methods=["GET", "POST"])
+async def broker_refresh():
+    """Forces headless TOTP regeneration and profile verification with INDstocks broker."""
+    if not scheduler.indmoney_feed or not scheduler.indmoney_feed.auth_client:
+        return JSONResponse(status_code=500, content={"status": "ERROR", "message": "INDMoneyAuthClient not configured"})
+    try:
+        new_tok = await asyncio.to_thread(scheduler.indmoney_feed.auth_client.force_refresh_token)
+        ver = await asyncio.to_thread(scheduler.indmoney_feed.auth_client.verify_connection)
+        return {"status": "SUCCESS", "token_length": len(new_tok), "verification": ver}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "ERROR", "message": str(e)})
 
 @app.get("/api/status")
 async def get_status():
