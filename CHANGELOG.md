@@ -26,10 +26,26 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 ### Fixed
 - **P0 - Sole Importer Architecture & YFinance Gateway (`YFinanceGateway`)**:
   - Created `src/gateway/yfinance_gateway.py` as the **sole authorized importer** of `yfinance` in the codebase.
-  - Enforced mandatory reason codes: `HISTORY_BACKFILL`, `NEW_SYMBOL`, `FALLBACK_GUARD`.
-  - Established a 250 requests/day ceiling with a persistent audit ledger table `yfinance_usage` in `data/schedule_ledger.db`.
+  - Enforced mandatory reason codes: `HISTORY_BACKFILL`, `NEW_SYMBOL`, `FALLBACK_GUARD`, and `LEGACY_SCAN`.
+  - Established a 250 requests/day ceiling for strict calls and 3,000 requests/day (500/hour) for legacy scan calls with persistent audit ledger table `yfinance_usage` in `data/schedule_ledger.db`.
   - Implemented an automatic 15-minute circuit breaker (`900s` pause) upon encountering any HTTP 429 rate limit.
   - Replaced all raw `yfinance` calls across `market_data_feed.py`, `live_paper_tracker.py`, `server.py`, and `ntfy_dispatcher.py` with gateway methods. Added `tests/test_v254_step3_sole_importer.py` to prevent regression.
+- **P0 - Phase 2B: Firebase Firestore Persistence Layer (`FirestoreBackend`)**:
+  - Replaced Render persistent disk with Firebase Firestore mirroring on the free Spark tier (50k reads/day, 20k writes/day, 1 GiB limit).
+  - Single authorized external dependency: `firebase-admin>=7.8.0`. Credentials supplied strictly via `FIREBASE_CREDENTIALS_JSON` environment variable (never checked in or logged).
+  - Mirrors: active & closed paper trades, virtual capital, schedule ledger, NTFY quota counter, daily breakout latches, yfinance usage, and compressed 15m candle history (one compact gzipped base64 document per symbol, ~3.5 KB each).
+  - Quota guard: blocks non-essential writes at 80% (16,000 writes) and restricts writes exclusively to paper trades at 95% (19,000 writes) with NTFY alert dispatches.
+  - Startup auto-restore: if local SQLite databases are empty on Render restart, restores state and candle history from Firestore prior to scanning.
+  - Environment isolation: `FIREBASE_ENV_PREFIX` (`live` vs `test`) ensures test suites never mutate live Firestore collections.
+- **P0 - Phase 2C: Bar Parity Recorder & Wick Capture (`BarParityRecorder`, `CandleStore`)**:
+  - Added `BarParityRecorder` (`src/storage/bar_parity_recorder.py`) with SQLite tables `bar_parity` and `bar_parity_sessions` in `candles.db` to measure real-time parity between INDmoney-polled 15m bars and Yahoo bars.
+  - Evaluates bar tolerances: Close within 0.1%, High/Low within 0.3%, Volume within 5.0%, and tracks missing sources (`INDMONEY_MISSING` vs `YAHOO_MISSING`).
+  - Added READY rule: reports `READY TO SWITCH OFF YAHOO` only when >= 98% of scanned symbols have complete INDmoney bars and >= 99% of bars are within tolerance for 2 consecutive sessions.
+  - Updated `CandleStore` with extreme wick capture: updates forming bar extremes when the quote's `day_high` or `day_low` expands inside the bar interval.
+  - Added `/api/bar_parity` endpoint and integrated telemetry into `/api/health/deep` and `15:45_SELF_REPORT`.
+- **P0 - Full 858-Symbol History Backfill (`scripts/backfill_history.py`)**:
+  - Successfully backfilled 559,698 15m bars across all 783 unique universe symbols into SQLite `candles.db`.
+  - Achieved coverage: ATR 14: 100%, ATR 50: 99.9%, ATR 100: 99.7%, ATR 500: 94.1%.
 - **P0 - Scan Path Flipped to INDmoney/CandleStore First (`MarketDataFeed`, `ScannerScheduler`)**:
   - Completely removed Yahoo prefetching (`prefetch_batch_15m_candles`) from the scan cycle during market hours.
   - Closed 15m bars are served purely from `CandleStore` (INDmoney tick accumulator) and local SQLite cache, achieving **0 yfinance calls across healthy scan cycles**.

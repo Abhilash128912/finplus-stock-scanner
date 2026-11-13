@@ -228,11 +228,11 @@ async def deep_health_check():
     else:
         subsystem_status["price_sanity"] = "HEALTHY"
 
-    # 7. Render Ephemeral Disk Check
-    if "RENDER" in os.environ and not os.getenv("DATA_DIR"):
+    # 7. Render Ephemeral Storage & Firebase Persistence Check
+    firebase_telemetry = scheduler.firestore.get_telemetry() if hasattr(scheduler, "firestore") else {}
+    if "RENDER" in os.environ and not firebase_telemetry.get("is_connected"):
         issues.append(
-            "EPHEMERAL_DISK_WARNING: Running on Render with ephemeral disk. DATA_DIR is not set; "
-            "persistent data (.db files) will be lost on container restart. Mount a Render Persistent Disk and set DATA_DIR."
+            "PERSISTENCE_NOTICE: Local files are temporary on Render. Durable data is mirrored to Firebase (see Phase 2B)."
         )
 
     # Off-hours rule: Return 200 outside market hours, weekends, and holidays
@@ -246,6 +246,7 @@ async def deep_health_check():
 
     from src.gateway.yfinance_gateway import YFinanceGateway
     yf_metrics = YFinanceGateway().get_metrics()
+    parity_summary = scheduler.parity_recorder.get_daily_summary() if hasattr(scheduler, "parity_recorder") else {}
 
     payload = {
         "status": overall_status,
@@ -271,6 +272,8 @@ async def deep_health_check():
         "ntfy_quota": ntfy_quota_info,
         "rejected_ticks": rejected_ticks_info,
         "yfinance_gateway": yf_metrics,
+        "firebase": firebase_telemetry,
+        "bar_parity": parity_summary,
         "shadow_variants": scheduler.ledger.get_shadow_variant_stats(date_str) if hasattr(scheduler, "ledger") else {},
         "issues": issues
     }
@@ -282,6 +285,13 @@ async def get_yfinance_usage():
     """Returns persistent yfinance gateway usage, daily budget consumption, and circuit breaker status."""
     from src.gateway.yfinance_gateway import YFinanceGateway
     return YFinanceGateway().get_metrics()
+
+@app.get("/api/bar_parity")
+async def get_bar_parity():
+    """Returns daily INDmoney vs Yahoo Finance bar parity audit, deviation stats, and READY rule verdict."""
+    if hasattr(scheduler, "parity_recorder"):
+        return scheduler.parity_recorder.get_daily_summary()
+    return {"status": "UNAVAILABLE", "message": "BarParityRecorder not initialized"}
 
 @app.api_route("/api/broker/refresh", methods=["GET", "POST"])
 async def broker_refresh():

@@ -27,6 +27,7 @@ DB_PATH = DB_DIR / "candles.db"
 class CandleStore:
     def __init__(self, db_path: str = str(DB_PATH)):
         self.db_path = db_path
+        self.symbol_last_extremes: Dict[str, Tuple[Optional[float], Optional[float], int]] = {}
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -110,11 +111,15 @@ class CandleStore:
         timeframe: str,
         ltp: float,
         tick_volume: int = 0,
-        ist_now: Optional[datetime.datetime] = None
+        ist_now: Optional[datetime.datetime] = None,
+        day_high: Optional[float] = None,
+        day_low: Optional[float] = None,
+        day_volume: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Synthesizes / updates the active ongoing candle bar directly from live INDmoney tick.
         Rolls over automatically at 15m/5m timeframe boundaries.
+        Captures wicks using quote's day_high/day_low fields when day extremes expand inside the bar.
         """
         clean_sym = symbol.split(" ")[0].upper()
         if not ist_now:
@@ -126,6 +131,33 @@ class CandleStore:
         bar_start_ist = ist_now.replace(minute=minute_bucket, second=0, microsecond=0)
         epoch = int(bar_start_ist.timestamp())
 
+        # Check day extreme change for wick capture
+        bar_key = f"{clean_sym}_{timeframe}"
+        last_day_h, last_day_l, last_epoch = self.symbol_last_extremes.get(bar_key, (None, None, 0))
+
+        wick_high = ltp
+        wick_low = ltp
+
+        if epoch != last_epoch:
+            # New bar interval: record baseline extremes
+            self.symbol_last_extremes[bar_key] = (day_high, day_low, epoch)
+            if day_high is not None and day_high > ltp:
+                wick_high = max(wick_high, day_high)
+            if day_low is not None and 0 < day_low < ltp:
+                wick_low = min(wick_low, day_low)
+        else:
+            # Ongoing bar: if day_high expanded, stock wicked to new high
+            if day_high is not None:
+                if last_day_h is not None and day_high > last_day_h:
+                    wick_high = max(wick_high, day_high)
+                self.symbol_last_extremes[bar_key] = (day_high, self.symbol_last_extremes[bar_key][1], epoch)
+
+            # If day_low expanded downwards, stock wicked to new low
+            if day_low is not None and day_low > 0:
+                if last_day_l is not None and day_low < last_day_l:
+                    wick_low = min(wick_low, day_low)
+                self.symbol_last_extremes[bar_key] = (self.symbol_last_extremes[bar_key][0], day_low, epoch)
+
         with self._get_connection() as conn:
             row = conn.execute("""
                 SELECT open, high, low, close, volume 
@@ -135,14 +167,14 @@ class CandleStore:
 
             if row:
                 new_open = row["open"]
-                new_high = max(row["high"], ltp)
-                new_low = min(row["low"], ltp)
+                new_high = max(row["high"], wick_high)
+                new_low = min(row["low"], wick_low)
                 new_close = ltp
                 new_vol = row["volume"] + tick_volume
             else:
                 new_open = ltp
-                new_high = ltp
-                new_low = ltp
+                new_high = max(ltp, wick_high)
+                new_low = min(ltp, wick_low)
                 new_close = ltp
                 new_vol = tick_volume
 

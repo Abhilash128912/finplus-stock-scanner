@@ -35,6 +35,8 @@ class MarketDataFeed:
         self.last_fallback_batch_time: float = 0.0
         self.fallback_batch_min_interval: float = 120.0 # Max 1 batch per 2 minutes
         self.legacy_yahoo_scan_path_enabled: bool = os.getenv("ENABLE_LEGACY_YAHOO_SCAN_PATH", "true").lower() == "true"
+        self.legacy_scan_mode: str = os.getenv("LEGACY_SCAN_MODE", "on").strip().lower()
+        self.yahoo_parity_cache: Dict[str, Dict[str, Any]] = {}
         
         # 1. Stock Options Universe (F&O Lot <= 500 + Reliance + Sensex/Nifty)
         self.fno_master = FNOContractMaster(max_lot_size=max_lot_size)
@@ -111,20 +113,34 @@ class MarketDataFeed:
             if raw_df is not None and not raw_df.empty:
                 if len(chunk) == 1:
                     t = chunk[0]
+                    clean = t.replace(".NS", "")
                     df = raw_df.copy()
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
-                    self._cache[t] = {'df': df, 'ts': now}
-                    self.candle_store.save_dataframe_candles(t.replace(".NS", ""), "15m", df)
+                    self.yahoo_parity_cache[t] = {'df': df, 'ts': now}
+                    
+                    if self.legacy_scan_mode == "shadow_off":
+                        local_df = self.candle_store.get_candles_as_dataframe(clean, "15m", limit=1000)
+                        self._cache[t] = {'df': local_df if not local_df.empty else df, 'ts': now}
+                    else:
+                        self._cache[t] = {'df': df, 'ts': now}
+                    
+                    self.candle_store.save_dataframe_candles(clean, "15m", df)
                     downloaded += 1
                 else:
                     for t in chunk:
                         try:
+                            clean = t.replace(".NS", "")
                             if hasattr(raw_df.columns, "levels") and t in raw_df.columns.levels[0]:
                                 df = raw_df[t].dropna(how="all").copy()
                                 if not df.empty:
-                                    self._cache[t] = {'df': df, 'ts': now}
-                                    self.candle_store.save_dataframe_candles(t.replace(".NS", ""), "15m", df)
+                                    self.yahoo_parity_cache[t] = {'df': df, 'ts': now}
+                                    if self.legacy_scan_mode == "shadow_off":
+                                        local_df = self.candle_store.get_candles_as_dataframe(clean, "15m", limit=1000)
+                                        self._cache[t] = {'df': local_df if not local_df.empty else df, 'ts': now}
+                                    else:
+                                        self._cache[t] = {'df': df, 'ts': now}
+                                    self.candle_store.save_dataframe_candles(clean, "15m", df)
                                     downloaded += 1
                         except Exception:
                             pass

@@ -17,6 +17,8 @@ from src.paper.live_paper_tracker import LivePaperTracker
 from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 from src.storage.schedule_ledger import ScheduleLedger
 from src.storage.candle_store import CandleStore
+from src.storage.firestore_backend import FirestoreBackend
+from src.storage.bar_parity_recorder import BarParityRecorder
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
 
@@ -53,6 +55,12 @@ class ScannerScheduler:
         self.indmoney_feed = INDMoneyLiveFeed(cache_ttl_seconds=5.0)
         self.ledger = ScheduleLedger()
         self.candle_store = CandleStore()
+        self.firestore = FirestoreBackend()
+        self.parity_recorder = BarParityRecorder()
+        if hasattr(self.paper_tracker, "set_firestore_backend"):
+            self.paper_tracker.set_firestore_backend(self.firestore)
+        else:
+            self.paper_tracker.firestore = self.firestore
         
         self.latest_scan_results: List[Dict[str, Any]] = []
         self.latest_shortlist: Dict[str, Any] = {}
@@ -93,6 +101,49 @@ class ScannerScheduler:
                 ind_quotes_map = self.indmoney_feed.fetch_batch_quotes(all_symbols)
             except Exception as e:
                 logger.warning(f"INDmoney batch prefetch error: {e}")
+
+        # Phase 2C: Build 15m and 5m bars from INDmoney quotes with extreme wick correction
+        for q_sym, q_data in ind_quotes_map.items():
+            try:
+                ltp = float(q_data.get("ltp", 0.0))
+                if ltp > 0:
+                    dh = float(q_data.get("day_high", ltp))
+                    dl = float(q_data.get("day_low", ltp))
+                    self.candle_store.update_live_candle_bar(q_sym, "15m", ltp, day_high=dh, day_low=dl)
+                    self.candle_store.update_live_candle_bar(q_sym, "5m", ltp, day_high=dh, day_low=dl)
+            except Exception:
+                pass
+
+        # Phase 2C: Bar Parity Comparison for completed bars
+        if hasattr(self, "parity_recorder") and self.parity_recorder:
+            try:
+                for item in universe:
+                    s = item.get("symbol", "").split(" ")[0].upper()
+                    yt = item.get("yf_ticker")
+                    if not s or not yt:
+                        continue
+                    yf_entry = self.feed.yahoo_parity_cache.get(yt)
+                    if not yf_entry or 'df' not in yf_entry:
+                        continue
+                    yf_df = yf_entry['df']
+                    if yf_df.empty:
+                        continue
+                    ind_bars = self.candle_store.get_candles(s, "15m", limit=3)
+                    if len(ind_bars) >= 2:
+                        prev_completed_ind = ind_bars[-2]
+                        bar_epoch = prev_completed_ind.get("time")
+                        matching_row = None
+                        for row_idx, row in yf_df.iterrows():
+                            re = int(row_idx.timestamp()) if hasattr(row_idx, "timestamp") else 0
+                            if abs(re - bar_epoch) < 60:
+                                matching_row = row
+                                break
+                        if matching_row is not None:
+                            self.parity_recorder.record_bar_comparison(
+                                s, "15m", bar_epoch, prev_completed_ind, matching_row.to_dict()
+                            )
+            except Exception as parity_err:
+                logger.debug(f"Bar parity comparison notice: {parity_err}")
 
         # Track broker health and consecutive good cycles
         if is_open and self.indmoney_feed:
@@ -403,11 +454,19 @@ class ScannerScheduler:
                                 rej_tot = 0
                                 if self.paper_tracker and hasattr(self.paper_tracker, "get_rejected_ticks_telemetry"):
                                     rej_tot = self.paper_tracker.get_rejected_ticks_telemetry().get("total_rejected_ticks", 0)
+                                parity_sum = self.parity_recorder.get_daily_summary(date_str) if hasattr(self, "parity_recorder") else {}
+                                fb_sum = self.firestore.get_telemetry() if hasattr(self, "firestore") else {}
                                 delivered = await asyncio.to_thread(
                                     self.dispatcher.send_1545_self_report,
                                     rejected_ticks_total=rej_tot,
-                                    force=True
+                                    force=True,
+                                    parity_summary=parity_sum,
+                                    firebase_summary=fb_sum
                                 )
+                                # Post-market candle sync to Firestore
+                                if hasattr(self, "firestore") and self.firestore.is_connected:
+                                    logger.info("15:45 Post-Market: Uploading daily candle history to Firestore...")
+                                    asyncio.create_task(asyncio.to_thread(self.firestore.upload_all_candles_from_sqlite, self.candle_store))
                             elif slot_id in ("08:30_HISTORY_BACKFILL", "16:00_HISTORY_BACKFILL"):
                                 # Run off-hours history backfill runner via YFinanceGateway with HISTORY_BACKFILL
                                 logger.info(f"Triggering scheduled off-hours backfill runner ({slot_id})...")
@@ -528,9 +587,24 @@ class ScannerScheduler:
             logger.error(f"Error in startup backfill task: {err}")
 
     async def _scanner_worker_loop(self):
-        """Background universe data refresher with startup history sanity check."""
+        """Background universe data refresher with startup history sanity check and Firestore restore."""
         logger.info("Scanner Data Worker Loop active.")
         
+        # Phase 2B: Restore from Firestore if local DB is empty/cold
+        if hasattr(self, "firestore") and self.firestore.is_connected:
+            try:
+                with self.candle_store._get_connection() as conn:
+                    bar_cnt = conn.execute("SELECT COUNT(*) FROM candles").fetchone()[0]
+                if bar_cnt < 500:
+                    logger.info("Cold start detected (bars < 500). Restoring database state from Firestore...")
+                    restore_res = await asyncio.to_thread(
+                        self.firestore.restore_all_from_firestore,
+                        self.candle_store, self.paper_tracker, self.ledger
+                    )
+                    logger.info(f"Firestore restore completed: {restore_res}")
+            except Exception as restore_err:
+                logger.error(f"Error during Firestore startup restore: {restore_err}")
+
         # Launch paced history backfill in background if coverage < 90%
         asyncio.create_task(self.run_paced_history_backfill())
 

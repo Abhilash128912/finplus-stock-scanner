@@ -577,10 +577,18 @@ class NTFYDispatcher:
                 success = True
         return success
 
-    def send_1545_self_report(self, rejected_ticks_total: int = 0, force: bool = False, shadow_stats: Optional[Dict[str, Any]] = None) -> bool:
+    def send_1545_self_report(
+        self, 
+        rejected_ticks_total: int = 0, 
+        force: bool = False, 
+        shadow_stats: Optional[Dict[str, Any]] = None,
+        parity_summary: Optional[Dict[str, Any]] = None,
+        firebase_summary: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """
         Dispatches the 15:45 IST Post-Market System & Data Health Self-Report.
-        Includes rejected-tick counter telemetry per symbol and overall, plus yfinance usage and shadow stats.
+        Includes rejected-tick counter telemetry per symbol and overall, yfinance usage,
+        Bar Parity evaluation (INDmoney vs Yahoo), and Firebase mirror status.
         """
         from datetime import datetime, timezone, timedelta
         from src.gateway.yfinance_gateway import YFinanceGateway
@@ -605,9 +613,43 @@ class NTFYDispatcher:
             f"yfinance Strict Calls (Backfill/Fallback): {strict_calls}/{strict_budget}",
             f"yfinance Legacy Scan Calls: {legacy_calls}/{legacy_budget}",
             f"yfinance Circuit Breaker: {'PAUSED' if yf_metrics.get('is_paused') else 'HEALTHY'}",
+        ]
+
+        # Bar Parity Summary (Phase 2C)
+        if parity_summary is None:
+            try:
+                from src.storage.bar_parity_recorder import BarParityRecorder
+                parity_summary = BarParityRecorder().get_daily_summary()
+            except Exception:
+                parity_summary = {}
+
+        if parity_summary and parity_summary.get("total_bars_compared", 0) > 0:
+            comp_pct = parity_summary.get("symbols_with_complete_bars_pct", 0.0)
+            tol_pct = parity_summary.get("pct_within_tolerance", 0.0)
+            ready_str = parity_summary.get("ready_to_switch_off_yahoo", "NOT READY")
+            lines.append(f"Bar Parity: {comp_pct}% complete, {tol_pct}% in-tolerance | {ready_str}")
+        else:
+            lines.append("Bar Parity: Standby (0 comparisons today)")
+
+        # Firebase Mirror Telemetry (Phase 2B)
+        if firebase_summary is None:
+            try:
+                from src.storage.firestore_backend import FirestoreBackend
+                firebase_summary = FirestoreBackend().get_telemetry()
+            except Exception:
+                firebase_summary = {}
+
+        if firebase_summary:
+            status = firebase_summary.get("status", "LOCAL_ONLY")
+            w_today = firebase_summary.get("writes_today", 0)
+            r_today = firebase_summary.get("reads_today", 0)
+            quota_pct = firebase_summary.get("quota_remaining_pct", 100.0)
+            lines.append(f"Firebase Mirror: {status} ({w_today}/20000 w, {r_today}/50000 r, {quota_pct:.1f}% quota left)")
+
+        lines.extend([
             "Daily Routine Quota: Audited & Restored",
             f"Cockpit: {RENDER_SCANNER_URL}"
-        ]
+        ])
 
         if shadow_stats:
             lines.append(f"Shadow Variants Evaluated: {shadow_stats.get('total_evaluated', 0)}")
