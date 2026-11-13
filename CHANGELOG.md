@@ -5,6 +5,22 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.5.0] - 2026-11-13
+
+### Added
+- **State-Driven Persistent Schedule Ledger (`ScheduleLedger`)**: Built persistent SQLite-backed state machine (`data/schedule_ledger.db`) for all scheduled daily market bulletins (`09:00_AGENDA`, `09:30_PULSE_FIRST`, 30m Pulses, `15:00_SUMMARY`). Replaced rigid legacy 5-minute time windows (`0 <= mm < 5`) with state tracking (`PENDING`, `IN_FLIGHT`, `COMPLETED`, `FAILED`, `EXPIRED_STALE`), guaranteeing execution even through server restarts, latency, or deployment reboots.
+- **Restored Full 750-Stock Quality Cash Universe (858 Total Instruments)**: Upgraded `BroadMarketMaster` with an automated liquidity cascade that supplements liquid Mid/Smallcap equities up to exactly 750 verified cash stocks (Min Price ₹50, Min Turnover ₹15 Cr). Regenerated and bundled `config/cash_stocks_master.json`. Total tracked universe now stands at **858 instruments** (750 Cash Equities + 108 F&O Options).
+- **Permanent Self-Healing Headless TOTP Broker Authentication**: Upgraded `finplus_core/auth/indmoney_client.py` with RFC 6238 TOTP auto-regeneration. On any HTTP 401/403 or token expiration, the client automatically generates a fresh 24-hour token and persists it without manual intervention. Added active 60-second cooldown sleep handling to protect against broker rate limit lockouts (`{"message":"Please wait a minute before requesting another token."}`).
+- **Zero-Delay Local SQLite CandleStore & Interactive Chart Engine**: Created `CandleStore` (`data/candles.db`) that captures live INDmoney broker ticks in real-time and synthesizes them into 15m and 5m OHLCV bars. Added `/api/candles/{symbol}` and an interactive TradingView Lightweight Charts canvas at `/chart/{symbol}`, eliminating reliance on delayed public widgets.
+- **Deep Health Diagnostic Endpoint (`/api/health/deep`) for UptimeRobot**: Added diagnostic endpoint probing internal scheduler loops, universe size, broker token validity, and milestone ledger states. Returns HTTP 200 when fully healthy and HTTP 503 if any core subsystem stalls, providing actionable UptimeRobot alerting.
+- **Automated Institutional Pre-Flight Verification Suite**: Created `test_institutional_preflight.py` verifying 6 key acceptance criteria (broker TOTP handshake, 750 cash universe, batch quote speed < 1s, candle synthesis, ledger catch-up, and decoupled feed integration).
+
+### Fixed
+- **Non-Blocking Asynchronous Dispatcher Threading**: Wrapped synchronous `requests` calls in `_clock_dispatcher_loop` with `asyncio.to_thread`, preventing network I/O from blocking the Uvicorn/FastAPI main event loop.
+- **Stale Milestone Retirement & Retry Throttling**: Added milestone retry capping (`attempts < 3`) and automatic `EXPIRED_STALE` transitions for past-session milestones (> 35 mins late), preventing infinite retries and alert flooding on server restart.
+
+---
+
 ## [2.4.0] - 2026-11-12
 
 ### Added
