@@ -16,10 +16,12 @@ Security Architecture:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import datetime
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -59,6 +61,10 @@ class INDMoneyAuthClient:
     HOLDINGS_ENDPOINT = "/portfolio/holdings"
     POSITIONS_ENDPOINT = "/portfolio/positions"
 
+    # Process-wide async lock for single-flight token refresh
+    _async_refresh_lock: Optional[asyncio.Lock] = None
+    _sync_refresh_lock = threading.Lock()
+
     def __init__(
         self,
         client_id: Optional[str] = None,
@@ -66,30 +72,98 @@ class INDMoneyAuthClient:
         mpin: Optional[str] = None,
         access_token: Optional[str] = None,
         env_file_path: Optional[str | Path] = None,
+        token_file_path: Optional[str | Path] = None,
     ) -> None:
         """
         Initializes the INDmoney Authentication Client.
         If parameters are omitted, loads them from the specified .env file or environment variables.
         """
-        # Load environment variables if file provided or default exists
+        # Determine paths
+        scanner_root = Path(__file__).resolve().parent.parent.parent
+        apps_root = scanner_root.parent
+
         if env_file_path:
             load_dotenv(dotenv_path=env_file_path, override=True)
+            self.env_file_path = Path(env_file_path)
         else:
-            default_env = Path(__file__).resolve().parent.parent.parent / "config" / ".env"
+            default_env = scanner_root / "config" / ".env"
+            if not default_env.exists():
+                default_env = apps_root / "config" / ".env"
             if default_env.exists():
                 load_dotenv(dotenv_path=default_env, override=True)
             else:
                 load_dotenv(override=True)
+            self.env_file_path = default_env
+
+        # Single canonical token file (config/indmoney_token.json)
+        if token_file_path:
+            self.token_file_path = Path(token_file_path)
+        else:
+            cand_token = scanner_root / "config" / "indmoney_token.json"
+            if not cand_token.parent.exists():
+                cand_token = apps_root / "config" / "indmoney_token.json"
+            self.token_file_path = cand_token
 
         self.client_id = client_id or os.getenv("INDMONEY_CLIENT_ID")
         self.totp_secret = totp_secret or os.getenv("INDMONEY_TOTP_SECRET")
         self.mpin = mpin or os.getenv("INDMONEY_MPIN")
         self.access_token = access_token or os.getenv("INDMONEY_ACCESS_TOKEN")
-        self.env_file_path = Path(env_file_path) if env_file_path else Path(__file__).resolve().parent.parent.parent / "config" / ".env"
 
         self._last_token_request_time: float = 0.0
 
+        # Load token file state if available
+        self._load_token_from_file()
+
         self._validate_config()
+
+    def _load_token_from_file(self) -> None:
+        """Reads cached token, expiry, and last_request_time from the shared token file."""
+        if not self.token_file_path or not self.token_file_path.exists():
+            return
+        try:
+            with open(self.token_file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                file_tok = data.get("token")
+                file_last_req = data.get("last_request_time", 0.0)
+                if file_tok and not self.access_token:
+                    self.access_token = file_tok
+                if file_last_req > self._last_token_request_time:
+                    self._last_token_request_time = float(file_last_req)
+        except Exception as e:
+            logger.debug(f"Could not load token file {self.token_file_path}: {e}")
+
+    def _save_token_to_file(self, token: str, expiry_iso: Optional[str] = None) -> None:
+        """Saves active token, expiry ISO string, and last_request_time to the shared token file."""
+        if not self.token_file_path:
+            return
+        try:
+            self.token_file_path.parent.mkdir(parents=True, exist_ok=True)
+            exp_dt = self.get_token_expiration(token)
+            data = {
+                "token": token,
+                "expiry": expiry_iso or (exp_dt.isoformat() if exp_dt else None),
+                "last_request_time": self._last_token_request_time,
+                "updated_at": datetime.datetime.now(tz=IST).isoformat(),
+            }
+            with open(self.token_file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            logger.info("Persisted active token metadata to %s", self.token_file_path)
+        except Exception as e:
+            logger.warning(f"Could not persist token file {self.token_file_path}: {e}")
+
+    def get_cooldown_remaining(self) -> float:
+        """Returns the seconds remaining in the 60-second cooldown window (0.0 if inactive)."""
+        # Check token file first to sync with external processes/scripts
+        self._load_token_from_file()
+        now_ts = time.time()
+        elapsed = now_ts - self._last_token_request_time
+        if 0 <= elapsed < 60.0 and self._last_token_request_time > 0:
+            return 60.0 - elapsed
+        return 0.0
+
+    def is_cooldown_active(self) -> bool:
+        """Returns True if the 60-second broker request cooldown is currently active."""
+        return self.get_cooldown_remaining() > 0.0
 
     def _validate_config(self) -> None:
         """Validates that necessary configuration parameters are present."""
@@ -165,29 +239,8 @@ class INDMoneyAuthClient:
         remaining = (exp_dt - now_dt).total_seconds()
         return remaining > buffer_seconds
 
-    def generate_fresh_token(self, persist_to_env: bool = True) -> str:
-        """
-        Requests a new 24-hour access token from the INDstocks API using MPIN and TOTP.
-        Enforces a 60-second client-side cooldown to protect broker rate-limits.
-        """
-        # Respect broker's 60-second generation rate limit by sleeping if needed rather than crashing
-        now_ts = time.time()
-        latest_env_tok = self._reload_token_from_env()
-        if latest_env_tok:
-            claims = self.decode_jwt_claims(latest_env_tok)
-            iat = claims.get("iat", 0)
-            since_last_iat = now_ts - iat
-            if 0 <= since_last_iat < 60.0:
-                wait_needed = int(60.0 - since_last_iat) + 1
-                logger.info("Broker 60s cooldown active (token issued %ds ago). Sleeping %ds before requesting fresh token...", int(since_last_iat), wait_needed)
-                time.sleep(wait_needed)
-
-        elapsed = time.time() - self._last_token_request_time
-        if 0 <= elapsed < 60.0 and self._last_token_request_time > 0:
-            wait_needed = int(60.0 - elapsed) + 1
-            logger.info("Local 60s cooldown active. Sleeping %ds before requesting fresh token...", wait_needed)
-            time.sleep(wait_needed)
-
+    def _execute_token_request(self, persist_to_env: bool = True) -> str:
+        """Internal low-level token request to the INDstocks API."""
         totp_code = self.generate_current_totp()
         url = f"{self.BASE_URL}{self.TOKEN_ENDPOINT}"
         headers = {
@@ -221,6 +274,9 @@ class INDMoneyAuthClient:
                     claims.get("clientID", self.client_id),
                 )
 
+                # Persist to token file
+                self._save_token_to_file(new_token, exp_dt.isoformat() if exp_dt else None)
+
                 if persist_to_env and self.env_file_path:
                     self._persist_token_to_env(new_token)
 
@@ -241,6 +297,46 @@ class INDMoneyAuthClient:
         except requests.RequestException as exc:
             logger.error("Network error during token generation: %s", exc)
             raise INDMoneyAuthError(f"Network error: {exc}") from exc
+
+    def generate_fresh_token(self, persist_to_env: bool = True) -> str:
+        """
+        Synchronous token refresh. Respects 60s cooldown by sleeping via time.sleep if needed.
+        """
+        with self._sync_refresh_lock:
+            # Re-check cooldown under lock
+            rem = self.get_cooldown_remaining()
+            if rem > 0:
+                wait_needed = int(rem) + 1
+                logger.info("Broker 60s cooldown active. Sleeping %ds before requesting fresh token...", wait_needed)
+                time.sleep(wait_needed)
+
+            return self._execute_token_request(persist_to_env=persist_to_env)
+
+    async def generate_fresh_token_async(self, persist_to_env: bool = True) -> str:
+        """
+        Asynchronous single-flight token refresh.
+        Respects 60s cooldown using asyncio.sleep (never blocks event loop).
+        """
+        if INDMoneyAuthClient._async_refresh_lock is None:
+            INDMoneyAuthClient._async_refresh_lock = asyncio.Lock()
+
+        async with INDMoneyAuthClient._async_refresh_lock:
+            # Re-check if another task refreshed it while we waited
+            self._load_token_from_file()
+            self._reload_token_from_env()
+            if self.is_token_valid():
+                logger.info("Token was refreshed by a concurrent task while waiting for lock.")
+                return self.access_token
+
+            rem = self.get_cooldown_remaining()
+            if rem > 0:
+                wait_needed = int(rem) + 1
+                logger.info("Broker 60s cooldown active. asyncio.sleep(%ds) before requesting fresh token...", wait_needed)
+                await asyncio.sleep(wait_needed)
+
+            # Run HTTP request in executor to avoid blocking event loop
+            loop = asyncio.get_running_loop()
+            return await loop.run_in_executor(None, self._execute_token_request, persist_to_env)
 
     def _reload_token_from_env(self) -> Optional[str]:
         """Reloads the access token from config/.env to pick up tokens generated by other suite apps."""
@@ -267,8 +363,9 @@ class INDMoneyAuthClient:
     def get_valid_token(self, auto_refresh: bool = True) -> str:
         """
         Returns a verified active access token.
-        Always synchronizes with shared config/.env to avoid concurrent generation conflicts.
+        Always synchronizes with shared token file and config/.env to avoid concurrent generation conflicts.
         """
+        self._load_token_from_file()
         self._reload_token_from_env()
 
         if self.is_token_valid():
@@ -280,9 +377,35 @@ class INDMoneyAuthClient:
 
         raise INDMoneyAuthError("Current access token is expired and auto_refresh is disabled.")
 
+    async def get_valid_token_async(self, auto_refresh: bool = True) -> str:
+        """
+        Asynchronously returns a verified active access token.
+        Uses single-flight async refresh lock and asyncio.sleep for cooldown.
+        """
+        self._load_token_from_file()
+        self._reload_token_from_env()
+
+        if self.is_token_valid():
+            return self.access_token
+
+        if auto_refresh:
+            logger.info("Current token expired or expiring soon. Refreshing via async TOTP single-flight...")
+            return await self.generate_fresh_token_async()
+
+        raise INDMoneyAuthError("Current access token is expired and auto_refresh is disabled.")
+
     def get_auth_headers(self) -> Dict[str, str]:
         """Returns standard HTTP headers for protected broker requests."""
         token = self.get_valid_token(auto_refresh=True)
+        return {
+            "Authorization": token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
+    async def get_auth_headers_async(self) -> Dict[str, str]:
+        """Returns standard HTTP headers for protected broker requests using async single-flight token."""
+        token = await self.get_valid_token_async(auto_refresh=True)
         return {
             "Authorization": token,
             "Accept": "application/json",

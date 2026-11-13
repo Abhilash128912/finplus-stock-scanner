@@ -5,6 +5,35 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 
 ---
 
+## [2.5.1] - 2026-11-13
+
+### Fixed
+- **P0 - Thread-Safe Atomic Paper Position Closure & Single-Insert Guard (`LivePaperTracker`)**:
+  - Removed positions from in-memory `active_positions` under a threading lock *before* initiating database operations, eliminating race conditions during fast square-off sweeps.
+  - Switched database insertion to `INSERT OR IGNORE INTO closed_paper_trades` with `cursor.rowcount == 1` validation, preventing duplicate trade entries and whole-loop aborts.
+  - Wrapped each trade evaluation in `update_and_trail_positions()` in its own isolated `try/except` block to ensure an individual trade failure never stops the tracker loop.
+  - Only emit `"PAPER TRADE CLOSED"` logs and dispatch NTFY close alerts if the trade row was actually inserted (`rowcount == 1`).
+  - Switched 15:00 summary P&L and total realized P&L calculations to query directly from the SQLite database (`closed_paper_trades`) instead of in-memory or logged closes, fixing the exact Rs 193.05 duplicate-close overstatement.
+- **P0 - Unified Token Persistence, Pre-Flight Cooldown & Single-Flight Async Lock (`INDMoneyAuthClient`, `INDMoneyLiveFeed`)**:
+  - Established a single canonical token store at `config/indmoney_token.json` holding `token`, `expiry`, and `last_request_time`, synchronized across all scripts and processes.
+  - Enforced client-side cooldown verification *before* every broker request; during active cooldown, cached quotes or CandleStore data are served with zero external broker calls.
+  - Replaced multi-threaded 403 storm with single-flight refresh lock: the first 403 triggers TOTP refresh while all other callers wait and reuse the new credentials, retrying failed chunks once.
+  - Replaced blocking `time.sleep` with `asyncio.sleep` in async refresh paths to protect the event loop.
+  - Converted `INDMoneyLiveFeed` into a thread-safe singleton, eliminating dual instantiation conflicts between `ScannerScheduler` and `LivePaperTracker`.
+- **P0 - Proactive Token Warmup & Feed Staleness Circuit Breaker (`ScannerScheduler`)**:
+  - Added proactive 08:45 AM IST token renewal on trading weekdays to guarantee valid session tokens before the 09:15 AM market open.
+  - Implemented 60-second staleness watchdog during market hours: if token refresh fails or quotes are older than 60 seconds, output is tagged `STALE_FEED`, new directional signals are blocked (`signal_direction = 0`, `regime_confluence = "VETOED (STALE_FEED)"`), and broker polling halts until cooldown expires.
+- **P1 - Persistent Daily NTFY Quota & Priority Alert Bypass (`NTFYDispatcher`, `ScheduleLedger`)**:
+  - Added persistent SQLite table `ntfy_daily_quota` in `data/schedule_ledger.db` tracking messages sent per date, guaranteeing message counter survival across application restarts and redeploys.
+  - Enabled priority bypass for critical money-protective alerts (Stop-Loss, Trade Close, Trade Open), ensuring risk alerts are never blocked even when the 220 daily message cap is reached.
+  - Exposed live `ntfy_quota` metrics (`used`, `remaining`, `cap`) in `/api/health/deep` for monitoring.
+- **P2 - Safe ASCII Headers & Secrets Sanitization (`NTFYDispatcher`, `CHANGELOG.md`, `.gitignore`)**:
+  - Implemented `safe_headers()` utility that scrubs non-ASCII characters from HTTP headers (forcing clean ASCII and moving emojis strictly to UTF-8 message bodies), preventing `UnicodeEncodeError: 'latin-1' codec can't encode character` crashes.
+  - Sanitized hardcoded NTFY tokens and token prefixes across documentation and codebases, defaulting to the `NTFY_AUTH_TOKEN` environment variable.
+  - Added `config/indmoney_token.json` and `*token*.json` to `.gitignore`.
+
+---
+
 ## [2.5.0] - 2026-11-13
 
 ### Added
@@ -40,7 +69,7 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 ### Added
 - **Midday Theta Freeze Gate (11:30 AM – 01:00 PM IST)**: Implemented empirical timing filter in `shortlist_engine.py`, `live_paper_tracker.py`, and `ntfy_dispatcher.py`. Analyzed past trade journals and NSE market microstructure proving 11:30–13:00 is a high-decay dead-zone (0% win-rate). Fresh option buying and cash entries are strictly paused during this window, automatically resuming for the 13:00+ European open session.
 - **Two-Way Intraday Cash Trading (MIS Short Selling + Long Breakouts)**: Expanded cash equity engine to recommend active `SELL / SHORT INTRADAY (MIS)` on quality, liquid non-F&O midcaps/smallcaps breaking down below support floors on high volume with tight SL (base roof) and 1:2.2 downside targets. Fully decoupled from F&O stock options (which exclusively trade CE/PE).
-- **Dedicated NTFY Token Authentication (`tk_wu13o6...`)**: Integrated official Bearer token across all dispatches in `ntfy_dispatcher.py` and `live_paper_tracker.py`, eliminating anonymous IP rate limiting.
+- **Dedicated NTFY Token Authentication**: Integrated official Bearer token via `NTFY_AUTH_TOKEN` environment variable across all dispatches in `ntfy_dispatcher.py` and `live_paper_tracker.py`, eliminating anonymous IP rate limiting.
 - **Unified 220-Message Daily Safety Cap**: Raised message allowance to 220 messages/day (safely within the 250 free daily limit), preventing HTTP 429 quota lockouts.
 - **Local Dev Push Suppression**: Suppressed local duplicate NTFY pushes so only 24/7 Render Cloud dispatches to user devices, protecting quota during development.
 

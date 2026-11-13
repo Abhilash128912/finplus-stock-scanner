@@ -139,7 +139,18 @@ async def deep_health_check():
     if failed_milestones:
         issues.append(f"Ledger milestones failed: {', '.join(failed_milestones)}")
 
-    # 4. Market Hours Liveness Check
+    # 4. NTFY Quota Diagnostics
+    ntfy_quota_info = {}
+    if scheduler.dispatcher:
+        used_q = scheduler.dispatcher.get_sent_count_today()
+        rem_q = scheduler.dispatcher.get_remaining_quota()
+        ntfy_quota_info = {
+            "used": used_q,
+            "remaining": rem_q,
+            "cap": 220
+        }
+
+    # 5. Market Hours Liveness Check
     # If market is open, verify scan has run recently
     scan_age_secs = 0
     if scheduler.last_scan_utc:
@@ -174,6 +185,7 @@ async def deep_health_check():
             "date": date_str,
             "milestones": ledger_status
         },
+        "ntfy_quota": ntfy_quota_info,
         "issues": issues
     }
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 import sys
 import time
+import threading
+import asyncio
 import requests
 from typing import Dict, Any, List, Optional
 from pathlib import Path
@@ -76,12 +78,28 @@ DEFAULT_SCRIP_REGISTRY = {
 
 
 class INDMoneyLiveFeed:
-    """Manages real-time batch quote retrieval directly from INDmoney broker API."""
+    """Manages real-time batch quote retrieval directly from INDmoney broker API.
+    Implemented as a Singleton to ensure unified rate limiting, state and token management.
+    """
 
     BASE_URL = "https://api.indstocks.com"
     QUOTES_ENDPOINT = "/market/quotes/full"
 
+    _instance: Optional["INDMoneyLiveFeed"] = None
+    _singleton_lock = threading.Lock()
+    _refresh_lock = threading.Lock()
+    _async_refresh_lock: Optional[asyncio.Lock] = None
+
+    def __new__(cls, *args, **kwargs):
+        with cls._singleton_lock:
+            if cls._instance is None:
+                cls._instance = super(INDMoneyLiveFeed, cls).__new__(cls)
+                cls._instance._initialized = False
+            return cls._instance
+
     def __init__(self, cache_ttl_seconds: float = 2.0):
+        if getattr(self, "_initialized", False):
+            return
         self.cache_ttl = cache_ttl_seconds
         self.auth_client = None
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
@@ -111,6 +129,8 @@ class INDMoneyLiveFeed:
                 logger.info("INDMoneyLiveFeed initialized with active INDMoneyAuthClient.")
             except Exception as e:
                 logger.warning(f"Failed to initialize INDMoneyAuthClient: {e}")
+
+        self._initialized = True
 
     def _load_equity_instruments_registry(self) -> None:
         """Loads official NSE security codes from equity_instruments.csv if available."""
@@ -145,8 +165,9 @@ class INDMoneyLiveFeed:
 
     def fetch_batch_quotes(self, symbols: List[str], force: bool = False) -> Dict[str, Dict[str, Any]]:
         """
-        Fetches live quotes for multiple symbols simultaneously in 1 single HTTP request.
-        Returns mapping of clean symbol -> quote info (ltp, change_pct, day_high, day_low, volume).
+        Fetches live quotes for multiple symbols simultaneously in batch chunks.
+        Checks cooldown before calling broker. During cooldown, serves cached data without calling broker.
+        Uses single-flight lock for refresh on 401/403. Retries failed chunk once.
         """
         if not self.auth_client:
             return {}
@@ -155,8 +176,12 @@ class INDMoneyLiveFeed:
         if not force and (now - self._last_fetch_time) < self.cache_ttl and self._quote_cache:
             return self._quote_cache
 
-        if not force and now < self._broker_cooldown_until:
-            return self._quote_cache
+        # Cooldown guard: check client cooldown & broker cooldown BEFORE every broker call
+        if not force:
+            rem_cd = self.auth_client.get_cooldown_remaining() if hasattr(self.auth_client, "get_cooldown_remaining") else 0.0
+            if rem_cd > 0 or now < self._broker_cooldown_until:
+                # During cooldown, serve from existing quote cache and do not call broker
+                return self._quote_cache
 
         # Map symbols to scrips
         scrip_to_sym = {}
@@ -208,11 +233,29 @@ class INDMoneyLiveFeed:
                                     "source": "INDstocks Live Broker API"
                                 }
                 elif resp.status_code in (401, 403):
-                    logger.warning(f"INDstocks returned HTTP {resp.status_code}. Auto-refreshing session token via headless TOTP...")
+                    # Single-flight refresh lock: first caller refreshes, others wait and reuse
+                    with self._refresh_lock:
+                        # Re-verify token validity under lock to avoid duplicate refreshes
+                        if not self.auth_client.is_token_valid():
+                            logger.warning(f"INDstocks returned HTTP {resp.status_code}. Refreshing token under single-flight lock...")
+                            try:
+                                self.auth_client.generate_fresh_token()
+                            except Exception as refresh_err:
+                                logger.error(f"Failed to auto-refresh token via TOTP: {refresh_err}")
+                                self._broker_cooldown_until = time.time() + 60.0
+                                break
+                        else:
+                            logger.info("Token already refreshed by previous chunk/thread.")
+
+                        # Get updated headers
+                        try:
+                            headers = self.auth_client.get_auth_headers()
+                        except Exception as e:
+                            logger.error(f"Could not get updated headers: {e}")
+                            break
+
+                    # Retry current chunk once with fresh credentials
                     try:
-                        self.auth_client.generate_fresh_token()
-                        headers = self.auth_client.get_auth_headers()
-                        # Retry current chunk with fresh credentials
                         retry_resp = requests.get(url, headers=headers, timeout=4.0)
                         if retry_resp.status_code == 200:
                             payload = retry_resp.json()
@@ -235,20 +278,24 @@ class INDMoneyLiveFeed:
                                             "source": "INDstocks Live Broker API"
                                         }
                             continue
-                    except Exception as refresh_err:
-                        logger.error(f"Failed to auto-refresh token via TOTP: {refresh_err}")
-                    self._broker_cooldown_until = now + 60.0
+                        else:
+                            logger.warning(f"Retry after refresh returned HTTP {retry_resp.status_code}.")
+                    except Exception as retry_err:
+                        logger.error(f"Error retrying chunk after refresh: {retry_err}")
+                    
+                    self._broker_cooldown_until = time.time() + 60.0
                     break
+
                 elif resp.status_code == 429:
                     logger.warning("INDstocks quote returned HTTP 429 rate limit. Setting 60s cooldown.")
-                    self._broker_cooldown_until = now + 60.0
+                    self._broker_cooldown_until = time.time() + 60.0
                     break
             except Exception as e:
                 logger.debug(f"INDstocks batch quote error for chunk {i}: {e}")
 
         if results:
             self._quote_cache.update(results)
-            self._last_fetch_time = now
+            self._last_fetch_time = time.time()
             return self._quote_cache
 
         return self._quote_cache

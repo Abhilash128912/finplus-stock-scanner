@@ -11,16 +11,33 @@ import requests
 import json
 from typing import Dict, Any, List, Optional
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str
+from src.storage.schedule_ledger import ScheduleLedger
 
 logger = setup_logger("NTFYDispatcher")
 
 DEFAULT_TOPICS = ["Finplus-Delta"]
 RENDER_SCANNER_URL = "https://finplus-stock-scanner.onrender.com"
-DEFAULT_NTFY_AUTH_TOKEN = "tk_wu13o6hgbaqdyt700zff66rid60s7"
+DEFAULT_NTFY_AUTH_TOKEN = ""
 MAX_DAILY_NOTIFICATIONS = 220  # Safe cap below NTFY's 250 hard limit
 
+
+def safe_headers(headers: Dict[str, Any], auth_token: Optional[str] = None) -> Dict[str, str]:
+    """Forces ASCII on all HTTP header values. Non-ASCII chars (emojis) are stripped."""
+    clean_headers: Dict[str, str] = {}
+    if auth_token:
+        clean_headers["Authorization"] = f"Bearer {auth_token}"
+    for k, v in headers.items():
+        if k == "Authorization" and auth_token:
+            continue
+        if isinstance(v, str):
+            clean_headers[k] = v.encode("ascii", "ignore").decode("ascii").strip()
+        else:
+            clean_headers[k] = str(v)
+    return clean_headers
+
+
 class NTFYDispatcher:
-    def __init__(self, topics: Optional[List[str]] = None, min_interval_seconds: int = 1800):
+    def __init__(self, topics: Optional[List[str]] = None, min_interval_seconds: int = 1800, ledger: Optional[ScheduleLedger] = None):
         env_topic = os.getenv("NTFY_TOPIC")
         if env_topic:
             self.topics = [env_topic.strip()]
@@ -32,39 +49,43 @@ class NTFYDispatcher:
         self.auth_token = os.getenv("NTFY_AUTH_TOKEN", DEFAULT_NTFY_AUTH_TOKEN)
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
-        self.daily_message_count = 0
-        self.last_count_reset_day = time.strftime("%Y-%m-%d")
+        self.ledger = ledger or ScheduleLedger()
 
-    def _safe_post(self, url: str, message: str, headers: Dict[str, str]) -> bool:
-        """Dispatches NTFY notification with daily cap (up to 220/day) and Bearer auth."""
+    def get_sent_count_today(self) -> int:
+        """Returns persistent message count for today."""
         today = time.strftime("%Y-%m-%d")
+        return self.ledger.get_ntfy_sent_count(today)
 
-        # Reset daily counter on date rollover
-        if today != self.last_count_reset_day:
-            self.daily_message_count = 0
-            self.last_count_reset_day = today
+    def get_remaining_quota(self) -> int:
+        """Returns remaining message quota before reaching 220 limit."""
+        used = self.get_sent_count_today()
+        return max(0, MAX_DAILY_NOTIFICATIONS - used)
+
+    def _safe_post(self, url: str, message: str, headers: Dict[str, str], is_priority: bool = False) -> bool:
+        """
+        Dispatches NTFY notification with daily cap (up to 220/day) and Bearer auth.
+        Priority events (stop-loss, trade-close, trade-open) bypass the cap.
+        Persists message count in SQLite table so it survives restarts.
+        """
+        today = time.strftime("%Y-%m-%d")
+        used_today = self.ledger.get_ntfy_sent_count(today)
 
         # 1. Daily cap (220 messages/day out of 250 free allowed)
-        if self.daily_message_count >= MAX_DAILY_NOTIFICATIONS:
-            logger.warning(f"NTFY Daily Safety Cap reached ({self.daily_message_count}/{MAX_DAILY_NOTIFICATIONS}). Suppressing push to avoid 429 lockout.")
+        if not is_priority and used_today >= MAX_DAILY_NOTIFICATIONS:
+            logger.warning(
+                f"NTFY Daily Safety Cap reached ({used_today}/{MAX_DAILY_NOTIFICATIONS}). "
+                "Suppressing routine pulse push to avoid 429 lockout."
+            )
             return False
 
         # Ensure all headers are strictly ASCII to prevent latin-1 UnicodeEncodeError
-        safe_headers = {}
-        if self.auth_token:
-            safe_headers["Authorization"] = f"Bearer {self.auth_token}"
-
-        for k, v in headers.items():
-            if isinstance(v, str):
-                safe_headers[k] = v.encode('ascii', 'ignore').decode('ascii')
-            else:
-                safe_headers[k] = v
+        out_headers = safe_headers(headers, self.auth_token)
 
         try:
-            resp = requests.post(url, data=message.encode('utf-8'), headers=safe_headers, timeout=10)
+            resp = requests.post(url, data=message.encode('utf-8'), headers=out_headers, timeout=10)
             if resp.status_code == 200:
-                self.daily_message_count += 1
-                logger.info(f"NTFY push delivered to '{url}' (Today: {self.daily_message_count}/{MAX_DAILY_NOTIFICATIONS})")
+                new_count = self.ledger.increment_ntfy_sent_count(today)
+                logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Priority={is_priority})")
                 return True
             else:
                 logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")

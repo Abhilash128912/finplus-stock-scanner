@@ -68,7 +68,34 @@ class ScheduleLedger:
                     PRIMARY KEY (date_str, slot_id)
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ntfy_daily_quota (
+                    date_str TEXT PRIMARY KEY,
+                    messages_sent INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT
+                )
+            """)
             conn.commit()
+
+    def get_ntfy_sent_count(self, date_str: str) -> int:
+        """Retrieves persistent daily message count for date_str."""
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT messages_sent FROM ntfy_daily_quota WHERE date_str = ?", (date_str,)).fetchone()
+            return int(row["messages_sent"]) if row else 0
+
+    def increment_ntfy_sent_count(self, date_str: str) -> int:
+        """Increments persistent daily message count and returns new count."""
+        now_iso = datetime.datetime.now().isoformat()
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT INTO ntfy_daily_quota (date_str, messages_sent, updated_at)
+                VALUES (?, 1, ?)
+                ON CONFLICT(date_str) DO UPDATE SET
+                    messages_sent = messages_sent + 1,
+                    updated_at = excluded.updated_at
+            """, (date_str, now_iso))
+            conn.commit()
+            return self.get_ntfy_sent_count(date_str)
 
     def ensure_daily_ledger_populated(self, date_str: str):
         """Ensures all required milestones for a trading day exist in the ledger as PENDING."""

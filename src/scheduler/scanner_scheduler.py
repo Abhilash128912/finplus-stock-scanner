@@ -44,6 +44,8 @@ class ScannerScheduler:
         self.last_scan_utc: str = get_utc_iso()
         self.is_running: bool = False
         self._dispatched_slots: set = set()
+        self.is_stale_feed: bool = False
+        self._last_proactive_refresh_date: Optional[str] = None
 
     def scan_universe_now(self) -> List[Dict[str, Any]]:
         """Scans all dynamic universe items synchronously (runs in worker pool)."""
@@ -73,6 +75,13 @@ class ScannerScheduler:
             except Exception as e:
                 logger.warning(f"INDmoney batch prefetch error: {e}")
 
+        # Check feed freshness: if feed is stale or data > 60s old during market hours
+        if is_open and self.indmoney_feed:
+            feed_age = time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)
+            if self.is_stale_feed or feed_age > 60.0:
+                self.is_stale_feed = True
+                logger.warning(f"Feed data is {int(feed_age)}s old (>60s). Feed marked STALE_FEED.")
+
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
@@ -82,6 +91,12 @@ class ScannerScheduler:
                     continue
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
+
+                # If feed is stale, tag signal STALE_FEED and block new directional signals
+                if self.is_stale_feed:
+                    eval_res["feed_status"] = "STALE_FEED"
+                    eval_res["signal_direction"] = 0  # Block new trade signal
+                    eval_res["regime_confluence"] = "VETOED (STALE_FEED)"
                 
                 # Fetch instantaneous live tick from INDmoney broker API cache (or fast_info fallback)
                 try:
@@ -120,6 +135,12 @@ class ScannerScheduler:
                     sig_dir, item.get("category", "STOCK"), eval_res.get("rvol", 1.0), eval_res.get("confluence_score", 0)
                 )
                 
+                # If feed is stale, override regime confluence and tag STALE_FEED
+                if self.is_stale_feed:
+                    eval_res["feed_status"] = "STALE_FEED"
+                    eval_res["signal_direction"] = 0
+                    conf_status = "VETOED (STALE_FEED)"
+
                 eval_res["regime_confluence"] = conf_status
                 eval_res["regime_badge"] = conf_badge
                 eval_res["regime_data"] = regime_data
@@ -179,6 +200,20 @@ class ScannerScheduler:
                 if ist_now.weekday() < 5:
                     date_str = ist_now.strftime("%Y-%m-%d")
                     ist_now_str = ist_now.strftime("%I:%M %p IST")
+
+                    # Proactive Token Refresh at 08:45 AM IST on trading days
+                    if (ist_now.hour == 8 and ist_now.minute >= 45) or (ist_now.hour >= 9):
+                        if self._last_proactive_refresh_date != date_str:
+                            self._last_proactive_refresh_date = date_str
+                            logger.info(f"08:45 IST Proactive Token Warmup triggered for trading day {date_str}...")
+                            if self.indmoney_feed and self.indmoney_feed.auth_client:
+                                try:
+                                    await asyncio.to_thread(self.indmoney_feed.auth_client.get_valid_token, auto_refresh=True)
+                                    logger.info("08:45 IST Proactive Token Warmup successful.")
+                                    self.is_stale_feed = False
+                                except Exception as auth_err:
+                                    logger.error(f"08:45 IST Proactive Token Warmup failed: {auth_err}. Marking feed STALE_FEED.")
+                                    self.is_stale_feed = True
 
                     # Check for official NSE Holiday
                     is_hol, hol_name = is_nse_holiday(ist_now.date())

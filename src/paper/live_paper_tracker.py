@@ -12,6 +12,7 @@ import asyncio
 import datetime
 import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -20,6 +21,7 @@ import requests
 import yfinance as yf
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
+from src.notifications.ntfy_dispatcher import safe_headers
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_mcx_market_open_ist
 from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 
@@ -41,6 +43,7 @@ class LivePaperTracker:
             self.db_path = db_path
 
         self.virtual_capital = VIRTUAL_STARTING_CAPITAL
+        self._lock = threading.Lock()
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.symbol_last_close_time: Dict[str, float] = {}
         self.is_running = False
@@ -255,7 +258,8 @@ class LivePaperTracker:
             ))
             conn.commit()
 
-        self.active_positions[pos_id] = position
+        with self._lock:
+            self.active_positions[pos_id] = position
         logger.info(f"PAPER TRADE OPENED: [{action}] {symbol} ({sector}) @ ₹{entry_price:.2f} | Qty: {quantity}")
         return position
 
@@ -571,145 +575,153 @@ class LivePaperTracker:
             "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"
         )
 
-        for pos_id, pos in list(self.active_positions.items()):
-            if pos["status"] != "OPEN":
-                continue
+        with self._lock:
+            open_items = list(self.active_positions.items())
 
-            sym = pos["symbol"]
-            act = pos["action"]
-            entry = pos["entry_price"]
-            r_val = pos["risk_r"]
-            curr_sl = pos["trailing_sl"]
-            tgt = pos["target"]
-            sector = pos["sector"]
-            is_opt = bool(pos.get("is_option"))
-            is_put = bool(pos.get("is_put"))
+        for pos_id, pos in open_items:
+            try:
+                if pos.get("status") != "OPEN":
+                    continue
 
-            live_price = self._fetch_live_price(sym, sector)
-            if not live_price or live_price <= 0:
-                continue
+                sym = pos["symbol"]
+                act = pos["action"]
+                entry = pos["entry_price"]
+                r_val = pos["risk_r"]
+                curr_sl = pos["trailing_sl"]
+                tgt = pos["target"]
+                sector = pos["sector"]
+                is_opt = bool(pos.get("is_option"))
+                is_put = bool(pos.get("is_put"))
 
-            pos["current_price"] = live_price
+                live_price = self._fetch_live_price(sym, sector)
+                if not live_price or live_price <= 0:
+                    continue
 
-            if is_opt:
-                underlying_gain = (entry - live_price) if is_put else (live_price - entry)
-                
-                # Dynamic ATM Delta (0.50 -> 0.70 on acceleration, 0.20 on reversal)
-                if underlying_gain > 0:
-                    delta = min(0.70, 0.50 + (underlying_gain / entry) * 4)
+                pos["current_price"] = live_price
+
+                if is_opt:
+                    underlying_gain = (entry - live_price) if is_put else (live_price - entry)
+                    
+                    # Dynamic ATM Delta (0.50 -> 0.70 on acceleration, 0.20 on reversal)
+                    if underlying_gain > 0:
+                        delta = min(0.70, 0.50 + (underlying_gain / entry) * 4)
+                    else:
+                        delta = max(0.20, 0.50 + (underlying_gain / entry) * 4)
+
+                    # Intraday Theta Decay (~2.5% per hour)
+                    hours_held = 0.0
+                    try:
+                        opened_dt = datetime.datetime.fromisoformat(pos.get("opened_at_utc", "").replace("Z", "+00:00"))
+                        hours_held = max(0.0, (datetime.datetime.now(datetime.timezone.utc) - opened_dt).total_seconds() / 3600.0)
+                    except Exception:
+                        pass
+                    theta_decay_pts = min(pos["opt_entry_premium"] * 0.40, hours_held * (pos["opt_entry_premium"] * 0.025))
+
+                    opt_gain_pts = (underlying_gain * delta) - theta_decay_pts
+                    max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
+                    opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
+                    pos["opt_current_premium"] = opt_curr
+
+                    # Unrealized P&L capped at 100% loss of premium paid
+                    unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
+                    opt_entry_val = pos.get("opt_entry_premium", 1.0)
+                    pos["pnl_pct"] = round(((pos["opt_current_premium"] - opt_entry_val) / opt_entry_val) * 100, 2) if opt_entry_val > 0 else 0.0
                 else:
-                    delta = max(0.20, 0.50 + (underlying_gain / entry) * 4)
+                    if act == "BUY":
+                        gain_pts = live_price - entry
+                        unrealized = gain_pts * pos["quantity"]
+                        pos["pnl_pct"] = round(((live_price - entry) / entry) * 100, 2) if entry > 0 else 0.0
+                    else:
+                        gain_pts = entry - live_price
+                        unrealized = gain_pts * pos["quantity"]
+                        pos["pnl_pct"] = round(((entry - live_price) / entry) * 100, 2) if entry > 0 else 0.0
 
-                # Intraday Theta Decay (~2.5% per hour)
-                hours_held = 0.0
-                try:
-                    opened_dt = datetime.datetime.fromisoformat(pos.get("opened_at_utc", "").replace("Z", "+00:00"))
-                    hours_held = max(0.0, (datetime.datetime.now(datetime.timezone.utc) - opened_dt).total_seconds() / 3600.0)
-                except Exception:
-                    pass
-                theta_decay_pts = min(pos["opt_entry_premium"] * 0.40, hours_held * (pos["opt_entry_premium"] * 0.025))
+                pos["unrealized_pnl"] = round(unrealized, 2)
 
-                opt_gain_pts = (underlying_gain * delta) - theta_decay_pts
-                max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
-                opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
-                pos["opt_current_premium"] = opt_curr
+                # Trailing Stop-Loss & Exit Checks
+                if is_opt:
+                    opt_curr = pos.get("opt_current_premium", 0.0)
+                    opt_entry = pos.get("opt_entry_premium", 1.0)
+                    opt_tgt = pos.get("opt_target", round(opt_entry * 1.60, 2))
+                    opt_sl = pos.get("opt_trailing_sl", round(opt_entry * 0.70, 2))
 
-                # Unrealized P&L capped at 100% loss of premium paid
-                unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
-                opt_entry_val = pos.get("opt_entry_premium", 1.0)
-                pos["pnl_pct"] = round(((pos["opt_current_premium"] - opt_entry_val) / opt_entry_val) * 100, 2) if opt_entry_val > 0 else 0.0
-            else:
-                if act == "BUY":
-                    gain_pts = live_price - entry
-                    unrealized = gain_pts * pos["quantity"]
-                    pos["pnl_pct"] = round(((live_price - entry) / entry) * 100, 2) if entry > 0 else 0.0
-                else:
-                    gain_pts = entry - live_price
-                    unrealized = gain_pts * pos["quantity"]
-                    pos["pnl_pct"] = round(((entry - live_price) / entry) * 100, 2) if entry > 0 else 0.0
-
-            pos["unrealized_pnl"] = round(unrealized, 2)
-
-            # Trailing Stop-Loss & Exit Checks
-            if is_opt:
-                opt_curr = pos.get("opt_current_premium", 0.0)
-                opt_entry = pos.get("opt_entry_premium", 1.0)
-                opt_tgt = pos.get("opt_target", round(opt_entry * 1.60, 2))
-                opt_sl = pos.get("opt_trailing_sl", round(opt_entry * 0.70, 2))
-
-                opt_gain_pct = ((opt_curr - opt_entry) / opt_entry) if opt_entry > 0 else 0.0
-                if opt_gain_pct >= 0.40:
-                    new_sl = round(opt_entry * 1.25, 2)
-                    if new_sl > opt_sl:
-                        pos["opt_trailing_sl"] = new_sl
-                        pos["stage"] = "TRAILED (LOCKING +25%)"
-                elif opt_gain_pct >= 0.25:
-                    new_sl = round(opt_entry, 2)
-                    if new_sl > opt_sl:
-                        pos["opt_trailing_sl"] = new_sl
-                        pos["stage"] = "TRAILED (BREAKEVEN)"
-
-                if opt_curr >= opt_tgt:
-                    self.close_position(pos_id, exit_price=live_price, exit_reason="TARGET_HIT (+60% OPTION TARGET)")
-                elif opt_curr <= pos.get("opt_trailing_sl", opt_sl):
-                    reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT (-30% OPTION SL)"
-                    self.close_position(pos_id, exit_price=live_price, exit_reason=reason)
-                elif is_equity_eod and sector in equity_sectors:
-                    self.close_position(pos_id, exit_price=live_price, exit_reason="3PM_MANDATORY_SQUAREOFF (15:00 IST)")
-
-            else:
-                r_multiple = gain_pts / r_val if r_val > 0 else 0.0
-                is_down = is_put or act == "SELL"
-
-                if is_down:
-                    if r_multiple >= 1.5:
-                        new_sl = round(entry - (0.75 * r_val), 2)
-                        if new_sl < curr_sl:
-                            pos["trailing_sl"] = new_sl
-                            pos["stage"] = "TRAILED (LOCKING +0.75R)"
-                    elif r_multiple >= 1.0:
-                        new_sl = round(entry, 2)
-                        if new_sl < curr_sl:
-                            pos["trailing_sl"] = new_sl
+                    opt_gain_pct = ((opt_curr - opt_entry) / opt_entry) if opt_entry > 0 else 0.0
+                    if opt_gain_pct >= 0.40:
+                        new_sl = round(opt_entry * 1.25, 2)
+                        if new_sl > opt_sl:
+                            pos["opt_trailing_sl"] = new_sl
+                            pos["stage"] = "TRAILED (LOCKING +25%)"
+                    elif opt_gain_pct >= 0.25:
+                        new_sl = round(opt_entry, 2)
+                        if new_sl > opt_sl:
+                            pos["opt_trailing_sl"] = new_sl
                             pos["stage"] = "TRAILED (BREAKEVEN)"
 
-                    if live_price <= tgt:
-                        self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
-                    elif live_price >= pos["trailing_sl"]:
-                        reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
-                        self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
+                    if opt_curr >= opt_tgt:
+                        self.close_position(pos_id, exit_price=live_price, exit_reason="TARGET_HIT (+60% OPTION TARGET)")
+                    elif opt_curr <= pos.get("opt_trailing_sl", opt_sl):
+                        reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT (-30% OPTION SL)"
+                        self.close_position(pos_id, exit_price=live_price, exit_reason=reason)
                     elif is_equity_eod and sector in equity_sectors:
                         self.close_position(pos_id, exit_price=live_price, exit_reason="3PM_MANDATORY_SQUAREOFF (15:00 IST)")
-                    elif is_mcx_eod and sector == "COMMODITIES":
-                        self.close_position(pos_id, exit_price=live_price, exit_reason="EOD_MCX_CLOSE (23:15 IST)")
+
                 else:
-                    if r_multiple >= 1.5:
-                        new_sl = round(entry + (0.75 * r_val), 2)
-                        if new_sl > curr_sl:
-                            pos["trailing_sl"] = new_sl
-                            pos["stage"] = "TRAILED (LOCKING +0.75R)"
-                    elif r_multiple >= 1.0:
-                        new_sl = round(entry, 2)
-                        if new_sl > curr_sl:
-                            pos["trailing_sl"] = new_sl
-                            pos["stage"] = "TRAILED (BREAKEVEN)"
+                    r_multiple = gain_pts / r_val if r_val > 0 else 0.0
+                    is_down = is_put or act == "SELL"
 
-                    if live_price >= tgt:
-                        self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
-                    elif live_price <= pos["trailing_sl"]:
-                        reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
-                        self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
-                    elif is_equity_eod and sector in equity_sectors:
-                        self.close_position(pos_id, exit_price=live_price, exit_reason="3PM_MANDATORY_SQUAREOFF (15:00 IST)")
-                    elif is_mcx_eod and sector == "COMMODITIES":
-                        self.close_position(pos_id, exit_price=live_price, exit_reason="EOD_MCX_CLOSE (23:15 IST)")
+                    if is_down:
+                        if r_multiple >= 1.5:
+                            new_sl = round(entry - (0.75 * r_val), 2)
+                            if new_sl < curr_sl:
+                                pos["trailing_sl"] = new_sl
+                                pos["stage"] = "TRAILED (LOCKING +0.75R)"
+                        elif r_multiple >= 1.0:
+                            new_sl = round(entry, 2)
+                            if new_sl < curr_sl:
+                                pos["trailing_sl"] = new_sl
+                                pos["stage"] = "TRAILED (BREAKEVEN)"
 
-    def close_position(self, pos_id: str, exit_price: float, exit_reason: str):
+                        if live_price <= tgt:
+                            self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
+                        elif live_price >= pos["trailing_sl"]:
+                            reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
+                            self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
+                        elif is_equity_eod and sector in equity_sectors:
+                            self.close_position(pos_id, exit_price=live_price, exit_reason="3PM_MANDATORY_SQUAREOFF (15:00 IST)")
+                        elif is_mcx_eod and sector == "COMMODITIES":
+                            self.close_position(pos_id, exit_price=live_price, exit_reason="EOD_MCX_CLOSE (23:15 IST)")
+                    else:
+                        if r_multiple >= 1.5:
+                            new_sl = round(entry + (0.75 * r_val), 2)
+                            if new_sl > curr_sl:
+                                pos["trailing_sl"] = new_sl
+                                pos["stage"] = "TRAILED (LOCKING +0.75R)"
+                        elif r_multiple >= 1.0:
+                            new_sl = round(entry, 2)
+                            if new_sl > curr_sl:
+                                pos["trailing_sl"] = new_sl
+                                pos["stage"] = "TRAILED (BREAKEVEN)"
+
+                        if live_price >= tgt:
+                            self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
+                        elif live_price <= pos["trailing_sl"]:
+                            reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
+                            self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
+                        elif is_equity_eod and sector in equity_sectors:
+                            self.close_position(pos_id, exit_price=live_price, exit_reason="3PM_MANDATORY_SQUAREOFF (15:00 IST)")
+                        elif is_mcx_eod and sector == "COMMODITIES":
+                            self.close_position(pos_id, exit_price=live_price, exit_reason="EOD_MCX_CLOSE (23:15 IST)")
+            except Exception as trade_err:
+                logger.error(f"Error evaluating paper position {pos_id} ({pos.get('symbol')}): {trade_err}")
+
+    def close_position(self, pos_id: str, exit_price: float, exit_reason: str) -> bool:
         """Finalizes trade, calculates realistic broker taxes, and moves position to closed ledger."""
-        if pos_id not in self.active_positions:
-            return
+        with self._lock:
+            if pos_id not in self.active_positions:
+                return False
+            # Remove from open list BEFORE DB insert under atomic lock
+            pos = self.active_positions.pop(pos_id)
 
-        pos = self.active_positions[pos_id]
         pos["status"] = "CLOSED"
         pos["exit_price"] = round(exit_price, 2)
         pos["exit_reason"] = exit_reason
@@ -737,9 +749,10 @@ class LivePaperTracker:
         exit_time_ist = get_ist_now().strftime("%Y-%m-%d %I:%M:%S %p IST")
         closed_utc = get_utc_iso()
 
+        inserted = False
         with self._get_connection() as conn:
-            conn.execute("""
-                INSERT INTO closed_paper_trades (
+            cursor = conn.execute("""
+                INSERT OR IGNORE INTO closed_paper_trades (
                     trade_id, position_id, symbol, sector, action,
                     is_option, entry_price, exit_price, quantity,
                     gross_pnl, total_charges, net_pnl, exit_reason,
@@ -753,14 +766,30 @@ class LivePaperTracker:
             ))
             conn.execute("DELETE FROM active_paper_positions WHERE position_id = ?", (pos_id,))
             conn.commit()
+            inserted = (cursor.rowcount == 1)
 
-        del self.active_positions[pos_id]
         clean_base = pos["symbol"].split(" ")[0].upper()
         self.symbol_last_close_time[clean_base] = time.time()
-        logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f}")
 
-        # Dispatch instant NTFY alert for closed trade
-        self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
+        if inserted:
+            logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f}")
+            # Dispatch instant NTFY alert for closed trade ONLY if row was inserted
+            self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
+            return True
+        else:
+            logger.warning(f"PAPER TRADE DUPLICATE IGNORED: {pos['symbol']} ({trade_id}) already in closed ledger.")
+            return False
+
+    def get_daily_realized_pnl(self, date_ist_str: Optional[str] = None) -> float:
+        """Computes total realized P&L directly from DB rows for the given date (default today)."""
+        if not date_ist_str:
+            date_ist_str = get_ist_now().strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(net_pnl), 0.0) as total_pnl FROM closed_paper_trades WHERE exit_time_ist LIKE ?",
+                (f"{date_ist_str}%",)
+            ).fetchone()
+            return round(float(row["total_pnl"] if row else 0.0), 2)
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
         """Dispatches instant NTFY push notification FIRST before populating into paper app."""
@@ -772,7 +801,7 @@ class LivePaperTracker:
 
         try:
             topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
-            auth_token = os.getenv("NTFY_AUTH_TOKEN", "tk_wu13o6hgbaqdyt700zff66rid60s7")
+            auth_token = os.getenv("NTFY_AUTH_TOKEN", "")
             action_tag = "chart_with_upwards_trend" if pos["action"] == "BUY" else "chart_with_downwards_trend"
             title = f"FinPlus Paper Exec | [{pos['action']}] {pos['symbol']}"
             is_opt = bool(pos.get("is_option"))
@@ -788,7 +817,7 @@ class LivePaperTracker:
                 f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
             ]
             msg = "\n".join(lines)
-            headers = {
+            raw_headers = {
                 "Title": title,
                 "Priority": "4",
                 "Tags": f"{action_tag},receipt",
@@ -796,13 +825,12 @@ class LivePaperTracker:
                 "Click": "https://finplus-stock-scanner.onrender.com/live",
                 "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
             }
-            if auth_token:
-                headers["Authorization"] = f"Bearer {auth_token}"
+            clean_hdrs = safe_headers(raw_headers, auth_token)
 
             requests.post(
                 f"https://ntfy.sh/{topic}",
                 data=msg.encode("utf-8"),
-                headers=headers,
+                headers=clean_hdrs,
                 timeout=5
             )
             logger.info(f"NTFY Trade Opened push sent for {pos['symbol']}")
@@ -819,7 +847,7 @@ class LivePaperTracker:
 
         try:
             topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
-            auth_token = os.getenv("NTFY_AUTH_TOKEN", "tk_wu13o6hgbaqdyt700zff66rid60s7")
+            auth_token = os.getenv("NTFY_AUTH_TOKEN", "")
             status_tag = "tada" if net_pnl >= 0 else "x"
             pnl_sign = "+" if net_pnl >= 0 else ""
             title = f"FinPlus Paper Closed | {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})"
@@ -833,7 +861,7 @@ class LivePaperTracker:
                 f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
             ]
             msg = "\n".join(lines)
-            headers = {
+            raw_headers = {
                 "Title": title,
                 "Priority": "4",
                 "Tags": status_tag,
@@ -841,13 +869,12 @@ class LivePaperTracker:
                 "Click": "https://finplus-stock-scanner.onrender.com/live",
                 "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
             }
-            if auth_token:
-                headers["Authorization"] = f"Bearer {auth_token}"
+            clean_hdrs = safe_headers(raw_headers, auth_token)
 
             requests.post(
                 f"https://ntfy.sh/{topic}",
                 data=msg.encode("utf-8"),
-                headers=headers,
+                headers=clean_hdrs,
                 timeout=5
             )
             logger.info(f"NTFY Trade Closed push sent for {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})")
@@ -864,10 +891,12 @@ class LivePaperTracker:
         tot_realized = 0.0
         try:
             with self._get_connection() as conn:
+                sum_row = conn.execute("SELECT COALESCE(SUM(net_pnl), 0.0) as total_pnl FROM closed_paper_trades").fetchone()
+                tot_realized = round(float(sum_row["total_pnl"] if sum_row else 0.0), 2)
+
                 rows = conn.execute("SELECT * FROM closed_paper_trades ORDER BY closed_at_utc DESC LIMIT 30").fetchall()
                 for r in rows:
                     t = dict(r)
-                    tot_realized += t.get("net_pnl", 0.0)
                     closed_trades.append({
                         "trade_id": t["trade_id"],
                         "symbol": t["symbol"],
