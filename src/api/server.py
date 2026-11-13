@@ -90,6 +90,85 @@ async def serve_live():
 async def health_check():
     return {"status": "ok", "app": "FinPlus-Stock-Scanner"}
 
+@app.api_route("/api/health/deep", methods=["GET", "HEAD"])
+@app.api_route("/health/deep", methods=["GET", "HEAD"])
+async def deep_health_check():
+    """
+    Institutional Deep Health Diagnostic Endpoint.
+    Probes internal worker tasks, broker authentication, persistent ledger, and DB.
+    Returns HTTP 200 if fully healthy; HTTP 503 if any core subsystem is degraded/stalled.
+    Targeted specifically for UptimeRobot monitoring.
+    """
+    from datetime import datetime, timezone, timedelta
+    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    date_str = ist_now.strftime("%Y-%m-%d")
+
+    issues = []
+    
+    # 1. Engine & Scanner Loop Diagnostics
+    is_engine_alive = scheduler.is_running
+    if not is_engine_alive:
+        issues.append("ScannerScheduler is not running")
+
+    # 2. Broker Connection Diagnostics
+    broker_ok = False
+    broker_details = {}
+    if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
+        try:
+            broker_ok = scheduler.indmoney_feed.auth_client.is_token_valid()
+            broker_details["token_valid"] = broker_ok
+            broker_details["cached_quotes"] = len(scheduler.indmoney_feed._quote_cache)
+        except Exception as e:
+            issues.append(f"Broker client error: {e}")
+            broker_details["error"] = str(e)
+    else:
+        broker_details["status"] = "AuthClient unavailable"
+
+    # 3. Schedule Ledger Diagnostics
+    ledger_status = scheduler.ledger.get_ledger_status(date_str)
+    failed_milestones = [m["slot_id"] for m in ledger_status if m["status"] == "FAILED"]
+    if failed_milestones:
+        issues.append(f"Ledger milestones failed: {', '.join(failed_milestones)}")
+
+    # 4. Market Hours Liveness Check
+    # If market is open, verify scan has run recently
+    scan_age_secs = 0
+    if scheduler.last_scan_utc:
+        try:
+            last_dt = datetime.fromisoformat(scheduler.last_scan_utc.replace("Z", "+00:00"))
+            scan_age_secs = int((datetime.now(timezone.utc) - last_dt).total_seconds())
+        except Exception:
+            pass
+
+    market_open = is_market_open_ist()
+    if market_open and scan_age_secs > 360 and len(scheduler.latest_scan_results) == 0:
+        issues.append(f"Scanner has not completed a cycle during market hours ({scan_age_secs}s elapsed)")
+
+    is_healthy = len(issues) == 0
+    http_status = 200 if is_healthy else 503
+
+    payload = {
+        "status": "HEALTHY" if is_healthy else "DEGRADED",
+        "app": "FinPlus-Stock-Scanner",
+        "ist_time": get_ist_time_str(),
+        "timestamp_utc": get_utc_iso(),
+        "market_open_ist": market_open,
+        "engine": {
+            "is_running": is_engine_alive,
+            "tracked_universe_count": len(scheduler.latest_scan_results),
+            "scan_age_seconds": scan_age_secs,
+            "shortlist_active": bool(scheduler.latest_shortlist),
+        },
+        "broker": broker_details,
+        "ledger": {
+            "date": date_str,
+            "milestones": ledger_status
+        },
+        "issues": issues
+    }
+
+    return JSONResponse(status_code=http_status, content=payload)
+
 @app.get("/api/status")
 async def get_status():
     return {

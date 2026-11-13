@@ -15,6 +15,8 @@ from src.analytics.shortlist_engine import ShortlistEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.paper.live_paper_tracker import LivePaperTracker
 from src.paper.indmoney_live_feed import INDMoneyLiveFeed
+from src.storage.schedule_ledger import ScheduleLedger
+from src.storage.candle_store import CandleStore
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
 
@@ -34,6 +36,8 @@ class ScannerScheduler:
         self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
         self.paper_tracker = LivePaperTracker()
         self.indmoney_feed = INDMoneyLiveFeed(cache_ttl_seconds=5.0)
+        self.ledger = ScheduleLedger()
+        self.candle_store = CandleStore()
         
         self.latest_scan_results: List[Dict[str, Any]] = []
         self.latest_shortlist: Dict[str, Any] = {}
@@ -157,15 +161,16 @@ class ScannerScheduler:
 
     async def _clock_dispatcher_loop(self):
         """
-        Dedicated 5-second precision wall-clock dispatcher.
-        Strictly enforces user-mandated NSE/BSE schedule on weekdays:
+        Institutional State-Driven Dispatcher.
+        Queries the persistent SQLite ScheduleLedger every 5 seconds.
+        Ensures idempotent, guaranteed execution of all daily milestones:
         1. 09:00 AM IST: Today's Agenda (Tactical Morning Briefing)
         2. 09:30 AM IST: First Status & Explicit Trade Suggestions
         3. Every 30 mins (10:00, 10:30, 11:00, 11:30, 12:00, 12:30, 13:00, 13:30, 14:00, 14:30 IST): 30m Pulse
         4. 03:00 PM (15:00) IST: End of Trade Summary
         """
         from datetime import datetime, timezone, timedelta
-        logger.info("Clock Dispatcher Loop active (5-second precision tick).")
+        logger.info("Ledger-Driven Clock Dispatcher Loop active (5-second precision tick).")
 
         while self.is_running:
             try:
@@ -173,50 +178,53 @@ class ScannerScheduler:
                 # Weekdays only (Monday = 0 to Friday = 4)
                 if ist_now.weekday() < 5:
                     date_str = ist_now.strftime("%Y-%m-%d")
-                    hh = ist_now.hour
-                    mm = ist_now.minute
+                    ist_now_str = ist_now.strftime("%I:%M %p IST")
 
                     # Check for official NSE Holiday
                     is_hol, hol_name = is_nse_holiday(ist_now.date())
                     if is_hol:
                         slot_hol = f"{date_str}_holiday_alert"
-                        if hh >= 9 and slot_hol not in self._dispatched_slots:
+                        if ist_now.hour >= 9 and slot_hol not in self._dispatched_slots:
                             self._dispatched_slots.add(slot_hol)
                             logger.info(f"NSE Holiday Gate: Today is {hol_name}. Dispatching holiday notice...")
-                            # Send single informational alert that exchange is closed
                             self.dispatcher.send_holiday_notice(hol_name)
                         await asyncio.sleep(60)
                         continue
 
-                    # 1. 09:00 AM IST: Today's Agenda (Catch-up allowed between 09:00 and 09:29 IST)
-                    slot_0900 = f"{date_str}_09:00"
-                    if hh == 9 and 0 <= mm < 30 and slot_0900 not in self._dispatched_slots:
-                        self._dispatched_slots.add(slot_0900)
-                        logger.info("Triggering 09:00 AM IST Today's Agenda Briefing (Catch-up / Wall-clock)...")
-                        self.dispatcher.send_morning_tactical_briefing(shortlist=self.latest_shortlist, force=True)
+                    # Query the persistent ledger for all due milestones that haven't been completed
+                    due_events = self.ledger.get_pending_due_events(ist_now)
+                    for ev in due_events:
+                        slot_id = ev["slot_id"]
+                        
+                        # Atomically claim slot in persistent ledger (prevents duplicate execution)
+                        if not self.ledger.mark_in_flight(date_str, slot_id):
+                            continue
 
-                    # 2. Every 30 Minutes from 09:30 AM to 02:30 PM:
-                    # 09:30 (First Status with Suggestions), 10:00, 10:30, 11:00, 11:30, 12:00, 12:30, 13:00, 13:30, 14:00, 14:30
-                    schedule_slots = [
-                        (9, 30), (10, 0), (10, 30), (11, 0), (11, 30),
-                        (12, 0), (12, 30), (13, 0), (13, 30), (14, 0), (14, 30)
-                    ]
-                    for target_h, target_m in schedule_slots:
-                        slot_id = f"{date_str}_{target_h:02d}:{target_m:02d}"
-                        # 25-minute wide catch-up window so cold starts/restarts never drop scheduled pulse
-                        is_in_slot = (hh == target_h and target_m <= mm < target_m + 25)
-                        if is_in_slot and slot_id not in self._dispatched_slots:
-                            self._dispatched_slots.add(slot_id)
-                            label = "09:30 AM First Status & Suggestions" if (target_h, target_m) == (9, 30) else f"{target_h:02d}:{target_m:02d} IST 30m Pulse"
-                            logger.info(f"Triggering {label} (Catch-up / Wall-clock)...")
-                            self.dispatcher.send_30m_shortlist_pulse(self.latest_shortlist, force=True)
+                        logger.info(f"Ledger Trigger: Processing due milestone {slot_id} at {ist_now_str} (Attempt {ev['attempts'] + 1})...")
+                        delivered = False
+                        err_msg = None
 
-                    # 3. 03:00 PM (15:00) IST: End of Trade Summary (Catch-up allowed between 15:00 and 15:29 IST)
-                    slot_1500 = f"{date_str}_15:00"
-                    if hh == 15 and 0 <= mm < 30 and slot_1500 not in self._dispatched_slots:
-                        self._dispatched_slots.add(slot_1500)
-                        logger.info("Triggering 03:00 PM IST End of Trade Session Summary (Catch-up / Wall-clock)...")
-                        self.dispatcher.send_end_of_trade_summary(shortlist=self.latest_shortlist, force=True)
+                        try:
+                            if slot_id == "09:00_AGENDA":
+                                delivered = self.dispatcher.send_morning_tactical_briefing(
+                                    shortlist=self.latest_shortlist, force=True
+                                )
+                            elif slot_id == "15:00_SUMMARY":
+                                delivered = self.dispatcher.send_end_of_trade_summary(
+                                    shortlist=self.latest_shortlist, force=True
+                                )
+                            else: # All 30m Pulses (09:30, 10:00, 10:30, ...)
+                                delivered = self.dispatcher.send_30m_shortlist_pulse(
+                                    self.latest_shortlist, force=True
+                                )
+                        except Exception as e:
+                            err_msg = str(e)
+                            logger.error(f"Error dispatching milestone {slot_id}: {e}")
+
+                        if delivered:
+                            self.ledger.mark_completed(date_str, slot_id, ist_now_str)
+                        else:
+                            self.ledger.mark_failed(date_str, slot_id, err_msg or "Dispatch returned False")
 
                 await asyncio.sleep(5)
             except asyncio.CancelledError:
