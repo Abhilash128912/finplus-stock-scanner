@@ -3,268 +3,228 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>FinPlus Live Paper Positions | FrontPage Style</title>
+  <title>FinPlus+ Institutional Paper Trading Cockpit</title>
   <link rel="manifest" href="/static/manifest.json">
-  <meta name="theme-color" content="#0B0E14">
-  <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="/static/icon-192.png">
-  <link rel="icon" type="image/png" href="/static/icon-192.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
       --bg-base: #0B0E14;
-      --bg-surface: #141824;
-      --bg-card: #1A2030;
-      --bg-subtle: #232B40;
-      --border: rgba(255, 255, 255, 0.08);
-      --border-accent: rgba(0, 240, 255, 0.3);
-      --text-main: #FFFFFF;
-      --text-muted: #8E9BAE;
-      --text-dim: #5A6679;
-      --green: #00F0A8;
-      --green-bg: rgba(0, 240, 168, 0.12);
-      --red: #FF3366;
-      --red-bg: rgba(255, 51, 102, 0.12);
-      --amber: #FFB800;
-      --amber-bg: rgba(255, 184, 0, 0.12);
-      --cyan: #00F0FF;
-      --cyan-bg: rgba(0, 240, 255, 0.12);
+      --bg-surface: #121824;
+      --bg-card: #182234;
+      --bg-card-hover: #1E2B42;
+      --border: #26354D;
+      --border-bright: #3D5377;
+      --text: #F1F5F9;
+      --text-muted: #94A3B8;
+      --text-dim: #64748B;
+      --green: #10B981;
+      --green-bg: rgba(16, 185, 129, 0.12);
+      --red: #F43F5E;
+      --red-bg: rgba(244, 63, 94, 0.12);
+      --amber: #F59E0B;
+      --amber-bg: rgba(245, 158, 11, 0.12);
+      --cyan: #06B6D4;
+      --cyan-bg: rgba(6, 182, 212, 0.12);
+      --purple: #8B5CF6;
+      --purple-bg: rgba(139, 92, 246, 0.12);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
     body {
+      font-family: 'Inter', -apple-system, sans-serif;
       background: var(--bg-base);
-      color: var(--text-main);
-      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      color: var(--text);
       min-height: 100vh;
-      padding-bottom: 70px;
+      padding-bottom: 90px;
     }
 
     /* Top App Bar */
-    .app-header {
+    header.app-header {
       background: var(--bg-surface);
       border-bottom: 1px solid var(--border);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      backdrop-filter: blur(12px);
       padding: 12px 16px;
       display: flex;
       justify-content: space-between;
       align-items: center;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      backdrop-filter: blur(10px);
     }
-    .brand-group { display: flex; align-items: center; gap: 10px; }
-    .brand-logo {
-      width: 32px; height: 32px;
-      background: linear-gradient(135deg, var(--cyan) 0%, var(--green) 100%);
-      border-radius: 8px;
-      display: grid; place-items: center;
-      font-weight: 800; font-size: 15px; color: #000;
+    .brand-group { display: flex; align-items: center; gap: 8px; }
+    .brand-icon {
+      width: 28px; height: 28px; border-radius: 6px;
+      background: linear-gradient(135deg, var(--cyan) 0%, var(--purple) 100%);
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 14px; color: #FFF;
     }
-    .brand-title { font-size: 15px; font-weight: 800; letter-spacing: -0.3px; color: #FFF; }
-    .brand-subtitle { font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
+    .brand-name { font-size: 15px; font-weight: 800; letter-spacing: -0.3px; }
     .live-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      background: rgba(0, 240, 168, 0.1);
-      border: 1px solid rgba(0, 240, 168, 0.3);
-      padding: 4px 10px; border-radius: 20px;
+      display: flex; align-items: center; gap: 6px;
+      padding: 4px 8px; background: rgba(16, 185, 129, 0.15);
+      border: 1px solid var(--green); border-radius: 20px;
       font-size: 11px; font-weight: 700; color: var(--green);
-      font-family: 'JetBrains Mono', monospace;
     }
     .pulse-dot {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--green);
-      animation: pulse 1.5s infinite;
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--green); animation: pulse 1.5s infinite;
     }
     @keyframes pulse {
       0% { transform: scale(0.95); opacity: 0.8; }
-      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 10px var(--green); }
+      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 8px var(--green); }
       100% { transform: scale(0.95); opacity: 0.8; }
     }
 
-    /* Summary Hero */
-    .hero-summary {
-      padding: 16px;
-      background: linear-gradient(180deg, var(--bg-surface) 0%, var(--bg-base) 100%);
-    }
+    /* Hero Summary & Funnel Bar */
+    .hero-summary { padding: 14px 16px; background: var(--bg-surface); border-bottom: 1px solid var(--border); }
     .summary-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 16px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px;
     }
-    .summary-top-row {
-      display: flex; justify-content: space-between; align-items: flex-start;
-      margin-bottom: 8px;
-    }
-    .summary-label { font-size: 11px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .summary-top-row { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; }
+    .summary-label { font-size: 10px; color: var(--text-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; }
     .summary-pnl-main {
-      font-size: 28px; font-weight: 800; font-family: 'JetBrains Mono', monospace;
-      letter-spacing: -0.5px;
+      font-size: 26px; font-weight: 800; font-family: 'JetBrains Mono', monospace;
       display: flex; align-items: baseline; gap: 8px;
     }
-    .pnl-pct-badge {
-      font-size: 13px; font-weight: 700; padding: 2px 8px; border-radius: 6px;
-      font-family: 'JetBrains Mono', monospace;
-    }
+    .pnl-pct-badge { font-size: 12px; font-weight: 700; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; }
+    
     .summary-stats-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr);
-      gap: 10px; margin-top: 14px; padding-top: 12px;
+      display: grid; grid-template-columns: repeat(4, 1fr);
+      gap: 8px; margin-top: 10px; padding-top: 10px;
       border-top: 1px solid var(--border);
     }
     .stat-item { display: flex; flex-direction: column; }
-    .stat-lbl { font-size: 10px; color: var(--text-dim); text-transform: uppercase; font-weight: 600; margin-bottom: 2px; }
-    .stat-val { font-size: 13px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; }
+    .stat-lbl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; font-weight: 700; margin-bottom: 2px; }
+    .stat-val { font-size: 12px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; }
 
-    /* Segment Navigation Tabs */
-    .nav-tabs-wrapper {
-      padding: 0 16px 12px 16px;
-      display: flex; gap: 8px; overflow-x: auto;
-      scrollbar-width: none;
+    /* Funnel & Taken Bar */
+    .funnel-bar {
+      margin-top: 10px; padding: 8px 10px; background: rgba(0,0,0,0.25);
+      border-radius: 8px; display: flex; justify-content: space-between; align-items: center;
+      font-size: 11px;
     }
+    .funnel-pill {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-weight: 600; color: var(--text-muted);
+    }
+    .funnel-pill strong { color: #FFF; font-family: 'JetBrains Mono', monospace; }
+
+    /* Controls Bar: Filters & Sorters */
+    .controls-wrapper {
+      padding: 12px 16px; display: flex; flex-direction: column; gap: 8px;
+      background: var(--bg-base);
+    }
+    .nav-tabs-wrapper { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
     .nav-tabs-wrapper::-webkit-scrollbar { display: none; }
     .nav-tab {
-      background: var(--bg-surface);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      padding: 8px 14px; border-radius: 20px;
-      font-size: 12px; font-weight: 700; white-space: nowrap;
-      cursor: pointer; transition: all 0.2s;
+      background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text-muted); padding: 6px 12px; border-radius: 16px;
+      font-size: 11px; font-weight: 700; white-space: nowrap; cursor: pointer;
     }
-    .nav-tab.active {
-      background: var(--cyan);
-      color: #000;
-      border-color: var(--cyan);
+    .nav-tab.active { background: var(--cyan); color: #000; border-color: var(--cyan); }
+
+    .sub-filter-row {
+      display: flex; gap: 6px; align-items: center; justify-content: space-between;
+      font-size: 11px; color: var(--text-muted);
+    }
+    .select-dropdown {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      color: #FFF; padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 600;
     }
 
     /* Positions Feed */
-    .positions-feed {
-      padding: 0 16px;
-      display: flex; flex-direction: column; gap: 12px;
-    }
-
-    /* FrontPage-style Position Card */
+    .positions-feed { padding: 0 16px; display: flex; flex-direction: column; gap: 10px; }
     .position-card {
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 14px;
-      transition: all 0.2s ease;
-      position: relative;
-      overflow: hidden;
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px;
+      transition: border-color 0.2s;
     }
-    .position-card::before {
-      content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
-      background: var(--text-dim);
-    }
-    .position-card.profit::before { background: var(--green); }
-    .position-card.loss::before { background: var(--red); }
+    .position-card.profit { border-left: 4px solid var(--green); }
+    .position-card.loss { border-left: 4px solid var(--red); }
+    .position-card.stopped { border-left: 4px solid var(--text-dim); opacity: 0.85; }
 
-    .card-head {
-      display: flex; justify-content: space-between; align-items: flex-start;
-      margin-bottom: 12px;
+    .card-head { display: flex; justify-content: space-between; align-items: flex-start; }
+    .sym-name-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .sym-name { font-size: 15px; font-weight: 800; color: #FFF; font-family: 'JetBrains Mono', monospace; }
+    
+    /* Badges */
+    .badge {
+      font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 4px;
+      text-transform: uppercase; letter-spacing: 0.4px;
     }
-    .sym-title-grp { display: flex; flex-direction: column; }
-    .sym-name { font-size: 16px; font-weight: 800; color: #FFF; letter-spacing: -0.2px; }
-    .sym-meta { font-size: 11px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; margin-top: 3px; }
-    .badge-action {
-      font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .badge-action.buy { background: var(--green-bg); color: var(--green); }
-    .badge-action.sell { background: var(--red-bg); color: var(--red); }
+    .badge-grade-A { background: rgba(16, 185, 129, 0.2); color: var(--green); border: 1px solid var(--green); }
+    .badge-grade-B { background: rgba(245, 158, 11, 0.2); color: var(--amber); border: 1px solid var(--amber); }
+    .badge-grade-C { background: rgba(244, 63, 94, 0.2); color: var(--red); border: 1px solid var(--red); }
+    .badge-buy { background: var(--green-bg); color: var(--green); }
+    .badge-sell { background: var(--red-bg); color: var(--red); }
+    .badge-status { background: rgba(255,255,255,0.08); color: #FFF; }
+    .badge-tag { background: rgba(139, 92, 246, 0.15); color: var(--purple); border: 1px solid var(--purple); font-size: 8.5px; }
 
-    .card-pnl-block { text-align: right; }
-    .card-pnl-val { font-size: 18px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
-    .card-pnl-pct { font-size: 12px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .pnl-block { text-align: right; }
+    .pnl-val { font-size: 16px; font-weight: 800; font-family: 'JetBrains Mono', monospace; }
+    .pnl-pct { font-size: 11px; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
 
-    /* Prices Grid */
-    .prices-grid {
-      background: var(--bg-subtle);
-      border-radius: 10px;
-      padding: 10px 12px;
-      display: grid; grid-template-columns: repeat(3, 1fr);
-      gap: 8px; margin-bottom: 12px;
+    /* Metric Grid: 2 rows of 3 columns */
+    .metrics-grid {
+      display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px;
+      background: rgba(0,0,0,0.2); padding: 8px 10px; border-radius: 8px;
     }
-    .price-col { display: flex; flex-direction: column; }
-    .price-lbl { font-size: 10px; color: var(--text-dim); font-weight: 600; text-transform: uppercase; }
-    .price-val { font-size: 13px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+    .metric-cell { display: flex; flex-direction: column; }
+    .metric-lbl { font-size: 9px; color: var(--text-dim); text-transform: uppercase; font-weight: 700; }
+    .metric-val { font-size: 11.5px; font-weight: 700; color: #FFF; font-family: 'JetBrains Mono', monospace; }
 
-    /* Trailing & Target Bar */
-    .target-bar-wrap {
-      display: flex; flex-direction: column; gap: 6px;
-      margin-bottom: 12px;
+    /* Setup & Win rate bar */
+    .setup-win-row {
+      display: flex; justify-content: space-between; align-items: center;
+      font-size: 10px; color: var(--text-muted);
     }
-    .target-labels {
-      display: flex; justify-content: space-between;
-      font-size: 11px; font-family: 'JetBrains Mono', monospace;
-    }
-    .sl-lbl { color: var(--red); }
-    .tgt-lbl { color: var(--green); }
-    .progress-track {
-      width: 100%; height: 6px; background: rgba(255, 255, 255, 0.08);
-      border-radius: 3px; overflow: hidden; position: relative;
-    }
-    .progress-fill {
-      height: 100%; background: linear-gradient(90deg, var(--cyan), var(--green));
-      border-radius: 3px; transition: width 0.3s;
-    }
+    .setup-name-badge { font-weight: 700; color: var(--cyan); }
 
-    /* Footer & Actions */
+    /* Card Footer: Action & Taken Toggle */
     .card-footer {
       display: flex; justify-content: space-between; align-items: center;
-      padding-top: 10px; border-top: 1px solid var(--border);
+      padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06);
     }
-    .stage-pill {
-      font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 6px;
-      background: var(--bg-surface); color: var(--cyan); border: 1px solid var(--border);
+    .taken-toggle-grp { display: flex; align-items: center; gap: 6px; }
+    .taken-btn {
+      padding: 4px 10px; border-radius: 14px; font-size: 10.5px; font-weight: 700;
+      border: 1px solid var(--border); background: var(--bg-surface); color: var(--text-muted);
+      cursor: pointer; display: flex; align-items: center; gap: 4px;
+    }
+    .taken-btn.is-taken {
+      background: var(--green); color: #000; border-color: var(--green); font-weight: 800;
+    }
+
+    .btn-action-primary {
+      background: var(--cyan); color: #000; font-weight: 800; border: none;
+      padding: 6px 12px; border-radius: 6px; font-size: 11px; cursor: pointer;
     }
     .btn-close-pos {
-      background: rgba(255, 51, 102, 0.15);
-      border: 1px solid rgba(255, 51, 102, 0.4);
-      color: var(--red);
-      font-size: 11px; font-weight: 700; padding: 6px 12px; border-radius: 6px;
-      cursor: pointer; transition: all 0.2s;
+      background: transparent; border: 1px solid var(--red); color: var(--red);
+      font-weight: 700; padding: 5px 10px; border-radius: 6px; font-size: 11px; cursor: pointer;
     }
-    .btn-close-pos:active { transform: scale(0.96); background: var(--red); color: #FFF; }
 
-    /* Empty state */
-    .empty-state {
-      text-align: center; padding: 48px 16px;
-      color: var(--text-muted);
-    }
-    .empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.6; }
-
-    /* Floating Bottom Action */
+    .empty-state { text-align: center; padding: 40px 16px; color: var(--text-muted); }
     .bottom-bar {
       position: fixed; bottom: 0; left: 0; right: 0;
-      background: var(--bg-surface);
-      border-top: 1px solid var(--border);
-      padding: 10px 16px;
-      display: flex; justify-content: space-between; align-items: center;
-      z-index: 100;
-    }
-    .btn-action-primary {
-      background: linear-gradient(135deg, var(--cyan), var(--green));
-      color: #000; font-weight: 800; font-size: 12px;
-      padding: 10px 16px; border-radius: 8px; border: none; cursor: pointer;
+      background: var(--bg-surface); border-top: 1px solid var(--border);
+      padding: 10px 16px; display: flex; justify-content: space-between; align-items: center;
+      z-index: 90;
     }
   </style>
 </head>
 <body>
 
-  <!-- Top Header -->
+  <!-- Top App Bar -->
   <header class="app-header">
     <div class="brand-group">
-      <div class="brand-logo">FP</div>
+      <div class="brand-icon">F+</div>
       <div>
-        <div class="brand-title">FinPlus Live Positions</div>
-        <div class="brand-subtitle">FrontPage Mobile Edition</div>
+        <div class="brand-name">FinPlus+ Cockpit</div>
+        <div style="font-size: 9px; color: var(--text-dim); font-weight: 700;">INSTITUTIONAL RADAR</div>
       </div>
     </div>
     <div class="live-badge">
@@ -273,16 +233,15 @@
     </div>
   </header>
 
-  <!-- Summary Hero -->
+  <!-- Hero Summary & Taken Progress -->
   <section class="hero-summary">
     <div class="summary-card">
       <div class="summary-top-row">
         <span class="summary-label">Live Unrealized P&L</span>
         <span class="pnl-pct-badge" id="totalPnlPctBadge">+0.00%</span>
       </div>
-      <div class="summary-pnl-main" id="totalUnrealizedPnl">
-        ₹0.00
-      </div>
+      <div class="summary-pnl-main" id="totalUnrealizedPnl">₹0.00</div>
+      
       <div class="summary-stats-grid">
         <div class="stat-item">
           <span class="stat-lbl">Virtual Capital</span>
@@ -296,42 +255,86 @@
           <span class="stat-lbl">Active Trades</span>
           <span class="stat-val" id="activeCountVal">0 Open</span>
         </div>
+        <div class="stat-item">
+          <span class="stat-lbl">Suggestions</span>
+          <span class="stat-val" id="suggestionsVal">0 / 12</span>
+        </div>
+      </div>
+
+      <!-- Funnel Metrics Bar -->
+      <div class="funnel-bar">
+        <div class="funnel-pill">Today Suggestions: <strong id="fnTodaySug">0</strong></div>
+        <div class="funnel-pill">Taken Today: <strong id="fnTodayTaken" style="color:var(--green)">0</strong></div>
+        <div class="funnel-pill">Taken Week: <strong id="fnWeekTaken" style="color:var(--cyan)">0</strong></div>
       </div>
     </div>
   </section>
 
-  <!-- Navigation Filters -->
-  <div class="nav-tabs-wrapper">
-    <button class="nav-tab active" onclick="setFilter('ALL', this)">All Open (<span id="cntAll">0</span>)</button>
-    <button class="nav-tab" onclick="setFilter('STOCK_OPTIONS', this)">Options (<span id="cntOpt">0</span>)</button>
-    <button class="nav-tab" onclick="setFilter('COMMODITIES', this)">Commodities (<span id="cntComm">0</span>)</button>
-    <button class="nav-tab" onclick="setFilter('INTRADAY_CASH', this)">Cash (<span id="cntCash">0</span>)</button>
-    <button class="nav-tab" onclick="setFilter('CLOSED', this)">Closed Today (<span id="cntClosed">0</span>)</button>
+  <!-- Controls: Navigation Tabs & Filters/Sorters -->
+  <div class="controls-wrapper">
+    <div class="nav-tabs-wrapper">
+      <button class="nav-tab active" onclick="setSegment('ALL', this)">All Open (<span id="cntAll">0</span>)</button>
+      <button class="nav-tab" onclick="setSegment('STOCK_OPTIONS', this)">Options (<span id="cntOpt">0</span>)</button>
+      <button class="nav-tab" onclick="setSegment('COMMODITIES', this)">Commodities (<span id="cntComm">0</span>)</button>
+      <button class="nav-tab" onclick="setSegment('INTRADAY_CASH', this)">Cash (<span id="cntCash">0</span>)</button>
+      <button class="nav-tab" onclick="setSegment('CLOSED', this)">Closed (<span id="cntClosed">0</span>)</button>
+    </div>
+
+    <div class="sub-filter-row">
+      <div>
+        Grade:
+        <select class="select-dropdown" id="gradeFilter" onchange="renderPositions()">
+          <option value="ALL">All Grades (A, B, C)</option>
+          <option value="A">Grade A (>=60% Win)</option>
+          <option value="B">Grade B (Learning)</option>
+          <option value="C">Grade C (Low Conf)</option>
+        </select>
+      </div>
+      <div>
+        Side:
+        <select class="select-dropdown" id="sideFilter" onchange="renderPositions()">
+          <option value="ALL">All Sides</option>
+          <option value="BUY">BUY Only</option>
+          <option value="SELL">SELL Only</option>
+        </select>
+      </div>
+      <div>
+        Sort:
+        <select class="select-dropdown" id="sortFilter" onchange="renderPositions()">
+          <option value="pnl_desc">P&L (High to Low)</option>
+          <option value="grade">Grade (A to C)</option>
+          <option value="r_desc">Locked R (High)</option>
+          <option value="time">Time (Latest)</option>
+        </select>
+      </div>
+    </div>
   </div>
 
   <!-- Positions Feed -->
   <main class="positions-feed" id="positionsContainer">
     <div class="empty-state">
       <div class="empty-icon">⏳</div>
-      <h3>Scanning Market...</h3>
-      <p style="font-size: 12px; margin-top: 4px;">Awaiting 100/100 confluence setups from Stock Scanner & MCX Radar.</p>
+      <h3>Scanning Universe...</h3>
+      <p style="font-size: 12px; margin-top: 4px;">Awaiting candidate triggers from Multi-Setup Engine & MCX Radar.</p>
     </div>
   </main>
 
-  <!-- Bottom Navigation / Quick Sync -->
+  <!-- Bottom Action Bar -->
   <div class="bottom-bar">
     <div style="font-size: 11px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace;">
-      Auto-polling: <span style="color: var(--green);">Active (Every 2s)</span>
+      Polling: <span style="color: var(--green);">Active (Every 2s)</span>
     </div>
-    <button class="btn-action-primary" onclick="forceSync()">⚡ SYNC NOW</button>
+    <div style="display:flex; gap:8px;">
+      <button class="btn-action-primary" onclick="forceSync()">⚡ SYNC NOW</button>
+    </div>
   </div>
 
   <script>
-    let activeFilter = 'ALL';
+    let activeSegment = 'ALL';
     let rawData = null;
 
-    function setFilter(filter, el) {
-      activeFilter = filter;
+    function setSegment(seg, el) {
+      activeSegment = seg;
       document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
       el.classList.add('active');
       renderPositions();
@@ -369,7 +372,14 @@
       document.getElementById('realizedNetVal').innerText = `₹${(rawData.net_realized_pnl || 0).toLocaleString('en-IN', {maximumFractionDigits: 2})}`;
       document.getElementById('activeCountVal').innerText = `${rawData.active_positions_count || 0} Open`;
 
-      // Update Tab Counts
+      // Funnel & Taken Summary
+      const ts = rawData.taken_summary || {};
+      document.getElementById('suggestionsVal').innerText = `${ts.suggestions_today || 0} / 12`;
+      document.getElementById('fnTodaySug').innerText = ts.suggestions_today || 0;
+      document.getElementById('fnTodayTaken').innerText = ts.taken_today || 0;
+      document.getElementById('fnWeekTaken').innerText = ts.taken_this_week || 0;
+
+      // Update Counts
       const active = rawData.active_positions || [];
       document.getElementById('cntAll').innerText = active.length;
       document.getElementById('cntOpt').innerText = active.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC')).length;
@@ -382,26 +392,47 @@
       const container = document.getElementById('positionsContainer');
       if (!rawData) return;
 
-      if (activeFilter === 'CLOSED') {
-        renderClosedTrades(container);
+      const gradeFilter = document.getElementById('gradeFilter').value;
+      const sideFilter = document.getElementById('sideFilter').value;
+      const sortFilter = document.getElementById('sortFilter').value;
+
+      if (activeSegment === 'CLOSED') {
+        renderClosedTrades(container, gradeFilter, sideFilter, sortFilter);
         return;
       }
 
       let list = rawData.active_positions || [];
-      if (activeFilter === 'STOCK_OPTIONS') {
+      if (activeSegment === 'STOCK_OPTIONS') {
         list = list.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC'));
-      } else if (activeFilter === 'COMMODITIES') {
+      } else if (activeSegment === 'COMMODITIES') {
         list = list.filter(p => (p.sector || '') === 'COMMODITIES');
-      } else if (activeFilter === 'INTRADAY_CASH') {
+      } else if (activeSegment === 'INTRADAY_CASH') {
         list = list.filter(p => (p.sector || '') === 'INTRADAY_CASH');
       }
+
+      // Filter by Grade
+      if (gradeFilter !== 'ALL') {
+        list = list.filter(p => (p.grade || 'B') === gradeFilter);
+      }
+      // Filter by Side
+      if (sideFilter !== 'ALL') {
+        list = list.filter(p => p.action === sideFilter);
+      }
+
+      // Sorting
+      list.sort((a, b) => {
+        if (sortFilter === 'pnl_desc') return (b.unrealized_pnl || 0) - (a.unrealized_pnl || 0);
+        if (sortFilter === 'r_desc') return (b.profit_locked_r || 0) - (a.profit_locked_r || 0);
+        if (sortFilter === 'grade') return (a.grade || 'B').localeCompare(b.grade || 'B');
+        return (b.opened_at_utc || '').localeCompare(a.opened_at_utc || '');
+      });
 
       if (list.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">🎯</div>
-            <h3>No Active Positions</h3>
-            <p style="font-size: 12px; margin-top: 4px;">Zero trades matching filter. Next setup will auto-populate here.</p>
+            <h3>No Positions Matching Filters</h3>
+            <p style="font-size: 12px; margin-top: 4px;">Adjust segment or grade filters above to see candidate setups.</p>
           </div>
         `;
         return;
@@ -416,73 +447,94 @@
         const pnlPct = pos.pnl_pct !== undefined ? pos.pnl_pct : (avgLtp > 0 ? (((currLtp - avgLtp) / avgLtp) * 100) : 0.0);
         const isPos = pnl >= 0;
 
-        // Progress calculation between Trailing SL and Target
         const sl = isOpt ? (pos.opt_trailing_sl || pos.opt_initial_sl || (avgLtp * 0.70)) : (pos.trailing_sl || pos.initial_sl);
-        const tgt = isOpt ? (pos.opt_target || (avgLtp * 1.60)) : pos.target;
-        let progressPct = 50;
-        if (tgt !== sl) {
-          const totalDist = Math.abs(tgt - sl);
-          const currentDist = Math.abs(currLtp - sl);
-          progressPct = Math.min(100, Math.max(0, (currentDist / totalDist) * 100));
-        }
+        const initSl = isOpt ? (pos.opt_initial_sl || (avgLtp * 0.70)) : pos.initial_sl;
+        const highPrice = pos.highest_price || currLtp;
+        const lockedRs = pos.profit_locked_rupees || 0.0;
+        const lockedR = pos.profit_locked_r || 0.0;
+        const stopDistPct = pos.stop_dist_pct || (avgLtp > 0 ? (Math.abs(avgLtp - sl) / avgLtp * 100).toFixed(2) : 0.0);
+        const rupeesAtRisk = pos.rupees_at_risk || (Math.abs(avgLtp - sl) * (pos.quantity || 1)).toFixed(2);
+        const grade = pos.grade || 'B';
+        const isTaken = Boolean(pos.taken);
+        const tags = (pos.tags || '').split(',').filter(Boolean);
 
         const card = document.createElement('div');
         card.className = `position-card ${isPos ? 'profit' : 'loss'}`;
         card.innerHTML = `
           <div class="card-head">
-            <div class="sym-title-grp">
-              <span class="sym-name">${pos.symbol}</span>
-              <div class="sym-meta">
-                <span class="badge-action ${pos.action === 'BUY' ? 'buy' : 'sell'}">${pos.action}</span>
-                <span>•</span>
-                <span>${pos.sector}</span>
-                <span>•</span>
-                <span style="color:#FFF; font-weight:700;">Qty: ${pos.quantity}</span>
+            <div>
+              <div class="sym-name-row">
+                <span class="sym-name">${pos.symbol}</span>
+                <span class="badge ${pos.action === 'BUY' ? 'badge-buy' : 'badge-sell'}">${pos.action}</span>
+                <span class="badge badge-grade-${grade}">GRADE ${grade}</span>
+                <span class="badge badge-status">${pos.status || 'OPEN'}</span>
+                ${tags.map(t => `<span class="badge badge-tag">${t}</span>`).join('')}
+              </div>
+              <div class="setup-win-row" style="margin-top:4px;">
+                <span>Setup: <strong class="setup-name-badge">${pos.setup_key || 'RANGE_BREAKOUT'}</strong></span>
+                <span>Win Rate: <strong>${pos.setup_win_pct || 0}%</strong> (${pos.setup_total_trades || 0} trds)</span>
               </div>
             </div>
-            <div class="card-pnl-block">
-              <div class="card-pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+            <div class="pnl-block">
+              <div class="pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
                 ${isPos ? '+' : ''}₹${pnl.toFixed(2)}
               </div>
-              <div class="card-pnl-pct" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+              <div class="pnl-pct" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
                 ${isPos ? '+' : ''}${pnlPct.toFixed(2)}%
               </div>
             </div>
           </div>
 
-          <div class="prices-grid">
-            <div class="price-col">
-              <span class="price-lbl">Avg Price</span>
-              <span class="price-val">₹${avgLtp.toFixed(2)}</span>
+          <!-- Comprehensive Metric Grid -->
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <span class="metric-lbl">Entry Price</span>
+              <span class="metric-val">₹${avgLtp.toFixed(2)}</span>
             </div>
-            <div class="price-col">
-              <span class="price-lbl">Current LTP</span>
-              <span class="price-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">₹${currLtp.toFixed(2)}</span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Current LTP</span>
+              <span class="metric-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">₹${currLtp.toFixed(2)}</span>
             </div>
-            <div class="price-col">
-              <span class="price-lbl">Points Δ</span>
-              <span class="price-val">${isPos ? '+' : ''}${(currLtp - avgLtp).toFixed(2)}</span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Highest Hit</span>
+              <span class="metric-val" style="color: var(--cyan);">₹${highPrice.toFixed(2)}</span>
             </div>
-          </div>
-
-          <div class="target-bar-wrap">
-            <div class="target-labels">
-              <span class="sl-lbl">SL: ₹${sl.toFixed(2)}</span>
-              <span class="tgt-lbl">Target: ₹${tgt.toFixed(2)}</span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Initial SL</span>
+              <span class="metric-val">₹${initSl.toFixed(2)}</span>
             </div>
-            <div class="progress-track">
-              <div class="progress-fill" style="width: ${progressPct}%;"></div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Trailing SL</span>
+              <span class="metric-val" style="color: var(--amber);">₹${sl.toFixed(2)}</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Stop Distance</span>
+              <span class="metric-val">${stopDistPct}%</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Risk (Rs)</span>
+              <span class="metric-val" style="color: var(--red);">₹${rupeesAtRisk}</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Locked Profit</span>
+              <span class="metric-val" style="color: var(--green);">+₹${lockedRs.toFixed(2)} (${lockedR:+.2f}R)</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Quantity</span>
+              <span class="metric-val">${pos.quantity}</span>
             </div>
           </div>
 
           <div class="card-footer">
-            <div style="display: flex; gap: 6px; align-items: center;">
-              <span class="stage-pill">${pos.stage || 'ACTIVE'}</span>
-              ${pnlPct >= 1.0 ? `<span style="background: rgba(0, 240, 168, 0.2); color: var(--green); border: 1px solid var(--green); font-size: 10px; font-weight: 800; padding: 2px 6px; border-radius: 4px; animation: pulse 1.5s infinite;">🔥 TURNING GREEN (READY FOR REAL TRADE)</span>` : ''}
+            <div class="taken-toggle-grp">
+              <button class="taken-btn ${isTaken ? 'is-taken' : ''}" onclick="toggleTaken('${pos.position_id}', ${!isTaken}, ${avgLtp}, ${pos.quantity})">
+                ${isTaken ? '✓ TAKEN IN BROKER' : '○ MARK TAKEN'}
+              </button>
+              ${isTaken && pos.real_entry ? `<span style="font-size:10px; color:var(--green)">Real: ₹${pos.real_entry} (${pos.real_qty} q)</span>` : ''}
             </div>
-            <div style="display: flex; gap: 6px;">
-              <button class="btn-action-primary" style="padding: 5px 10px; font-size: 11px;" onclick="copyTicket('${pos.symbol}', '${pos.action}', ${currLtp}, ${sl}, ${tgt})">📋 Copy Ticket</button>
-              <button class="btn-close-pos" onclick="closePosition('${pos.position_id}')">Square Off</button>
+            <div style="display:flex; gap:6px;">
+              <button class="btn-action-primary" onclick="copyTicket('${pos.symbol}', '${pos.action}', ${currLtp}, ${sl})">📋 Copy</button>
+              <button class="btn-close-pos" onclick="closePosition('${pos.position_id}')">Exit</button>
             </div>
           </div>
         `;
@@ -490,13 +542,16 @@
       });
     }
 
-    function renderClosedTrades(container) {
-      const closed = rawData.recent_closed_trades || [];
+    function renderClosedTrades(container, gradeFilter, sideFilter, sortFilter) {
+      let closed = rawData.recent_closed_trades || [];
+      if (gradeFilter !== 'ALL') closed = closed.filter(t => (t.grade || 'B') === gradeFilter);
+      if (sideFilter !== 'ALL') closed = closed.filter(t => t.action === sideFilter);
+
       if (closed.length === 0) {
         container.innerHTML = `
           <div class="empty-state">
             <div class="empty-icon">📁</div>
-            <h3>No Closed Trades Today</h3>
+            <h3>No Closed Trades Matching Filters</h3>
             <p style="font-size: 12px; margin-top: 4px;">Completed trades and net profits will appear here.</p>
           </div>
         `;
@@ -507,67 +562,97 @@
       closed.forEach(t => {
         const isPos = t.net_pnl >= 0;
         const card = document.createElement('div');
-        card.className = `position-card ${isPos ? 'profit' : 'loss'}`;
+        card.className = `position-card ${isPos ? 'profit' : 'loss'} stopped`;
         card.innerHTML = `
           <div class="card-head">
-            <div class="sym-title-grp">
-              <span class="sym-name">${t.symbol}</span>
-              <div class="sym-meta">
-                <span class="badge-action ${t.action === 'BUY' ? 'buy' : 'sell'}">${t.action}</span>
-                <span>•</span>
-                <span>${t.sector}</span>
-                <span>•</span>
+            <div>
+              <div class="sym-name-row">
+                <span class="sym-name">${t.symbol}</span>
+                <span class="badge ${t.action === 'BUY' ? 'badge-buy' : 'badge-sell'}">${t.action}</span>
+                <span class="badge badge-grade-${t.grade || 'B'}">GRADE ${t.grade || 'B'}</span>
+                <span class="badge badge-status">STOPPED</span>
+              </div>
+              <div class="setup-win-row" style="margin-top:4px;">
+                <span>${t.setup_key || 'SETUP'}</span>
                 <span>${t.trade_time}</span>
               </div>
             </div>
-            <div class="card-pnl-block">
-              <div class="card-pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
+            <div class="pnl-block">
+              <div class="pnl-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">
                 ${isPos ? '+' : ''}₹${(t.net_pnl || 0).toFixed(2)}
               </div>
-              <div style="font-size: 11px; color: var(--text-dim);">Net In-Hand</div>
+              <div class="pnl-pct" style="color: var(--cyan);">${t.r_multiple >= 0 ? '+' : ''}${(t.r_multiple || 0).toFixed(2)}R</div>
             </div>
           </div>
-          <div class="prices-grid">
-            <div class="price-col">
-              <span class="price-lbl">Entry</span>
-              <span class="price-val">₹${(t.entry_price || 0).toFixed(2)}</span>
+
+          <div class="metrics-grid">
+            <div class="metric-cell">
+              <span class="metric-lbl">Entry</span>
+              <span class="metric-val">₹${(t.entry_price || 0).toFixed(2)}</span>
             </div>
-            <div class="price-col">
-              <span class="price-lbl">Exit</span>
-              <span class="price-val">₹${(t.exit_price || 0).toFixed(2)}</span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Exit Price</span>
+              <span class="metric-val">₹${(t.exit_price || 0).toFixed(2)}</span>
             </div>
-            <div class="price-col">
-              <span class="price-lbl">Charges</span>
-              <span class="price-val" style="color: var(--amber);">₹${(t.total_charges || 0).toFixed(2)}</span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Highest Price</span>
+              <span class="metric-val">₹${(t.highest_price || t.exit_price || 0).toFixed(2)}</span>
             </div>
-          </div>
-          <div class="card-footer">
-            <span class="stage-pill" style="color: var(--text-muted);">${t.exit_reason || 'CLOSED'}</span>
-            <span style="font-size: 11px; font-weight:700; color: ${isPos ? 'var(--green)' : 'var(--red)'};">
-              Gross: ₹${(t.gross_pnl || 0).toFixed(2)}
-            </span>
+            <div class="metric-cell">
+              <span class="metric-lbl">Exit Reason</span>
+              <span class="metric-val" style="color:var(--amber);">${t.exit_reason || 'STOP_HIT'}</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Charges</span>
+              <span class="metric-val">₹${(t.total_charges || 0).toFixed(2)}</span>
+            </div>
+            <div class="metric-cell">
+              <span class="metric-lbl">Taken Status</span>
+              <span class="metric-val" style="color:${t.taken ? 'var(--green)' : 'var(--text-dim)'};">${t.taken ? '✓ Taken' : 'Paper Only'}</span>
+            </div>
           </div>
         `;
         container.appendChild(card);
       });
     }
 
-    function copyTicket(symbol, action, ltp, sl, tgt) {
-      const text = `${action} ${symbol} @ ₹${ltp.toFixed(2)} | SL: ₹${sl.toFixed(2)} | Tgt: ₹${tgt.toFixed(2)}`;
+    async function toggleTaken(posId, takenStatus, currentEntry, currentQty) {
+      let realEntry = null;
+      let realQty = null;
+      if (takenStatus) {
+        const pStr = prompt(`Mark trade as Taken in your broker.\nEnter your actual execution price (or leave empty for ₹${currentEntry}):`, currentEntry);
+        if (pStr !== null && pStr.trim() !== '') realEntry = parseFloat(pStr);
+        const qStr = prompt(`Enter actual quantity executed (or leave empty for ${currentQty}):`, currentQty);
+        if (qStr !== null && qStr.trim() !== '') realQty = parseInt(qStr);
+      }
+      try {
+        const res = await fetch(`/api/trades/${posId}/taken`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ taken: takenStatus, real_entry: realEntry, real_qty: realQty })
+        });
+        await fetchLivePositions();
+      } catch (e) {
+        alert("Failed toggling taken status: " + e);
+      }
+    }
+
+    function copyTicket(symbol, action, ltp, sl) {
+      const text = `${action} ${symbol} @ ₹${ltp.toFixed(2)} | SL: ₹${sl.toFixed(2)}`;
       navigator.clipboard.writeText(text).then(() => {
-        alert(`📋 Ticket Copied to Clipboard!\n\n${text}\n\nYou can now paste or place this directly in your broker (INDmoney / Zerodha).`);
+        alert(`📋 Ticket Copied to Clipboard!\n\n${text}\n\nYou can now place this in your broker.`);
       }).catch(() => {
         prompt("Copy this trade ticket:", text);
       });
     }
 
     async function closePosition(posId) {
-      if (!confirm(`Are you sure you want to manually square off this paper position?`)) return;
+      if (!confirm(`Are you sure you want to exit this trade?`)) return;
       try {
-        const res = await fetch(`/api/paper/close-position/${posId}`, { method: 'POST' });
+        await fetch(`/api/paper/close-position/${posId}`, { method: 'POST' });
         await fetchLivePositions();
       } catch (e) {
-        alert("Failed squaring off position: " + e);
+        alert("Failed exiting position: " + e);
       }
     }
 

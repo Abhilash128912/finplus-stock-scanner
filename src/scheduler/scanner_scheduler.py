@@ -359,6 +359,12 @@ class ScannerScheduler:
                                     funnel_counts["removed_stale_feed"] += 1
                                     continue
 
+                                # Check daily latch per symbol per day (Phase 5d / 2.5.4)
+                                date_str = get_ist_now().strftime("%Y-%m-%d")
+                                if self.ledger.is_symbol_latched_today(date_str, sym):
+                                    funnel_counts["removed_latch_used"] += 1
+                                    continue
+
                                 grade = self.paper_tracker.get_setup_grade(cand["setup_key"]) if self.paper_tracker else "B"
                                 cand["grade"] = grade
                                 cand["rank_score"] = self.multi_setup_engine.score_candidate(cand, grade=grade)
@@ -389,11 +395,6 @@ class ScannerScheduler:
         candidate_triggers.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
         if self.paper_tracker:
             for cand in candidate_triggers:
-                taken_sum = self.paper_tracker.get_taken_summary()
-                # Target: 6 to 12 suggestions per day opened on the panel (Phase 6c)
-                if taken_sum.get("suggestions_today", 0) >= 12:
-                    break
-
                 if cand.get("is_wide_sl"):
                     funnel_counts["removed_wide_sl"] += 1
 
@@ -412,6 +413,9 @@ class ScannerScheduler:
                 )
                 if opened:
                     funnel_counts["suggestions_opened_on_panel"] += 1
+                    date_str = get_ist_now().strftime("%Y-%m-%d")
+                    dir_int = 1 if cand["action"] == "BUY" else -1
+                    self.ledger.try_latch_daily_breakout(date_str, cand["symbol"], dir_int, cand["entry_price"])
 
             funnel_counts["ntfy_triggers_sent"] = getattr(self.paper_tracker, "daily_ntfy_triggers_count", 0)
             self.paper_tracker.record_funnel_metrics(funnel_counts)

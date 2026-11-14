@@ -276,7 +276,59 @@ class MultiSetupEngine:
                                 notes=f"15m Opening Range Breakdown below ₹{orb_l:.2f}"
                             ))
             except Exception as orb_err:
-                logger.debug(f"ORB calculation note for {symbol}: {orb_err}")
+                logger.debug(f"ORB 15m calculation note for {symbol}: {orb_err}")
+
+        # -------------------------------------------------------------
+        # SETUP 4b: ORB_30M_BREAKOUT / ORB_30M_BREAKDOWN (After 09:45 IST)
+        # -------------------------------------------------------------
+        is_after_0945 = (now_ist.hour > 9) or (now_ist.hour == 9 and now_ist.minute >= 45)
+        if is_after_0945 and len(closed_df) >= 3:
+            try:
+                today_date = now_ist.date()
+                dates = pd.to_datetime(closed_df.index).date
+                today_indices = np.where(dates == today_date)[0]
+                if len(today_indices) >= 2:
+                    # First two 15m candles constitute the 30-minute opening range
+                    first_two = closed_df.iloc[today_indices[:2]]
+                    orb30_h = float(first_two['High'].max())
+                    orb30_l = float(first_two['Low'].min())
+                    if orb30_h > orb30_l and orb30_l > 0:
+                        # ORB 30m Long Breakout
+                        if live_p >= (orb30_h * (1.0 + TRIGGER_BUFFER_PCT)):
+                            sl_dist = (live_p - orb30_l) / live_p
+                            sl_val = orb30_l if sl_dist <= 0.01 else round((orb30_h + orb30_l) / 2.0, 2)
+                            candidates.append(self._build_candidate(
+                                setup_name="ORB_30M_BREAKOUT",
+                                action="BUY",
+                                symbol=symbol,
+                                sector=category,
+                                boundary=orb30_h,
+                                live_price=live_p,
+                                stop_loss=sl_val,
+                                rvol=rvol,
+                                regime_conf=regime_conf,
+                                feed_status=feed_status,
+                                notes=f"30m Opening Range Breakout above ₹{orb30_h:.2f}"
+                            ))
+                        # ORB 30m Short Breakdown
+                        elif live_p <= (orb30_l * (1.0 - TRIGGER_BUFFER_PCT)):
+                            sl_dist = (orb30_h - live_p) / live_p
+                            sl_val = orb30_h if sl_dist <= 0.01 else round((orb30_h + orb30_l) / 2.0, 2)
+                            candidates.append(self._build_candidate(
+                                setup_name="ORB_30M_BREAKDOWN",
+                                action="SELL",
+                                symbol=symbol,
+                                sector=category,
+                                boundary=orb30_l,
+                                live_price=live_p,
+                                stop_loss=sl_val,
+                                rvol=rvol,
+                                regime_conf=regime_conf,
+                                feed_status=feed_status,
+                                notes=f"30m Opening Range Breakdown below ₹{orb30_l:.2f}"
+                            ))
+            except Exception as orb30_err:
+                logger.debug(f"ORB 30m calculation note for {symbol}: {orb30_err}")
 
         # -------------------------------------------------------------
         # SETUP 5: MOMENTUM_RUNNER (3 Consecutive HH 15m Candles + Expanding Vol)
@@ -287,10 +339,12 @@ class MultiSetupEngine:
             c3 = closed_df.iloc[-1]
             try:
                 h1, h2, h3 = float(c1['High']), float(c2['High']), float(c3['High'])
+                l1, l2, l3 = float(c1['Low']), float(c2['Low']), float(c3['Low'])
                 v1, v2, v3 = float(c1['Volume']), float(c2['Volume']), float(c3['Volume'])
                 c3_close = float(c3['Close'])
                 c3_open = float(c3['Open'])
 
+                # Long Momentum Runner: 3 Higher Highs + Expanding Volume
                 if h3 > h2 > h1 and v3 > v2 > v1 and c3_close > c3_open:
                     if live_p >= (h3 * (1.0 + TRIGGER_BUFFER_PCT)):
                         sl_val = round(float(c1['Low']), 2)
@@ -306,6 +360,23 @@ class MultiSetupEngine:
                             regime_conf=regime_conf,
                             feed_status=feed_status,
                             notes=f"3-Candle Higher-High Momentum Runner with Expanding Volume (Vol {v3:,.0f})"
+                        ))
+                # Short Momentum Breakdown: 3 Lower Lows + Expanding Volume
+                elif l3 < l2 < l1 and v3 > v2 > v1 and c3_close < c3_open:
+                    if live_p <= (l3 * (1.0 - TRIGGER_BUFFER_PCT)):
+                        sl_val = round(float(c1['High']), 2)
+                        candidates.append(self._build_candidate(
+                            setup_name="MOMENTUM_RUNNER_SHORT",
+                            action="SELL",
+                            symbol=symbol,
+                            sector=category,
+                            boundary=l3,
+                            live_price=live_p,
+                            stop_loss=sl_val,
+                            rvol=rvol,
+                            regime_conf=regime_conf,
+                            feed_status=feed_status,
+                            notes=f"3-Candle Lower-Low Momentum Breakdown with Expanding Volume (Vol {v3:,.0f})"
                         ))
             except Exception:
                 pass

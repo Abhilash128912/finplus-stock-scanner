@@ -278,6 +278,20 @@ class LivePaperTracker:
                 return row["grade"]
         return "B" # Default grade B (LEARNING)
 
+    def get_setup_stats_dict(self, setup_key: str) -> Dict[str, Any]:
+        """Returns win %, trade count and grade for a setup."""
+        if not setup_key:
+            return {"win_pct": 0.0, "total_trades": 0, "grade": "B"}
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT win_pct, total_trades, grade FROM setup_stats WHERE setup_key = ?", (setup_key,)).fetchone()
+            if row:
+                return {
+                    "win_pct": float(row["win_pct"]),
+                    "total_trades": int(row["total_trades"]),
+                    "grade": row["grade"]
+                }
+        return {"win_pct": 0.0, "total_trades": 0, "grade": "B"}
+
     def open_position(
         self,
         source_app: str,
@@ -1607,6 +1621,14 @@ class LivePaperTracker:
             item["profit_locked_r"] = profit_locked_r
             item["stop_dist_pct"] = stop_dist_pct
             item["rupees_at_risk"] = rupees_at_risk
+
+            # Setup win rate and trade count
+            s_stats = self.get_setup_stats_dict(item.get("setup_key", ""))
+            item["setup_win_pct"] = s_stats["win_pct"]
+            item["setup_total_trades"] = s_stats["total_trades"]
+            item["grade"] = item.get("grade") or s_stats["grade"]
+            item["status"] = "TRAILING" if "TRAILING" in str(item.get("stage", "")) else "OPEN"
+
             enriched_active.append(item)
 
         # Get closed trades from SQLite
@@ -1627,6 +1649,7 @@ class LivePaperTracker:
                         "action": t["action"],
                         "entry_price": t["entry_price"],
                         "exit_price": t["exit_price"],
+                        "highest_price": t.get("highest_price", t["exit_price"]),
                         "gross_pnl": t["gross_pnl"],
                         "total_charges": t["total_charges"],
                         "net_pnl": t["net_pnl"],
@@ -1636,7 +1659,10 @@ class LivePaperTracker:
                         "grade": t.get("grade", "B"),
                         "tags": t.get("tags", ""),
                         "taken": t.get("taken", 0),
-                        "r_multiple": t.get("r_multiple", 0.0)
+                        "real_entry": t.get("real_entry", 0.0),
+                        "real_qty": t.get("real_qty", 0),
+                        "r_multiple": t.get("r_multiple", 0.0),
+                        "status": "STOPPED"
                     })
         except Exception as e:
             logger.error(f"Error fetching closed trades: {e}")
