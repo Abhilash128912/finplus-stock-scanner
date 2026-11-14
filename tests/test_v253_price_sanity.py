@@ -16,6 +16,7 @@ Items Tested:
 
 import sys
 import time
+import datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -24,6 +25,8 @@ import pytest
 _SCANNER_DIR = Path(__file__).resolve().parent.parent
 if str(_SCANNER_DIR) not in sys.path:
     sys.path.insert(0, str(_SCANNER_DIR))
+
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
 
 from src.paper.live_paper_tracker import LivePaperTracker
 
@@ -365,6 +368,7 @@ def test_05_rejected_tick_counter_telemetry(tmp_path):
     tracker = LivePaperTracker(db_path=str(db_file))
     tracker.price_sanity_pct_cash = 15.0
     now_ts = time.time()
+    frozen_now = datetime.datetime(2026, 11, 10, 11, 0, 0, tzinfo=IST)
 
     pos_id = "pos_count_test"
     tracker.active_positions[pos_id] = {
@@ -381,19 +385,20 @@ def test_05_rejected_tick_counter_telemetry(tmp_path):
         "trailing_sl": 80.0,
         "target": 200.0,
         "entry_time_ist": "10:00:00 AM IST",
-        "opened_at_utc": "2026-11-13T04:30:00Z",
+        "opened_at_utc": "2026-11-10T05:30:00Z",
         "status": "OPEN",
         "stage": "INITIAL (FIXED SL)",
         "unrealized_pnl": 0.0,
     }
     tracker.last_accepted_tick_time["COUNTME"] = now_ts
 
-    # Inject 5 bad ticks
-    for _ in range(5):
-        with patch.object(tracker, "_fetch_live_price", return_value=125.0):
-            with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
-                tracker.update_and_trail_positions()
+    # Inject 5 bad ticks with frozen clock
+    with patch.object(tracker, "_get_now_ist", return_value=frozen_now):
+        for _ in range(5):
+            with patch.object(tracker, "_fetch_live_price", return_value=125.0):
+                with patch.object(tracker.indmoney_feed, "fetch_batch_quotes"):
+                    tracker.update_and_trail_positions()
 
-    telemetry = tracker.get_rejected_ticks_telemetry()
+        telemetry = tracker.get_rejected_ticks_telemetry()
     assert telemetry["total_rejected_ticks"] == 5, f"Expected total 5 rejected ticks, got {telemetry['total_rejected_ticks']}"
     assert telemetry["per_symbol"].get("COUNTME") == 5, f"Expected COUNTME to have 5 rejections, got {telemetry['per_symbol'].get('COUNTME')}"

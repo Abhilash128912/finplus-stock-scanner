@@ -335,9 +335,19 @@ class ScannerScheduler:
                             funnel_counts["candidates_detected"] += 1
                             if cand.get("stage_type") == "WATCH":
                                 now_ts = time.time()
-                                last_w = self.multi_setup_engine.last_watch_alert_time.get(sym, 0.0)
-                                if (now_ts - last_w) >= 600.0:
-                                    self.multi_setup_engine.last_watch_alert_time[sym] = now_ts
+                                today_str = get_ist_now().strftime("%Y-%m-%d")
+                                if not hasattr(self.multi_setup_engine, "daily_watch_symbols"):
+                                    self.multi_setup_engine.daily_watch_symbols = {}
+                                if today_str not in self.multi_setup_engine.daily_watch_symbols:
+                                    self.multi_setup_engine.daily_watch_symbols[today_str] = set()
+
+                                last_global = getattr(self.multi_setup_engine, "last_global_watch_alert_time", 0.0)
+                                sym_already_watched = sym in self.multi_setup_engine.daily_watch_symbols[today_str]
+
+                                # Max 1 per 10m overall, max 1 per symbol per day
+                                if (now_ts - last_global) >= 600.0 and not sym_already_watched:
+                                    self.multi_setup_engine.last_global_watch_alert_time = now_ts
+                                    self.multi_setup_engine.daily_watch_symbols[today_str].add(sym)
                                     self.dispatcher.send_watch_alert(
                                         symbol=sym,
                                         setup_name=cand["setup_name"],

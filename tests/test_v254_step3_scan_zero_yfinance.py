@@ -11,10 +11,12 @@ from unittest.mock import patch, MagicMock
 from src.scheduler.scanner_scheduler import ScannerScheduler
 from src.feeds.market_data_feed import MarketDataFeed
 from src.gateway.yfinance_gateway import YFinanceGateway
+from src.paper.live_paper_tracker import LivePaperTracker
 
 def test_10_scan_cycles_healthy_broker_zero_yfinance_calls(tmp_path):
     """TEST: 10 scan cycles with healthy broker -> 0 yfinance calls."""
     scheduler = ScannerScheduler()
+    scheduler.paper_tracker = LivePaperTracker(db_path=str(tmp_path / "paper.db"))
     scheduler.feed.legacy_yahoo_scan_path_enabled = False
     # Mock market as open
     scheduler.indmoney_feed = MagicMock()
@@ -38,12 +40,14 @@ def test_10_scan_cycles_healthy_broker_zero_yfinance_calls(tmp_path):
         yf_calls += 1
         return dummy_df
 
-    with patch.object(scheduler.feed.gateway, "download", side_effect=mock_gw_download):
-        with patch("src.scheduler.scanner_scheduler.is_market_open_ist", return_value=True):
-            with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=True):
-                # Run 10 scan cycles
-                for cycle in range(10):
-                    scheduler.scan_universe_now()
+    sample_universe = scheduler.feed.get_all_universe_items()[:10]
+    with patch.object(scheduler.feed, "get_all_universe_items", return_value=sample_universe):
+        with patch.object(scheduler.feed.gateway, "download", side_effect=mock_gw_download):
+            with patch("src.scheduler.scanner_scheduler.is_market_open_ist", return_value=True):
+                with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=True):
+                    # Run 10 scan cycles
+                    for cycle in range(10):
+                        scheduler.scan_universe_now()
 
     assert yf_calls == 0, f"Expected 0 yfinance calls across 10 healthy scan cycles, but got {yf_calls}!"
 

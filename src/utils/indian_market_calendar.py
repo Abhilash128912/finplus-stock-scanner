@@ -117,7 +117,13 @@ MCX_FULL_DAY_HOLIDAYS = {
 
 
 def get_current_ist_datetime() -> datetime.datetime:
-    """Returns timezone-aware current datetime in IST."""
+    """Returns timezone-aware current datetime in IST, with optional FAKED_SYSTEM_IST override."""
+    faked = os.getenv("FAKED_SYSTEM_IST")
+    if faked:
+        try:
+            return datetime.datetime.fromisoformat(faked).astimezone(IST)
+        except Exception:
+            pass
     return datetime.datetime.now(tz=IST)
 
 

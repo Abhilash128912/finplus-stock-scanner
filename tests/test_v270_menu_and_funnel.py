@@ -15,6 +15,8 @@ import time
 from unittest.mock import patch, MagicMock
 import pytest
 
+IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
 from src.paper.live_paper_tracker import LivePaperTracker
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 
@@ -33,31 +35,56 @@ def test_tracker(tmp_path, mock_trading_hours):
     return tracker
 
 def test_15_triggers_capped_at_12_ntfy_alerts(test_tracker):
-    """15 valid triggers occur in a day: up to 15 appear on panel, NTFY sent for first 12 only."""
+    """15 valid triggers occur in a day: up to 15 appear on panel; NTFY capped at max 6 before 11:30 and max 6 from 13:00 (12 total)."""
     with patch.object(NTFYDispatcher, "send_trade_trigger_alert", return_value=True) as mock_ntfy, \
          patch.dict(os.environ, {"FORCE_LOCAL_NTFY": "1"}):
         
         opened_positions = []
-        for i in range(15):
-            sym = f"SYM{i}"
-            pos = test_tracker.open_position(
-                source_app="APP_02_STOCK_SCANNER",
-                sector="INTRADAY_CASH",
-                symbol=sym,
-                action="BUY",
-                entry_price=100.0 + i,
-                stop_loss=99.5 + i, # Tight 0.5% SL
-                target=0.0,
-                quantity=10,
-                notes=f"Trigger {i}"
-            )
-            if pos:
-                opened_positions.append(pos)
+        # Morning window: 8 triggers before 11:30 IST -> only 6 NTFY alerts dispatched
+        morning_dt = datetime.datetime(2026, 11, 13, 10, 0, 0, tzinfo=IST)
+        with patch.object(test_tracker, "_get_now_ist", return_value=morning_dt):
+            for i in range(8):
+                sym = f"SYM{i}"
+                pos = test_tracker.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector="INTRADAY_CASH",
+                    symbol=sym,
+                    action="BUY",
+                    entry_price=100.0 + i,
+                    stop_loss=99.5 + i, # Tight 0.5% SL
+                    target=0.0,
+                    quantity=10,
+                    notes=f"Trigger {i}"
+                )
+                if pos:
+                    opened_positions.append(pos)
+        
+        # Exactly 6 sent in morning window
+        assert mock_ntfy.call_count == 6
 
-        # Panel holds up to 15 positions
+        # Afternoon window: 7 triggers from 13:00 IST -> remaining 6 NTFY alerts dispatched
+        afternoon_dt = datetime.datetime(2026, 11, 13, 13, 30, 0, tzinfo=IST)
+        with patch.object(test_tracker, "_get_now_ist", return_value=afternoon_dt):
+            for i in range(8, 15):
+                sym = f"SYM{i}"
+                pos = test_tracker.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector="INTRADAY_CASH",
+                    symbol=sym,
+                    action="BUY",
+                    entry_price=100.0 + i,
+                    stop_loss=99.5 + i,
+                    target=0.0,
+                    quantity=10,
+                    notes=f"Trigger {i}"
+                )
+                if pos:
+                    opened_positions.append(pos)
+
+        # Panel holds all 15 positions (never limited)
         assert len(opened_positions) == 15
         assert len(test_tracker.active_positions) == 15
-        # NTFY trigger alert dispatched for at most 12 triggers
+        # NTFY trigger alert dispatched for exactly 12 triggers total (6 morning + 6 afternoon)
         assert mock_ntfy.call_count == 12
 
 def test_30_trades_at_50_pct_win_produces_grade_c_and_low_confidence_tag(test_tracker):

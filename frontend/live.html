@@ -294,19 +294,29 @@
         Side:
         <select class="select-dropdown" id="sideFilter" onchange="renderPositions()">
           <option value="ALL">All Sides</option>
-          <option value="BUY">BUY Only</option>
-          <option value="SELL">SELL Only</option>
+          <option value="BUY">BUY (Long)</option>
+          <option value="SELL">SELL (Short)</option>
+        </select>
+      </div>
+      <div>
+        Status:
+        <select class="select-dropdown" id="takenFilter" onchange="renderPositions()">
+          <option value="ALL">All Trades</option>
+          <option value="TAKEN">Taken Only</option>
+          <option value="UNTAKEN">Untaken Only</option>
         </select>
       </div>
       <div>
         Sort:
         <select class="select-dropdown" id="sortFilter" onchange="renderPositions()">
+          <option value="score">Rank Score (Default)</option>
           <option value="pnl_desc">P&L (High to Low)</option>
           <option value="grade">Grade (A to C)</option>
           <option value="r_desc">Locked R (High)</option>
           <option value="time">Time (Latest)</option>
         </select>
       </div>
+      <button id="toggleShowAllBtn" class="nav-tab active" onclick="toggleShowAll()" style="margin-left: auto;">Top 12 Ranked</button>
     </div>
   </div>
 
@@ -332,6 +342,12 @@
   <script>
     let activeSegment = 'ALL';
     let rawData = null;
+    let showAllTrades = false;
+
+    function toggleShowAll() {
+      showAllTrades = !showAllTrades;
+      renderPositions();
+    }
 
     function setSegment(seg, el) {
       activeSegment = seg;
@@ -368,7 +384,7 @@
       badge.style.background = isPositive ? 'var(--green-bg)' : 'var(--red-bg)';
       badge.style.color = isPositive ? 'var(--green)' : 'var(--red)';
 
-      document.getElementById('capitalVal').innerText = `₹${(rawData.current_equity || capital).toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
+      document.getElementById('capitalVal').innerText = `₹${(rawData.virtual_starting_capital || capital).toLocaleString('en-IN', {maximumFractionDigits: 0})}`;
       document.getElementById('realizedNetVal').innerText = `₹${(rawData.net_realized_pnl || 0).toLocaleString('en-IN', {maximumFractionDigits: 2})}`;
       document.getElementById('activeCountVal').innerText = `${rawData.active_positions_count || 0} Open`;
 
@@ -394,10 +410,11 @@
 
       const gradeFilter = document.getElementById('gradeFilter').value;
       const sideFilter = document.getElementById('sideFilter').value;
+      const takenFilter = document.getElementById('takenFilter').value;
       const sortFilter = document.getElementById('sortFilter').value;
 
       if (activeSegment === 'CLOSED') {
-        renderClosedTrades(container, gradeFilter, sideFilter, sortFilter);
+        renderClosedTrades(container, gradeFilter, sideFilter, takenFilter, sortFilter);
         return;
       }
 
@@ -418,14 +435,46 @@
       if (sideFilter !== 'ALL') {
         list = list.filter(p => p.action === sideFilter);
       }
+      // Filter by Taken
+      if (takenFilter === 'TAKEN') {
+        list = list.filter(p => p.taken === 1);
+      } else if (takenFilter === 'UNTAKEN') {
+        list = list.filter(p => p.taken !== 1);
+      }
+
+      function calcScore(p) {
+        let score = (p.grade === 'A' ? 100 : (p.grade === 'B' ? 70 : 40));
+        score += (p.setup_win_pct || 50);
+        score += Math.max(0, (p.profit_locked_r || 0) * 10);
+        if ((p.unrealized_pnl || 0) > 0) score += 20;
+        if (p.taken) score += 10;
+        return score;
+      }
 
       // Sorting
       list.sort((a, b) => {
+        if (sortFilter === 'score') return calcScore(b) - calcScore(a);
         if (sortFilter === 'pnl_desc') return (b.unrealized_pnl || 0) - (a.unrealized_pnl || 0);
         if (sortFilter === 'r_desc') return (b.profit_locked_r || 0) - (a.profit_locked_r || 0);
         if (sortFilter === 'grade') return (a.grade || 'B').localeCompare(b.grade || 'B');
         return (b.opened_at_utc || '').localeCompare(a.opened_at_utc || '');
       });
+
+      const totalMatches = list.length;
+      const toggleBtn = document.getElementById('toggleShowAllBtn');
+      if (toggleBtn) {
+        if (!showAllTrades) {
+          toggleBtn.innerText = `Top 12 Ranked (Show All ${totalMatches})`;
+          toggleBtn.classList.add('active');
+        } else {
+          toggleBtn.innerText = `All Trades (${totalMatches}) (Show Top 12)`;
+          toggleBtn.classList.remove('active');
+        }
+      }
+
+      if (!showAllTrades && list.length > 12) {
+        list = list.slice(0, 12);
+      }
 
       if (list.length === 0) {
         container.innerHTML = `
@@ -542,10 +591,12 @@
       });
     }
 
-    function renderClosedTrades(container, gradeFilter, sideFilter, sortFilter) {
+    function renderClosedTrades(container, gradeFilter, sideFilter, takenFilter, sortFilter) {
       let closed = rawData.recent_closed_trades || [];
       if (gradeFilter !== 'ALL') closed = closed.filter(t => (t.grade || 'B') === gradeFilter);
       if (sideFilter !== 'ALL') closed = closed.filter(t => t.action === sideFilter);
+      if (takenFilter === 'TAKEN') closed = closed.filter(t => t.taken === 1);
+      else if (takenFilter === 'UNTAKEN') closed = closed.filter(t => t.taken !== 1);
 
       if (closed.length === 0) {
         container.innerHTML = `

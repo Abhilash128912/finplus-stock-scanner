@@ -132,8 +132,9 @@ async def deep_health_check():
     """
     from datetime import datetime, timezone, timedelta
     from src.utils.indian_market_calendar import is_equity_market_open_ist, is_nse_holiday
+    from src.utils.time_and_logger import get_ist_now
 
-    ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    ist_now = get_ist_now()
     date_str = ist_now.strftime("%Y-%m-%d")
 
     market_open, market_status_reason = is_equity_market_open_ist()

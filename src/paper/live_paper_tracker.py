@@ -28,7 +28,7 @@ from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 logger = setup_logger("LivePaperTracker")
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
-VIRTUAL_STARTING_CAPITAL = 100_000.0  # ₹1 Lakh Virtual Sandbox Capital
+VIRTUAL_STARTING_CAPITAL = float(os.getenv("VIRTUAL_CAPITAL", "100000.0"))  # Configurable Virtual Sandbox Capital (default ₹1 Lakh)
 MAX_CONCURRENT_PER_SEGMENT = 6        # Ingest all distinct signals simultaneously
 
 
@@ -42,7 +42,7 @@ class LivePaperTracker:
         else:
             self.db_path = db_path
 
-        self.virtual_capital = VIRTUAL_STARTING_CAPITAL
+        self.virtual_capital = float(os.getenv("VIRTUAL_CAPITAL", str(VIRTUAL_STARTING_CAPITAL)))
         self._lock = threading.Lock()
         self.active_positions: Dict[str, Dict[str, Any]] = {}
         self.symbol_last_close_time: Dict[str, float] = {}
@@ -1281,20 +1281,45 @@ class LivePaperTracker:
         }
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
-        """Dispatches instant NTFY push notification on trade trigger (Phase 5h & 6c: capped at 12 triggers/day)."""
-        today_ist = get_ist_now().strftime("%Y-%m-%d")
+        """Dispatches instant NTFY push notification on trade trigger (Phase 5h & 6c: capped at 12 triggers/day, max 6 before 11:30 IST and max 6 from 13:00 IST)."""
+        now_ist = self._get_now_ist()
+        today_ist = now_ist.strftime("%Y-%m-%d")
         if getattr(self, "last_ntfy_trigger_date", "") != today_ist:
             self.last_ntfy_trigger_date = today_ist
+            self.daily_morning_ntfy_count = 0
+            self.daily_afternoon_ntfy_count = 0
             self.daily_ntfy_triggers_count = 0
 
+        # Overall day cap: 12 triggers
         if self.daily_ntfy_triggers_count >= 12:
             logger.info(f"NTFY trigger alert capped: daily limit of 12 triggers reached today ({today_ist}).")
+            return
+
+        t = now_ist.time()
+        is_morning = (t.hour < 11 or (t.hour == 11 and t.minute < 30))
+        is_afternoon = (t.hour >= 13)
+
+        if is_morning:
+            if getattr(self, "daily_morning_ntfy_count", 0) >= 6:
+                logger.info(f"NTFY trigger alert capped: morning window limit of 6 reached before 11:30 IST ({self.daily_morning_ntfy_count}/6).")
+                return
+        elif is_afternoon:
+            if getattr(self, "daily_afternoon_ntfy_count", 0) >= 6:
+                logger.info(f"NTFY trigger alert capped: afternoon window limit of 6 reached from 13:00 IST ({self.daily_afternoon_ntfy_count}/6).")
+                return
+        else:
+            # 11:30 to 13:00 IST midday pause to avoid morning exhaustion
+            logger.info(f"NTFY trigger alert skipped: midday window (11:30-13:00 IST) paused to avoid exhaustion.")
             return
 
         # Suppress local dispatches to prevent eating into cloud production quota unless forced
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
             logger.debug("Local development environment: Suppressing live NTFY trade opened push.")
+            if is_morning:
+                self.daily_morning_ntfy_count = getattr(self, "daily_morning_ntfy_count", 0) + 1
+            elif is_afternoon:
+                self.daily_afternoon_ntfy_count = getattr(self, "daily_afternoon_ntfy_count", 0) + 1
             self.daily_ntfy_triggers_count += 1
             return
 
@@ -1303,8 +1328,21 @@ class LivePaperTracker:
             dispatcher = NTFYDispatcher()
             sent = dispatcher.send_trade_trigger_alert(pos, max_retries=3)
             if sent:
+                if is_morning:
+                    self.daily_morning_ntfy_count = getattr(self, "daily_morning_ntfy_count", 0) + 1
+                elif is_afternoon:
+                    self.daily_afternoon_ntfy_count = getattr(self, "daily_afternoon_ntfy_count", 0) + 1
                 self.daily_ntfy_triggers_count += 1
-                logger.info(f"NTFY Trade Trigger push sent for {pos['symbol']} ({self.daily_ntfy_triggers_count}/12 today)")
+                logger.info(f"NTFY Trade Trigger push sent for {pos['symbol']} ({self.daily_ntfy_triggers_count}/12 today - Morning: {getattr(self, 'daily_morning_ntfy_count', 0)}, Afternoon: {getattr(self, 'daily_afternoon_ntfy_count', 0)})")
+                
+                # Mirror quota count to Firestore if connected
+                try:
+                    from src.storage.firestore_backend import FirestoreBackend
+                    fb = FirestoreBackend()
+                    if fb.is_connected:
+                        fb.mirror_ntfy_quota(today_ist, self.daily_ntfy_triggers_count)
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Failed sending trade opened alert to NTFY: {e}")
 

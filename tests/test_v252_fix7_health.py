@@ -41,8 +41,11 @@ async def test_health_deep_stale_feed_during_market_hours():
     scheduler.is_running = True
     scheduler.is_stale_feed = True  # Simulate stale feed
 
+    fake_utc = datetime.datetime(2026, 11, 10, 5, 30, 0, tzinfo=datetime.timezone.utc)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        with patch("src.utils.indian_market_calendar.is_equity_market_open_ist", return_value=(True, "Market Open")):
+        with patch("src.utils.indian_market_calendar.is_equity_market_open_ist", return_value=(True, "Market Open")), \
+             patch("src.utils.indian_market_calendar.is_nse_holiday", return_value=(False, "")), \
+             patch("src.api.server.get_utc_iso", return_value="2026-11-10T05:30:00Z"):
             resp = await client.get("/api/health/deep")
             assert resp.status_code == 503
             data = resp.json()

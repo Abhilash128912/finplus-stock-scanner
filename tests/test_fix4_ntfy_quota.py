@@ -24,7 +24,8 @@ from src.notifications.ntfy_dispatcher import NTFYDispatcher, MAX_DAILY_NOTIFICA
 def test_ntfy_counter_persists_across_instances(tmp_path):
     """Requirement 4a: Daily counter stored in SQLite survives restarts."""
     db_file = tmp_path / "test_ledger.db"
-    today = time.strftime("%Y-%m-%d")
+    from src.utils.time_and_logger import get_ist_now
+    today = get_ist_now().strftime("%Y-%m-%d")
 
     # Instance 1: Initial state
     ledger1 = ScheduleLedger(db_path=str(db_file))
@@ -55,7 +56,8 @@ def test_ntfy_counter_persists_across_instances(tmp_path):
 def test_priority_alerts_bypass_cap(tmp_path):
     """Requirement 4b: Stop-loss, exit, and trade-open alerts bypass the 220 cap."""
     db_file = tmp_path / "test_ledger_cap.db"
-    today = time.strftime("%Y-%m-%d")
+    from src.utils.time_and_logger import get_ist_now
+    today = get_ist_now().strftime("%Y-%m-%d")
 
     ledger = ScheduleLedger(db_path=str(db_file))
     dispatcher = NTFYDispatcher(ledger=ledger)

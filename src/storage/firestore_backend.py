@@ -242,17 +242,59 @@ class FirestoreBackend:
         except Exception as e:
             logger.warning(f"Firestore mirror ntfy quota error: {e}")
 
-    def mirror_daily_latch(self, date_str: str, symbol: str, alert_type: str):
+    def mirror_daily_latch(self, date_str: str, symbol: str, break_direction: int = 1, break_price: float = 0.0):
         """Mirrors daily breakout deduplication latch."""
         if not self.can_write(is_critical=True):
             return
         try:
             col = self.get_collection_path("latches")
             doc_ref = self.client.document(f"{col}/{date_str}_{symbol}")
-            doc_ref.set({"date_str": date_str, "symbol": symbol, "alert_type": alert_type, "timestamp_utc": get_utc_iso()}, merge=True)
+            doc_ref.set({
+                "date_str": date_str,
+                "symbol": symbol,
+                "break_direction": int(break_direction),
+                "break_price": float(break_price),
+                "timestamp_utc": get_utc_iso()
+            }, merge=True)
             self.record_usage(writes=1)
         except Exception as e:
             logger.warning(f"Firestore mirror latch error: {e}")
+
+    def mirror_setup_stats(self, setup_key: str, stats: Dict[str, Any]):
+        """Mirrors setup stats and grade to Firestore."""
+        if not self.can_write(is_critical=True):
+            return
+        try:
+            col = self.get_collection_path("setup_stats")
+            doc_ref = self.client.document(f"{col}/{setup_key}")
+            doc_ref.set(stats, merge=True)
+            self.record_usage(writes=1)
+        except Exception as e:
+            logger.warning(f"Firestore mirror setup stats error: {e}")
+
+    def mirror_watch_pacing(self, date_str: str, pacing_data: Dict[str, Any]):
+        """Mirrors watch pacing and symbols alerted today."""
+        if not self.can_write(is_critical=True):
+            return
+        try:
+            col = self.get_collection_path("state")
+            doc_ref = self.client.document(f"{col}/watch_pacing_{date_str}")
+            doc_ref.set(pacing_data, merge=True)
+            self.record_usage(writes=1)
+        except Exception as e:
+            logger.warning(f"Firestore mirror watch pacing error: {e}")
+
+    def mirror_yfinance_usage(self, date_str: str, usage_data: Dict[str, Any]):
+        """Mirrors yfinance daily gateway usage counters."""
+        if not self.can_write(is_critical=True):
+            return
+        try:
+            col = self.get_collection_path("state")
+            doc_ref = self.client.document(f"{col}/yfinance_usage_{date_str}")
+            doc_ref.set(usage_data, merge=True)
+            self.record_usage(writes=1)
+        except Exception as e:
+            logger.warning(f"Firestore mirror yfinance usage error: {e}")
 
     # -------------------------------------------------------------
     # 2. CANDLE HISTORY: One Compact Gzipped Document Per Symbol
@@ -404,8 +446,10 @@ class FirestoreBackend:
                                     (position_id, source_app, sector, symbol, action, is_option, is_put,
                                      entry_price, current_price, initial_sl, trailing_sl, target, quantity,
                                      risk_r, opt_entry_premium, opt_current_premium, opt_initial_sl,
-                                     opt_trailing_sl, opt_target, stage, status, entry_time_ist, opened_at_utc, notes)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     opt_trailing_sl, opt_target, stage, status, entry_time_ist, opened_at_utc,
+                                     notes, highest_price, tags, setup_key, grade, taken, taken_time_ist,
+                                     real_entry, real_qty, last_trail_ntfy_ts)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
                                     pos_id, pos.get("source_app", "SCANNER"), pos.get("sector", "INTRADAY_CASH"),
                                     pos.get("symbol"), pos.get("action", "BUY"), pos.get("is_option", 0), pos.get("is_put", 0),
@@ -414,7 +458,10 @@ class FirestoreBackend:
                                     pos.get("risk_r", 2.0), pos.get("opt_entry_premium", 0.0), pos.get("opt_current_premium", 0.0),
                                     pos.get("opt_initial_sl", 0.0), pos.get("opt_trailing_sl", 0.0), pos.get("opt_target", 0.0),
                                     pos.get("stage", "INITIAL"), "OPEN", pos.get("entry_time_ist", ""), pos.get("opened_at_utc", ""),
-                                    pos.get("notes", "")
+                                    pos.get("notes", ""), pos.get("highest_price", 0.0), pos.get("tags", ""),
+                                    pos.get("setup_key", ""), pos.get("grade", "B"), pos.get("taken", 0),
+                                    pos.get("taken_time_ist", ""), pos.get("real_entry", 0.0), pos.get("real_qty", 0),
+                                    pos.get("last_trail_ntfy_ts", 0.0)
                                 ))
                                 paper_tracker.active_positions[pos_id] = pos
                             else:
@@ -423,20 +470,128 @@ class FirestoreBackend:
                                     INSERT OR REPLACE INTO closed_paper_trades
                                     (trade_id, position_id, symbol, sector, action, is_option, entry_price,
                                      exit_price, quantity, gross_pnl, total_charges, net_pnl, exit_reason,
-                                     entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc,
+                                     highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, r_multiple)
+                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                                 """, (
                                     trade_id, pos_id, pos.get("symbol"), pos.get("sector", "INTRADAY_CASH"),
                                     pos.get("action", "BUY"), pos.get("is_option", 0), pos.get("entry_price", 0.0),
                                     pos.get("exit_price", 0.0), pos.get("quantity", 1), pos.get("gross_pnl", 0.0),
                                     pos.get("total_charges", 0.0), pos.get("net_pnl", 0.0), pos.get("exit_reason", "EXIT"),
                                     pos.get("entry_time_ist", ""), pos.get("exit_time_ist", ""), pos.get("opened_at_utc", ""),
-                                    pos.get("closed_at_utc", "")
+                                    pos.get("closed_at_utc", ""), pos.get("highest_price", 0.0), pos.get("tags", ""),
+                                    pos.get("setup_key", ""), pos.get("grade", "B"), pos.get("taken", 0),
+                                    pos.get("taken_time_ist", ""), pos.get("real_entry", 0.0), pos.get("real_qty", 0),
+                                    pos.get("r_multiple", 0.0)
                                 ))
                             conn.commit()
                         restored_trades += 1
             except Exception as e:
                 logger.error(f"Error restoring paper trades from Firestore: {e}")
+
+        # 3. Restore Setup Stats
+        if paper_tracker:
+            try:
+                col = self.get_collection_path("setup_stats")
+                docs = self.client.collection(col).stream()
+                for doc in docs:
+                    reads_used += 1
+                    data = doc.to_dict()
+                    sk = data.get("setup_key")
+                    if sk:
+                        with paper_tracker._get_connection() as conn:
+                            conn.execute("""
+                                INSERT OR REPLACE INTO setup_stats (
+                                    setup_key, total_trades, wins, win_pct, avg_r, expectancy,
+                                    rolling_30_trades, rolling_30_wins, rolling_30_win_pct, rolling_30_expectancy,
+                                    grade, updated_at_utc
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                sk, data.get("total_trades", 0), data.get("wins", 0), data.get("win_pct", 0.0),
+                                data.get("avg_r", 0.0), data.get("expectancy", 0.0),
+                                data.get("rolling_30_trades", 0), data.get("rolling_30_wins", 0),
+                                data.get("rolling_30_win_pct", 0.0), data.get("rolling_30_expectancy", 0.0),
+                                data.get("grade", "B"), data.get("updated_at_utc", get_utc_iso())
+                            ))
+                            conn.commit()
+            except Exception as e:
+                logger.warning(f"Error restoring setup stats from Firestore: {e}")
+
+        # 4. Restore Daily Latches
+        if schedule_ledger:
+            try:
+                col = self.get_collection_path("latches")
+                docs = self.client.collection(col).stream()
+                for doc in docs:
+                    reads_used += 1
+                    data = doc.to_dict()
+                    d_str = data.get("date_str")
+                    sym = data.get("symbol")
+                    if d_str and sym:
+                        with schedule_ledger._get_connection() as conn:
+                            conn.execute("""
+                                INSERT OR IGNORE INTO daily_breakout_latch (date_str, symbol, break_direction, break_price, latched_at_utc)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (
+                                d_str, sym, int(data.get("break_direction", 1)),
+                                float(data.get("break_price", 0.0)),
+                                data.get("timestamp_utc", get_utc_iso())
+                            ))
+                            conn.commit()
+            except Exception as e:
+                logger.warning(f"Error restoring latches from Firestore: {e}")
+
+        # 5. Restore Schedule Ledger Milestones
+        if schedule_ledger:
+            try:
+                col = self.get_collection_path("schedule_ledger")
+                docs = self.client.collection(col).stream()
+                for doc in docs:
+                    reads_used += 1
+                    data = doc.to_dict()
+                    d_str = data.get("date_str")
+                    s_id = data.get("slot_id")
+                    if d_str and s_id:
+                        with schedule_ledger._get_connection() as conn:
+                            conn.execute("""
+                                INSERT OR REPLACE INTO daily_schedule_ledger (
+                                    date_str, slot_id, status, executed_at_utc, scheduled_time_ist,
+                                    dispatched_at_ist, attempts, error_message, updated_at_utc
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                d_str, s_id, data.get("status", "SUCCESS"), data.get("executed_at_utc", ""),
+                                data.get("scheduled_time_ist", ""), data.get("dispatched_at_ist", ""),
+                                data.get("attempts", 1), data.get("error_message", None),
+                                data.get("updated_at_utc", get_utc_iso())
+                            ))
+                            conn.commit()
+            except Exception as e:
+                logger.warning(f"Error restoring schedule ledger from Firestore: {e}")
+
+        # 6. Restore Virtual Capital & State
+        try:
+            col = self.get_collection_path("state")
+            # Virtual Capital
+            vc_doc = self.client.document(f"{col}/virtual_capital").get()
+            reads_used += 1
+            if vc_doc.exists:
+                vc_data = vc_doc.to_dict()
+                if paper_tracker and "virtual_capital" in vc_data:
+                    paper_tracker.virtual_capital = float(vc_data["virtual_capital"])
+                    logger.info(f"Restored virtual capital: ₹{paper_tracker.virtual_capital:,.2f}")
+
+            # NTFY Quota for today
+            today_str = self._get_ist_date_str()
+            nq_doc = self.client.document(f"{col}/ntfy_quota_{today_str}").get()
+            reads_used += 1
+            if nq_doc.exists:
+                nq_data = nq_doc.to_dict()
+                cnt = nq_data.get("quota_count", 0)
+                if paper_tracker:
+                    paper_tracker.daily_ntfy_triggers_count = cnt
+                    logger.info(f"Restored daily NTFY quota count for {today_str}: {cnt}")
+        except Exception as e:
+            logger.warning(f"Error restoring state/virtual capital from Firestore: {e}")
 
         # Record total reads used during restore
         self.record_usage(reads=reads_used)

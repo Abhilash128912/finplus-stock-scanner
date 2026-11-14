@@ -64,14 +64,47 @@ def run_full_day_replay():
     ]
     counts["symbols_scanned"] = len(symbols)
     
+    # Mock NTFY dispatcher
+    ntfy = MagicMock()
+    
+    # Fake session clock at 09:25 IST (Phase 0: Pre-breakout WATCH stage)
+    ist_0925 = datetime.datetime(2026, 11, 13, 9, 25, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+    print(f"\n[09:25 IST] Phase 0: Early Coiling & Pre-Breakout WATCH Detection...")
+    with patch.object(tracker, "_get_now_ist", return_value=ist_0925):
+        # Simulate RELIANCE approaching PDH within 0.1% - 0.5% with rising RVOL
+        watch_df = pd.DataFrame({
+            "Open": [498.0, 500.0, 501.0, 502.0, 503.0],
+            "High": [500.0, 501.5, 502.5, 503.5, 504.0],
+            "Low": [497.5, 499.5, 500.5, 501.5, 502.5],
+            "Close": [499.5, 501.0, 502.0, 503.0, 503.5],
+            "Volume": [10000, 12000, 15000, 18000, 22000]
+        }, index=pd.date_range("2026-11-13 09:00", periods=5, freq="15min"))
+        
+        watch_eval = {
+            "symbol": "RELIANCE",
+            "live_ltp": 503.5, # 0.3% below PDH 505.0 (within 0.1-0.5% buffer)
+            "confluence_score": 88,
+            "pdh": 505.0,
+            "pdl": 495.0,
+            "vwap": 502.0,
+            "rvol": 1.4,
+            "regime_confluence": "BULLISH_CONFLUENCE",
+            "feed_status": "HEALTHY",
+            "pct_change_pdc": 0.8,
+            "atr_val": 7.5
+        }
+        watch_candidates = engine.evaluate_setups(watch_df, watch_eval, {"symbol": "RELIANCE", "category": "INTRADAY_CASH"}, now_ist=ist_0925)
+        for w_cand in watch_candidates:
+            if w_cand.get("stage_type") == "WATCH":
+                counts["watch_messages"] += 1
+                ntfy.send_watch_alert(w_cand["symbol"], w_cand["setup_name"], w_cand["boundary"], w_cand["entry_price"], w_cand["rvol"])
+                print(f"  -> [WATCH ALERT DISPATCHED] {w_cand['symbol']} approaching boundary ₹{w_cand['boundary']:.2f} ({w_cand['notes']})")
+
     # Fake session clock at 09:35 IST
     ist_0935 = datetime.datetime(2026, 11, 13, 9, 35, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
     date_str = ist_0935.strftime("%Y-%m-%d")
     
     print(f"\n[09:35 IST] Phase 1: Scan & Multi-Setup Evaluation on {len(symbols)} symbols...")
-    
-    # Mock NTFY dispatcher
-    ntfy = MagicMock()
     
     with patch.object(tracker, "_get_now_ist", return_value=ist_0935):
         for i, sym in enumerate(symbols):

@@ -10,7 +10,7 @@ import csv
 import io
 import time
 import urllib.request
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from src.utils.time_and_logger import setup_logger, get_utc_iso
 
 logger = setup_logger("FNOContractMaster")
@@ -61,9 +61,13 @@ INDEX_SPECS = [
     }
 ]
 
+FNO_MAX_LOT_SIZE_DEFAULT = int(os.getenv("FNO_MAX_LOT_SIZE", "500"))
+FNO_ALWAYS_INCLUDE_DEFAULT = [s.strip().upper() for s in os.getenv("FNO_ALWAYS_INCLUDE", "RELIANCE").split(",") if s.strip()]
+
 class FNOContractMaster:
-    def __init__(self, max_lot_size: int = 500):
-        self.max_lot_size = max_lot_size
+    def __init__(self, max_lot_size: Optional[int] = None, always_include: Optional[List[str]] = None):
+        self.max_lot_size = max_lot_size if max_lot_size is not None else FNO_MAX_LOT_SIZE_DEFAULT
+        self.always_include = set(always_include) if always_include is not None else set(FNO_ALWAYS_INCLUDE_DEFAULT)
         self._universe = []
         self.last_load_utc = None
 
@@ -105,13 +109,6 @@ class FNOContractMaster:
         raw_csv = self.fetch_nse_mktlots_csv()
         equities = []
 
-        # Key High-Beta / High-Volume F&O Market Movers that must ALWAYS be included
-        PRIORITY_LEADERS = {
-            "MARUTI", "M&M", "BAJAJ-AUTO", "HEROMOTOCO", "EICHERMOT", "TATAMOTORS",
-            "RELIANCE", "TCS", "INFY", "HDFCBANK", "ICICIBANK", "SBIN", "AXISBANK",
-            "LT", "BHARTIARTL", "TITAN", "TRENT", "BOSCHLTD", "ABB", "COFORGE"
-        }
-
         if raw_csv:
             reader = csv.reader(io.StringIO(raw_csv.strip()))
             try:
@@ -129,8 +126,8 @@ class FNOContractMaster:
                             
                         try:
                             lot = int(lot_str)
-                            # Filter rule: lot <= 500 OR priority leader
-                            if lot <= self.max_lot_size or sym in PRIORITY_LEADERS:
+                            # Owner's rule: lot strictly UNDER max_lot_size (< 500), OR in always_include (Reliance)
+                            if lot < self.max_lot_size or sym in self.always_include:
                                 # Determine reasonable strike step based on price/lot
                                 strike_step = 50
                                 if lot <= 100:
@@ -147,21 +144,21 @@ class FNOContractMaster:
                                     "strike_step": strike_step,
                                     "importance": "HIGH",
                                     "category": "STOCK_OPTIONS",
-                                    "is_priority_leader": sym in PRIORITY_LEADERS
+                                    "is_priority_leader": sym in self.always_include
                                 })
                         except ValueError:
                             continue
             except Exception as e:
                 logger.error(f"Error parsing fo_mktlots.csv: {e}")
 
-        # Sort priority leaders to the front, followed by remaining liquid F&O stocks
+        # Sort priority stocks (Reliance) to the front, followed by remaining liquid F&O stocks
         equities.sort(key=lambda x: (not x.get("is_priority_leader", False), x["symbol"]))
 
         # Limit to top N liquid equities (default 150 captures all qualifying F&O stocks)
         selected_equities = equities[:top_n_equities]
         
-        # Combine: Sensex (BSE), Nifty (NSE), and selected equities
+        # Combine: Sensex (BSE), Nifty (NSE), Midcap Nifty (NSE), and selected equities
         self._universe = INDEX_SPECS + selected_equities
         self.last_load_utc = get_utc_iso()
-        logger.info(f"Loaded {len(self._universe)} total instruments ({len(selected_equities)} liquid equities lot <= {self.max_lot_size}).")
+        logger.info(f"Loaded {len(self._universe)} total instruments ({len(selected_equities)} liquid equities lot < {self.max_lot_size} + always_include {list(self.always_include)}).")
         return self._universe

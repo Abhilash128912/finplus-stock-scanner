@@ -13,7 +13,7 @@ import os
 import unittest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 # Add parent path
@@ -84,43 +84,50 @@ class TestStockScanner(unittest.TestCase):
         self.assertIn("FAIL-CLOSED", reg.get("trend", {}).get("label", ""))
 
     def test_04_fno_contract_master_dynamic(self):
-        """Verify dynamic NSE F&O contract master loads and filters lot <= 500 (+ Reliance)."""
-        master = FNOContractMaster(max_lot_size=500)
-        universe = master.load_universe(top_n_equities=10)
-        self.assertGreaterEqual(len(universe), 2)
+        """Verify dynamic NSE F&O contract master loads and filters lot < 500 (+ Reliance)."""
+        master = FNOContractMaster(max_lot_size=500, always_include=["RELIANCE"])
+        universe = master.load_universe(top_n_equities=150)
+        self.assertEqual(len(universe), 97)
         symbols = [u["symbol"] for u in universe]
         self.assertIn("SENSEX", symbols)
         self.assertIn("NIFTY", symbols)
+        self.assertIn("MIDCPNIFTY", symbols)
+        self.assertIn("RELIANCE", symbols)
+        self.assertNotIn("HDFCBANK", symbols)
+        self.assertNotIn("NESTLEIND", symbols)
 
     def test_05_shortlist_engine_continuation(self):
         """Verify ShortlistEngine ranks correctly and detects Trend Continuation in 30m cycles."""
-        engine = ShortlistEngine()
-        sample_items = [
-            {
-                'symbol': 'SENSEX',
-                'category': 'INDEX_OPTIONS',
-                'confluence_score': 75,
-                'signal_direction': 1,
-                'recommended_contract': 'SENSEX 81400 CE',
-                'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
-            },
-            {
-                'symbol': 'MARUTI',
-                'category': 'STOCK_OPTIONS',
-                'confluence_score': 85,
-                'signal_direction': 1,
-                'recommended_contract': 'MARUTI 11500 CE',
-                'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
-            }
-        ]
-        
-        cycle1 = engine.select_best_candidates(sample_items)
-        self.assertFalse(cycle1["index_continuation"])
-        self.assertFalse(cycle1["stock_continuation"])
-        
-        cycle2 = engine.select_best_candidates(sample_items)
-        self.assertTrue(cycle2["index_continuation"])
-        self.assertTrue(cycle2["stock_continuation"])
+        from unittest.mock import patch
+        frozen_time = datetime(2026, 11, 10, 10, 0, 0, tzinfo=timezone(timedelta(hours=5, minutes=30)))
+        with patch("src.analytics.shortlist_engine.get_ist_now", return_value=frozen_time):
+            engine = ShortlistEngine()
+            sample_items = [
+                {
+                    'symbol': 'SENSEX',
+                    'category': 'INDEX_OPTIONS',
+                    'confluence_score': 75,
+                    'signal_direction': 1,
+                    'recommended_contract': 'SENSEX 81400 CE',
+                    'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
+                },
+                {
+                    'symbol': 'MARUTI',
+                    'category': 'STOCK_OPTIONS',
+                    'confluence_score': 85,
+                    'signal_direction': 1,
+                    'recommended_contract': 'MARUTI 11500 CE',
+                    'regime_confluence': 'APPROVED_HIGH_CONFLUENCE'
+                }
+            ]
+            
+            cycle1 = engine.select_best_candidates(sample_items)
+            self.assertFalse(cycle1["index_continuation"])
+            self.assertFalse(cycle1["stock_continuation"])
+            
+            cycle2 = engine.select_best_candidates(sample_items)
+            self.assertTrue(cycle2["index_continuation"])
+            self.assertTrue(cycle2["stock_continuation"])
 
 if __name__ == "__main__":
     unittest.main()

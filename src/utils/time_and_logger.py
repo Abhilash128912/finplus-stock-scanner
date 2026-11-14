@@ -17,7 +17,13 @@ IST_TZ = ZoneInfo("Asia/Kolkata")
 UTC_TZ = timezone.utc
 
 def get_utc_now() -> datetime:
-    """Returns current timezone-aware UTC datetime."""
+    """Returns current timezone-aware UTC datetime, with optional FAKED_SYSTEM_IST override."""
+    faked = os.getenv("FAKED_SYSTEM_IST")
+    if faked:
+        try:
+            return datetime.fromisoformat(faked).astimezone(UTC_TZ)
+        except Exception:
+            pass
     return datetime.now(UTC_TZ)
 
 def get_utc_iso() -> str:
@@ -25,7 +31,13 @@ def get_utc_iso() -> str:
     return get_utc_now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 def get_ist_now() -> datetime:
-    """Returns current timezone-aware IST datetime."""
+    """Returns current timezone-aware IST datetime, with optional FAKED_SYSTEM_IST override."""
+    faked = os.getenv("FAKED_SYSTEM_IST")
+    if faked:
+        try:
+            return datetime.fromisoformat(faked).astimezone(IST_TZ)
+        except Exception:
+            pass
     return datetime.now(IST_TZ)
 
 def get_ist_time_str() -> str:
