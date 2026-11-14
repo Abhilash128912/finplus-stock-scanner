@@ -17,8 +17,10 @@ for _p in [_APP_ROOT, _SRC_DIR]:
         sys.path.insert(0, _p)
 
 import asyncio
-from fastapi import FastAPI, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+from typing import Optional, Dict, Any, List
+from pydantic import BaseModel
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -235,8 +237,9 @@ async def deep_health_check():
             "PERSISTENCE_NOTICE: Local files are temporary on Render. Durable data is mirrored to Firebase (see Phase 2B)."
         )
 
-    # Off-hours rule: Return 200 outside market hours, weekends, and holidays
-    if not market_open or is_weekend or is_hol:
+    # Off-hours rule: Return 200 outside market hours
+    # If is_equity_market_open_ist() returns False (which handles weekends, holidays, and off-hours), return 200.
+    if not market_open:
         http_status = 200
         overall_status = "HEALTHY_OFF_HOURS"
     else:
@@ -487,6 +490,57 @@ async def sync_paper_positions():
     scheduler.paper_tracker.ingest_commodities()
     scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
+
+
+class TradeTakenRequest(BaseModel):
+    taken: bool = True
+    real_entry: Optional[float] = None
+    real_qty: Optional[int] = None
+
+@app.post("/api/trades/{trade_id}/taken")
+async def toggle_trade_taken(trade_id: str, req: TradeTakenRequest):
+    """
+    Toggles the 'Taken' flag on paper trades with optional real execution entry & qty (Phase 6e).
+    Enables tracking of trades actively executed by the owner vs automated paper suggestions.
+    """
+    if not hasattr(scheduler, "paper_tracker") or not scheduler.paper_tracker:
+        raise HTTPException(status_code=503, detail="Paper tracker not initialized")
+    success = scheduler.paper_tracker.set_trade_taken(
+        trade_id_or_pos_id=trade_id,
+        taken=req.taken,
+        real_entry=req.real_entry,
+        real_qty=req.real_qty
+    )
+    if not success:
+        return JSONResponse(status_code=404, content={"status": "ERROR", "message": f"Trade {trade_id} not found"})
+    return {
+        "status": "SUCCESS",
+        "trade_id": trade_id,
+        "taken": req.taken,
+        "real_entry": req.real_entry,
+        "real_qty": req.real_qty,
+        "taken_summary": scheduler.paper_tracker.get_taken_summary()
+    }
+
+@app.get("/api/funnel")
+async def get_funnel_endpoint(date: Optional[str] = None):
+    """
+    Exposes daily funnel report (Phase 6d):
+    Tracks symbols scanned, candidates detected by setup, and explicit rejection/filtering reasons.
+    """
+    if not hasattr(scheduler, "paper_tracker") or not scheduler.paper_tracker:
+        return {"status": "UNAVAILABLE", "message": "Paper tracker not initialized"}
+    return scheduler.paper_tracker.get_funnel_summary(date)
+
+@app.get("/api/weekly")
+async def get_weekly_performance_endpoint():
+    """
+    Returns comprehensive Sunday weekly performance report (Phase 6g):
+    Analyzes suggestions opened, taken win rate, taken total profit (₹ and R), best setup, and worst setup.
+    """
+    if not hasattr(scheduler, "paper_tracker") or not scheduler.paper_tracker:
+        return {"status": "UNAVAILABLE", "message": "Paper tracker not initialized"}
+    return scheduler.paper_tracker.get_weekly_performance_report()
 
 
 # -------------------------------------------------------------

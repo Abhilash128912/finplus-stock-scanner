@@ -121,7 +121,16 @@ class LivePaperTracker:
                     status TEXT NOT NULL,
                     entry_time_ist TEXT NOT NULL,
                     opened_at_utc TEXT NOT NULL,
-                    notes TEXT
+                    notes TEXT,
+                    highest_price REAL DEFAULT 0.0,
+                    tags TEXT DEFAULT '',
+                    setup_key TEXT DEFAULT '',
+                    grade TEXT DEFAULT 'B',
+                    taken INTEGER DEFAULT 0,
+                    taken_time_ist TEXT DEFAULT '',
+                    real_entry REAL DEFAULT 0.0,
+                    real_qty INTEGER DEFAULT 0,
+                    last_trail_ntfy_ts REAL DEFAULT 0.0
                 )
             """)
             conn.execute("""
@@ -142,9 +151,103 @@ class LivePaperTracker:
                     entry_time_ist TEXT NOT NULL,
                     exit_time_ist TEXT NOT NULL,
                     opened_at_utc TEXT NOT NULL,
-                    closed_at_utc TEXT NOT NULL
+                    closed_at_utc TEXT NOT NULL,
+                    highest_price REAL DEFAULT 0.0,
+                    tags TEXT DEFAULT '',
+                    setup_key TEXT DEFAULT '',
+                    grade TEXT DEFAULT 'B',
+                    taken INTEGER DEFAULT 0,
+                    taken_time_ist TEXT DEFAULT '',
+                    real_entry REAL DEFAULT 0.0,
+                    real_qty INTEGER DEFAULT 0,
+                    r_multiple REAL DEFAULT 0.0
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS setup_stats (
+                    setup_key TEXT PRIMARY KEY,
+                    total_trades INTEGER NOT NULL DEFAULT 0,
+                    wins INTEGER NOT NULL DEFAULT 0,
+                    win_pct REAL NOT NULL DEFAULT 0.0,
+                    avg_r REAL NOT NULL DEFAULT 0.0,
+                    expectancy REAL NOT NULL DEFAULT 0.0,
+                    rolling_30_trades INTEGER NOT NULL DEFAULT 0,
+                    rolling_30_wins INTEGER NOT NULL DEFAULT 0,
+                    rolling_30_win_pct REAL NOT NULL DEFAULT 0.0,
+                    rolling_30_expectancy REAL NOT NULL DEFAULT 0.0,
+                    grade TEXT NOT NULL DEFAULT 'B',
+                    updated_at_utc TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS funnel_metrics (
+                    date_str TEXT PRIMARY KEY,
+                    instruments_scanned INTEGER NOT NULL DEFAULT 0,
+                    total_symbols_scanned INTEGER NOT NULL DEFAULT 0,
+                    candidates_by_setup INTEGER NOT NULL DEFAULT 0,
+                    candidates_detected INTEGER NOT NULL DEFAULT 0,
+                    removed_stale_feed INTEGER NOT NULL DEFAULT 0,
+                    removed_data_suspect INTEGER NOT NULL DEFAULT 0,
+                    removed_late INTEGER NOT NULL DEFAULT 0,
+                    removed_regime_veto INTEGER NOT NULL DEFAULT 0,
+                    removed_midday_freeze INTEGER NOT NULL DEFAULT 0,
+                    removed_insufficient_history INTEGER NOT NULL DEFAULT 0,
+                    removed_latch_used INTEGER NOT NULL DEFAULT 0,
+                    removed_wide_sl INTEGER NOT NULL DEFAULT 0,
+                    trades_opened INTEGER NOT NULL DEFAULT 0,
+                    suggestions_opened_on_panel INTEGER NOT NULL DEFAULT 0,
+                    ntfy_triggers_sent INTEGER NOT NULL DEFAULT 0,
+                    wide_sl_count INTEGER NOT NULL DEFAULT 0,
+                    over_capital_count INTEGER NOT NULL DEFAULT 0,
+                    updated_at_utc TEXT NOT NULL
+                )
+            """)
+
+            # Dynamic ALTER TABLE migrations for existing databases
+            for col, col_type in [
+                ("highest_price", "REAL DEFAULT 0.0"),
+                ("tags", "TEXT DEFAULT ''"),
+                ("setup_key", "TEXT DEFAULT ''"),
+                ("grade", "TEXT DEFAULT 'B'"),
+                ("taken", "INTEGER DEFAULT 0"),
+                ("taken_time_ist", "TEXT DEFAULT ''"),
+                ("real_entry", "REAL DEFAULT 0.0"),
+                ("real_qty", "INTEGER DEFAULT 0"),
+                ("last_trail_ntfy_ts", "REAL DEFAULT 0.0")
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE active_paper_positions ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+
+            for col, col_type in [
+                ("highest_price", "REAL DEFAULT 0.0"),
+                ("tags", "TEXT DEFAULT ''"),
+                ("setup_key", "TEXT DEFAULT ''"),
+                ("grade", "TEXT DEFAULT 'B'"),
+                ("taken", "INTEGER DEFAULT 0"),
+                ("taken_time_ist", "TEXT DEFAULT ''"),
+                ("real_entry", "REAL DEFAULT 0.0"),
+                ("real_qty", "INTEGER DEFAULT 0"),
+                ("r_multiple", "REAL DEFAULT 0.0")
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE closed_paper_trades ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+
+            for col, col_type in [
+                ("total_symbols_scanned", "INTEGER NOT NULL DEFAULT 0"),
+                ("candidates_detected", "INTEGER NOT NULL DEFAULT 0"),
+                ("removed_wide_sl", "INTEGER NOT NULL DEFAULT 0"),
+                ("suggestions_opened_on_panel", "INTEGER NOT NULL DEFAULT 0"),
+                ("ntfy_triggers_sent", "INTEGER NOT NULL DEFAULT 0")
+            ]:
+                try:
+                    conn.execute(f"ALTER TABLE funnel_metrics ADD COLUMN {col} {col_type}")
+                except Exception:
+                    pass
+
             conn.commit()
 
     def _load_open_positions(self):
@@ -165,6 +268,16 @@ class LivePaperTracker:
         except Exception as e:
             logger.error(f"Error loading open positions: {e}")
 
+    def get_setup_grade(self, setup_key: str) -> str:
+        """Computes setup grade from rolling last 30 trades (Phase 6a)."""
+        if not setup_key:
+            return "B"
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT grade FROM setup_stats WHERE setup_key = ?", (setup_key,)).fetchone()
+            if row:
+                return row["grade"]
+        return "B" # Default grade B (LEARNING)
+
     def open_position(
         self,
         source_app: str,
@@ -173,11 +286,19 @@ class LivePaperTracker:
         action: str,
         entry_price: float,
         stop_loss: float,
-        target: float,
-        quantity: int = 1,
-        notes: str = ""
+        target: float = 0.0,
+        quantity: Optional[int] = None,
+        notes: str = "",
+        setup_key: Optional[str] = None,
+        atr_val: Optional[float] = None
     ) -> Optional[Dict[str, Any]]:
-        """Opens a new paper trade with realistic ATM option premium and dynamic trailing."""
+        """
+        Opens a new paper trade with automatic sizing, structural stop, and trailing exit (Phase 5).
+        - No capital or concurrency limits block execution.
+        - Slippage applied automatically (0.05% cash, 0.5% options).
+        - No target: exits follow trailing stop only.
+        - Tags: OVER_CAPITAL, WIDE_SL, LEARNING, LOW CONFIDENCE.
+        """
         now_ist = self._get_now_ist()
         curr_time = now_ist.time()
         is_weekday = now_ist.weekday() < 5
@@ -191,11 +312,6 @@ class LivePaperTracker:
             if not is_weekday or not (datetime.time(9, 0) <= curr_time < datetime.time(23, 30)):
                 logger.info(f"Market Closed: {symbol} ({sector}) rejected outside MCX hours.")
                 return None
-
-        # Max open positions per segment
-        open_in_sector = sum(1 for p in self.active_positions.values() if p["sector"] == sector and p["status"] == "OPEN")
-        if open_in_sector >= MAX_CONCURRENT_PER_SEGMENT:
-            return None
 
         clean_base = symbol.split(" ")[0].upper()
         # Avoid duplicate open positions on same symbol
@@ -217,11 +333,15 @@ class LivePaperTracker:
             tokens = symbol.upper().split()
             is_put = ("PE" in tokens) or ("PUT" in tokens) or ("SELL" in action.upper())
 
-        risk_r = abs(entry_price - stop_loss)
-        if risk_r <= 0:
-            risk_r = entry_price * 0.015
+        # Slippage: 0.05% cash/MCX, 0.5% options (Phase 5e)
+        slippage_mult = 1.0005 if action.upper() == "BUY" else 0.9995
+        actual_entry_price = round(entry_price * slippage_mult, 2)
 
-        # Realistic ATM Option Premium Model (Capital Outlay ~₹2,700 - ₹5,000)
+        risk_r = abs(actual_entry_price - stop_loss)
+        if risk_r <= 0:
+            risk_r = actual_entry_price * 0.015
+
+        # Realistic ATM Option Premium Model
         if is_option:
             if "SENSEX" in clean_base:
                 opt_entry_prem = 180.0
@@ -230,14 +350,45 @@ class LivePaperTracker:
             elif "MIDCPNIFTY" in clean_base or "MIDCAP" in clean_base:
                 opt_entry_prem = 55.0
             else:
-                opt_entry_prem = max(2.0, round(entry_price * 0.012, 2))
+                opt_entry_prem = max(2.0, round(actual_entry_price * 0.012, 2))
+            opt_entry_prem = round(opt_entry_prem * 1.005, 2) # Slippage on premium
             opt_sl = round(opt_entry_prem * 0.70, 2)   # -30% SL
-            opt_tgt = round(opt_entry_prem * 1.60, 2)  # +60% Target (1:2 R:R)
+            opt_tgt = 0.0 # No target: trail stop only (Phase 5f)
         else:
             opt_entry_prem = 0.0
             opt_sl = stop_loss
-            opt_tgt = target
+            opt_tgt = 0.0 # No target: trail stop only (Phase 5f)
 
+        # Standard Paper Size (Phase 5c): 20% of virtual capital for cash (min 1); 1 lot for F&O/options/MCX
+        if quantity is None or quantity <= 0:
+            if sector == "INTRADAY_CASH":
+                quantity = max(1, int((self.virtual_capital * 0.20) // actual_entry_price)) if actual_entry_price > 0 else 1
+            else:
+                quantity = 1 # 1 lot
+
+        # Tagging (Phase 5c, 5e, 6a)
+        tag_list = []
+        total_cost = (opt_entry_prem * quantity) if is_option else (actual_entry_price * quantity)
+        if total_cost > self.virtual_capital:
+            tag_list.append("OVER_CAPITAL")
+
+        sl_dist_pct = (abs(actual_entry_price - stop_loss) / actual_entry_price) if actual_entry_price > 0 else 0.0
+        if is_option:
+            opt_sl_pct = (abs(opt_entry_prem - opt_sl) / opt_entry_prem) if opt_entry_prem > 0 else 0.0
+            if opt_sl_pct > 0.30:
+                tag_list.append("WIDE_SL")
+        else:
+            if sl_dist_pct > 0.01:
+                tag_list.append("WIDE_SL")
+
+        s_key = setup_key or f"RANGE_BREAK_{action.upper()}_{sector}"
+        grade = self.get_setup_grade(s_key)
+        if grade == "B":
+            tag_list.append("LEARNING")
+        elif grade == "C":
+            tag_list.append("LOW CONFIDENCE")
+
+        tags_str = ",".join(tag_list)
         now_ist_str = get_ist_now().strftime("%Y-%m-%d %I:%M:%S %p IST")
         opened_utc = get_utc_iso()
 
@@ -249,29 +400,42 @@ class LivePaperTracker:
             "action": action.upper(),
             "is_option": 1 if is_option else 0,
             "is_put": 1 if is_put else 0,
-            "entry_price": round(entry_price, 2),
-            "current_price": round(entry_price, 2),
+            "entry_price": actual_entry_price,
+            "current_price": actual_entry_price,
             "initial_sl": round(stop_loss, 2),
             "trailing_sl": round(stop_loss, 2),
-            "target": round(target, 2),
+            "target": 0.0, # No target: trail stop only (Phase 5f)
             "quantity": quantity,
             "risk_r": round(risk_r, 2),
             "opt_entry_premium": opt_entry_prem,
             "opt_current_premium": opt_entry_prem,
             "opt_initial_sl": opt_sl,
             "opt_trailing_sl": opt_sl,
-            "opt_target": opt_tgt,
+            "opt_target": 0.0,
             "stage": "INITIAL (FIXED SL)",
             "status": "OPEN",
             "entry_time_ist": now_ist_str,
             "opened_at_utc": opened_utc,
             "unrealized_pnl": 0.0,
             "pnl_pct": 0.0,
-            "notes": notes
+            "notes": notes,
+            "highest_price": actual_entry_price,
+            "tags": tags_str,
+            "setup_key": s_key,
+            "grade": grade,
+            "taken": 0,
+            "taken_time_ist": "",
+            "real_entry": 0.0,
+            "real_qty": 0,
+            "last_trail_ntfy_ts": 0.0,
+            "atr_val": atr_val or (actual_entry_price * 0.015)
         }
 
-        # Dispatch instant NTFY alert FIRST
-        self._dispatch_ntfy_trade_opened(position)
+        # Dispatch NTFY alert on trigger (Phase 5h): Suppress if WIDE_SL, OVER_CAPITAL, or Grade C
+        if "WIDE_SL" in tag_list or "OVER_CAPITAL" in tag_list or grade == "C":
+            logger.info(f"Panel only for {symbol}: suppressed NTFY due to tags: {tags_str}, grade: {grade}")
+        else:
+            self._dispatch_ntfy_trade_opened(position)
 
         with self._get_connection() as conn:
             conn.execute("""
@@ -281,8 +445,9 @@ class LivePaperTracker:
                     initial_sl, trailing_sl, target, quantity, risk_r,
                     opt_entry_premium, opt_current_premium, opt_initial_sl,
                     opt_trailing_sl, opt_target, stage, status,
-                    entry_time_ist, opened_at_utc, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    entry_time_ist, opened_at_utc, notes,
+                    highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, last_trail_ntfy_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_id, source_app, sector, symbol, action.upper(),
                 position["is_option"], position["is_put"],
@@ -290,14 +455,15 @@ class LivePaperTracker:
                 position["initial_sl"], position["trailing_sl"],
                 position["target"], quantity, position["risk_r"],
                 opt_entry_prem, opt_entry_prem, opt_sl,
-                opt_sl, opt_tgt, position["stage"], "OPEN",
-                now_ist_str, opened_utc, notes
+                opt_sl, 0.0, position["stage"], "OPEN",
+                now_ist_str, opened_utc, notes,
+                actual_entry_price, tags_str, s_key, grade, 0, "", 0.0, 0, 0.0
             ))
             conn.commit()
 
         with self._lock:
             self.active_positions[pos_id] = position
-        logger.info(f"PAPER TRADE OPENED: [{action}] {symbol} ({sector}) @ ₹{entry_price:.2f} | Qty: {quantity}")
+        logger.info(f"PAPER TRADE OPENED: [{action}] {symbol} ({sector}) @ ₹{actual_entry_price:.2f} | Qty: {quantity} | Tags: {tags_str} | Grade: {grade}")
         return position
 
     def ingest_shortlist(self, shortlist: Dict[str, Any]):
@@ -855,14 +1021,14 @@ class LivePaperTracker:
 
                 pos["unrealized_pnl"] = round(unrealized, 2)
 
-                # Trailing Stop-Loss & Exit Checks
+                # Trailing Stop-Loss & Exit Checks (Phase 5f: NO TARGET - pure trailing stop)
                 if is_opt:
                     opt_curr = pos.get("opt_current_premium", 0.0)
                     opt_entry = pos.get("opt_entry_premium", 1.0)
-                    opt_tgt = pos.get("opt_target", round(opt_entry * 1.60, 2))
                     opt_sl = pos.get("opt_trailing_sl", round(opt_entry * 0.70, 2))
 
                     opt_gain_pct = ((opt_curr - opt_entry) / opt_entry) if opt_entry > 0 else 0.0
+                    prev_sl = opt_sl
                     if opt_gain_pct >= 0.40:
                         new_sl = round(opt_entry * 1.25, 2)
                         if new_sl > opt_sl:
@@ -874,9 +1040,18 @@ class LivePaperTracker:
                             pos["opt_trailing_sl"] = new_sl
                             pos["stage"] = "TRAILED (BREAKEVEN)"
 
-                    if opt_curr >= opt_tgt:
-                        self.close_position(pos_id, exit_price=live_price, exit_reason="TARGET_HIT (+60% OPTION TARGET)")
-                    elif opt_curr <= pos.get("opt_trailing_sl", opt_sl):
+                    # Alert for TAKEN option trades when trailing moves (max 1/5m per trade) (Phase 6f)
+                    if pos.get("taken") == 1 and pos["opt_trailing_sl"] > prev_sl:
+                        now_ts = time.time()
+                        if now_ts - pos.get("last_trail_ntfy_ts", 0.0) >= 300.0:
+                            pos["last_trail_ntfy_ts"] = now_ts
+                            try:
+                                from src.notifications.ntfy_dispatcher import NTFYDispatcher
+                                NTFYDispatcher().send_trailing_stop_moved_alert(pos, pos["opt_trailing_sl"], opt_curr)
+                            except Exception:
+                                pass
+
+                    if opt_curr <= pos.get("opt_trailing_sl", opt_sl):
                         reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT (-30% OPTION SL)"
                         self.close_position(pos_id, exit_price=live_price, exit_reason=reason)
                     elif is_equity_eod and sector in equity_sectors:
@@ -885,22 +1060,32 @@ class LivePaperTracker:
                 else:
                     r_multiple = gain_pts / r_val if r_val > 0 else 0.0
                     is_down = is_put or act == "SELL"
+                    prev_sl = curr_sl
+                    trail_mult = float(os.getenv("TRAIL_ATR_MULT", "1.5"))
+                    atr_dist = trail_mult * pos.get("atr_val", entry * 0.015)
 
                     if is_down:
-                        if r_multiple >= 1.5:
-                            new_sl = round(entry - (0.75 * r_val), 2)
+                        pos["highest_price"] = min(pos.get("highest_price", entry), live_price)
+                        if r_multiple >= 1.0:
+                            be_sl = round(entry - 0.50, 2) # Breakeven minus roundtrip costs
+                            atr_sl = round(pos["highest_price"] + atr_dist, 2)
+                            new_sl = min(be_sl, atr_sl)
                             if new_sl < curr_sl:
                                 pos["trailing_sl"] = new_sl
-                                pos["stage"] = "TRAILED (LOCKING +0.75R)"
-                        elif r_multiple >= 1.0:
-                            new_sl = round(entry, 2)
-                            if new_sl < curr_sl:
-                                pos["trailing_sl"] = new_sl
-                                pos["stage"] = "TRAILED (BREAKEVEN)"
+                                pos["stage"] = "TRAILED (ATR)" if new_sl == atr_sl else "TRAILED (BREAKEVEN)"
 
-                        if live_price <= tgt:
-                            self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
-                        elif live_price >= pos["trailing_sl"]:
+                        # Alert for TAKEN trades when trailing moves (Phase 6f)
+                        if pos.get("taken") == 1 and pos["trailing_sl"] < prev_sl:
+                            now_ts = time.time()
+                            if now_ts - pos.get("last_trail_ntfy_ts", 0.0) >= 300.0:
+                                pos["last_trail_ntfy_ts"] = now_ts
+                                try:
+                                    from src.notifications.ntfy_dispatcher import NTFYDispatcher
+                                    NTFYDispatcher().send_trailing_stop_moved_alert(pos, pos["trailing_sl"], live_price)
+                                except Exception:
+                                    pass
+
+                        if live_price >= pos["trailing_sl"]:
                             reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
                             self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
                         elif is_equity_eod and sector in equity_sectors:
@@ -908,20 +1093,27 @@ class LivePaperTracker:
                         elif is_mcx_eod and sector == "COMMODITIES":
                             self.close_position(pos_id, exit_price=live_price, exit_reason="EOD_MCX_CLOSE (23:15 IST)")
                     else:
-                        if r_multiple >= 1.5:
-                            new_sl = round(entry + (0.75 * r_val), 2)
+                        pos["highest_price"] = max(pos.get("highest_price", entry), live_price)
+                        if r_multiple >= 1.0:
+                            be_sl = round(entry + 0.50, 2) # Breakeven plus roundtrip costs
+                            atr_sl = round(pos["highest_price"] - atr_dist, 2)
+                            new_sl = max(be_sl, atr_sl)
                             if new_sl > curr_sl:
                                 pos["trailing_sl"] = new_sl
-                                pos["stage"] = "TRAILED (LOCKING +0.75R)"
-                        elif r_multiple >= 1.0:
-                            new_sl = round(entry, 2)
-                            if new_sl > curr_sl:
-                                pos["trailing_sl"] = new_sl
-                                pos["stage"] = "TRAILED (BREAKEVEN)"
+                                pos["stage"] = "TRAILED (ATR)" if new_sl == atr_sl else "TRAILED (BREAKEVEN)"
 
-                        if live_price >= tgt:
-                            self.close_position(pos_id, exit_price=tgt, exit_reason="TARGET_HIT (1:2 R:R)")
-                        elif live_price <= pos["trailing_sl"]:
+                        # Alert for TAKEN trades when trailing moves (Phase 6f)
+                        if pos.get("taken") == 1 and pos["trailing_sl"] > prev_sl:
+                            now_ts = time.time()
+                            if now_ts - pos.get("last_trail_ntfy_ts", 0.0) >= 300.0:
+                                pos["last_trail_ntfy_ts"] = now_ts
+                                try:
+                                    from src.notifications.ntfy_dispatcher import NTFYDispatcher
+                                    NTFYDispatcher().send_trailing_stop_moved_alert(pos, pos["trailing_sl"], live_price)
+                                except Exception:
+                                    pass
+
+                        if live_price <= pos["trailing_sl"]:
                             reason = "TRAILING_SL_HIT" if pos["stage"] != "INITIAL (FIXED SL)" else "INITIAL_SL_HIT"
                             self.close_position(pos_id, exit_price=pos["trailing_sl"], exit_reason=reason)
                         elif is_equity_eod and sector in equity_sectors:
@@ -962,9 +1154,20 @@ class LivePaperTracker:
             charges = 45.0
 
         net_pnl = round(gross_pnl - charges, 2)
+        risk_r = pos.get("risk_r", 1.0)
+        r_multiple = round(gross_pnl / (risk_r * qty), 2) if (risk_r > 0 and qty > 0) else 0.0
         trade_id = f"TRD_{pos_id}"
         exit_time_ist = get_ist_now().strftime("%Y-%m-%d %I:%M:%S %p IST")
         closed_utc = get_utc_iso()
+
+        # Check for UNREALISTIC single trade profit/loss (> 10% of virtual capital, Phase 5j)
+        tags_str = pos.get("tags", "")
+        if abs(net_pnl) > (self.virtual_capital * 0.10):
+            tags_str = f"{tags_str},UNREALISTIC".strip(",")
+            logger.warning(f"UNREALISTIC trade P&L detected for {pos['symbol']}: Rs {net_pnl:,.2f} (>10% virtual capital). Flagged UNREALISTIC.")
+
+        pos["tags"] = tags_str
+        pos["r_multiple"] = r_multiple
 
         inserted = False
         try:
@@ -974,13 +1177,18 @@ class LivePaperTracker:
                         trade_id, position_id, symbol, sector, action,
                         is_option, entry_price, exit_price, quantity,
                         gross_pnl, total_charges, net_pnl, exit_reason,
-                        entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc,
+                        highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, r_multiple
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     trade_id, pos_id, pos["symbol"], pos["sector"], pos["action"],
                     pos["is_option"], pos["entry_price"], pos["exit_price"], qty,
                     gross_pnl, charges, net_pnl, exit_reason,
-                    pos["entry_time_ist"], exit_time_ist, pos["opened_at_utc"], closed_utc
+                    pos["entry_time_ist"], exit_time_ist, pos["opened_at_utc"], closed_utc,
+                    pos.get("highest_price", pos["entry_price"]), tags_str,
+                    pos.get("setup_key", ""), pos.get("grade", "B"),
+                    pos.get("taken", 0), pos.get("taken_time_ist", ""),
+                    pos.get("real_entry", 0.0), pos.get("real_qty", 0), r_multiple
                 ))
                 conn.execute("DELETE FROM active_paper_positions WHERE position_id = ?", (pos_id,))
                 conn.commit()
@@ -997,9 +1205,32 @@ class LivePaperTracker:
         self.symbol_last_close_time[clean_base] = time.time()
 
         if inserted:
-            logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f}")
-            # Dispatch instant NTFY alert for closed trade ONLY if row was inserted
-            self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
+            logger.info(f"PAPER TRADE CLOSED: {pos['symbol']} -> Exit: ₹{exit_price:.2f} | {exit_reason} | Net P&L: ₹{net_pnl:,.2f} ({r_multiple:+.2f}R)")
+            # Update setup statistics (Phase 6a)
+            self.record_setup_trade_result(pos.get("setup_key"), is_win=(net_pnl > 0), r_result=r_multiple, net_pnl=net_pnl)
+
+            # Phase 6f: For TAKEN trades only, send NTFY exit alert with realized P&L.
+            # Untaken trades receive zero exit alerts after the initial trigger.
+            if pos.get("taken") == 1:
+                try:
+                    from src.notifications.ntfy_dispatcher import NTFYDispatcher
+                    NTFYDispatcher().send_stop_hit_alert(pos, exit_price, net_pnl, exit_reason)
+                except Exception as alert_err:
+                    logger.debug(f"Stop hit alert notice: {alert_err}")
+
+            # Mirror to Firestore if configured (Phase 2B)
+            if hasattr(self, "firestore") and self.firestore and self.firestore.is_connected:
+                try:
+                    pos_closed_doc = dict(pos)
+                    pos_closed_doc["status"] = "CLOSED"
+                    pos_closed_doc["trade_id"] = trade_id
+                    pos_closed_doc["net_pnl"] = net_pnl
+                    pos_closed_doc["exit_price"] = exit_price
+                    pos_closed_doc["exit_reason"] = exit_reason
+                    self.firestore.mirror_paper_position(pos_closed_doc)
+                except Exception:
+                    pass
+
             return True
         else:
             # rowcount == 0 means duplicate: log at DEBUG, no alert
@@ -1032,48 +1263,30 @@ class LivePaperTracker:
         }
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
-        """Dispatches instant NTFY push notification FIRST before populating into paper app."""
-        # Suppress local dispatches to prevent eating into cloud production quota
+        """Dispatches instant NTFY push notification on trade trigger (Phase 5h & 6c: capped at 12 triggers/day)."""
+        today_ist = get_ist_now().strftime("%Y-%m-%d")
+        if getattr(self, "last_ntfy_trigger_date", "") != today_ist:
+            self.last_ntfy_trigger_date = today_ist
+            self.daily_ntfy_triggers_count = 0
+
+        if self.daily_ntfy_triggers_count >= 12:
+            logger.info(f"NTFY trigger alert capped: daily limit of 12 triggers reached today ({today_ist}).")
+            return
+
+        # Suppress local dispatches to prevent eating into cloud production quota unless forced
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
-            logger.debug("Local development environment: Suppressing NTFY trade opened push.")
+            logger.debug("Local development environment: Suppressing live NTFY trade opened push.")
+            self.daily_ntfy_triggers_count += 1
             return
 
         try:
-            topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
-            auth_token = os.getenv("NTFY_AUTH_TOKEN", "")
-            action_tag = "chart_with_upwards_trend" if pos["action"] == "BUY" else "chart_with_downwards_trend"
-            title = f"FinPlus Paper Exec | [{pos['action']}] {pos['symbol']}"
-            is_opt = bool(pos.get("is_option"))
-            entry_disp = pos.get("opt_entry_premium", pos["entry_price"]) if is_opt else pos["entry_price"]
-            sl_disp = pos.get("opt_initial_sl", pos["initial_sl"]) if is_opt else pos["initial_sl"]
-            tgt_disp = pos.get("opt_target", pos["target"]) if is_opt else pos["target"]
-
-            lines = [
-                f"Action: [{pos['action']}] {pos['symbol']}",
-                f"Sector: {pos['sector']} | Qty: {pos['quantity']}",
-                f"Entry: Rs {entry_disp:,.2f}",
-                f"SL: Rs {sl_disp:,.2f} | Target: Rs {tgt_disp:,.2f}",
-                f"Cockpit: https://finplus-stock-scanner.onrender.com/live"
-            ]
-            msg = "\n".join(lines)
-            raw_headers = {
-                "Title": title,
-                "Priority": "4",
-                "Tags": f"{action_tag},receipt",
-                "Markdown": "yes",
-                "Click": "https://finplus-stock-scanner.onrender.com/live",
-                "Actions": "view, Live Cockpit, https://finplus-stock-scanner.onrender.com/live"
-            }
-            clean_hdrs = safe_headers(raw_headers, auth_token)
-
-            requests.post(
-                f"https://ntfy.sh/{topic}",
-                data=msg.encode("utf-8"),
-                headers=clean_hdrs,
-                timeout=5
-            )
-            logger.info(f"NTFY Trade Opened push sent for {pos['symbol']}")
+            from src.notifications.ntfy_dispatcher import NTFYDispatcher
+            dispatcher = NTFYDispatcher()
+            sent = dispatcher.send_trade_trigger_alert(pos, max_retries=3)
+            if sent:
+                self.daily_ntfy_triggers_count += 1
+                logger.info(f"NTFY Trade Trigger push sent for {pos['symbol']} ({self.daily_ntfy_triggers_count}/12 today)")
         except Exception as e:
             logger.warning(f"Failed sending trade opened alert to NTFY: {e}")
 
@@ -1121,10 +1334,276 @@ class LivePaperTracker:
         except Exception as e:
             logger.warning(f"Failed sending trade closed alert to NTFY: {e}")
 
+    def record_setup_trade_result(self, setup_key: Optional[str], is_win: bool, r_result: float, net_pnl: float):
+        """Records trade result into setup_stats and recomputes rolling 30 metrics and grade (Phase 6a)."""
+        if not setup_key:
+            return
+
+        # UNREALISTIC trade check: Excluded from setup stats if single-trade P&L > 10% of virtual capital (Phase 5j)
+        if abs(net_pnl) > (self.virtual_capital * 0.10):
+            logger.warning(f"UNREALISTIC P&L (Rs {net_pnl:,.2f} > 10% capital). Excluded from setup stats for {setup_key}.")
+            return
+
+        with self._get_connection() as conn:
+            # Fetch last 30 trades for this setup_key from closed_paper_trades
+            rows = conn.execute("""
+                SELECT net_pnl, (CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as win,
+                       COALESCE(r_multiple, 0.0) as r_val
+                FROM closed_paper_trades
+                WHERE setup_key = ?
+                ORDER BY closed_at_utc DESC
+                LIMIT 30
+            """, (setup_key,)).fetchall()
+
+            # If closed_paper_trades doesn't have 30 rows (e.g. direct record calls in tests or simulation),
+            # aggregate from setup_stats existing counts
+            stat_row = conn.execute("SELECT total_trades, wins, rolling_30_trades, rolling_30_wins FROM setup_stats WHERE setup_key = ?", (setup_key,)).fetchone()
+            if len(rows) == 0 and stat_row is not None:
+                prev_total = stat_row["total_trades"]
+                prev_wins = stat_row["wins"]
+                total_trades = prev_total + 1
+                wins = prev_wins + (1 if is_win else 0)
+            elif len(rows) == 0:
+                total_trades = 1
+                wins = 1 if is_win else 0
+            else:
+                total_trades = len(rows)
+                wins = sum(r["win"] for r in rows)
+
+            win_pct = round((wins / total_trades) * 100.0, 1) if total_trades > 0 else 0.0
+            avg_r = round(sum(r["r_val"] for r in rows) / total_trades, 2) if len(rows) > 0 else (r_result if total_trades == 1 else 0.0)
+            expectancy = round(sum(r["net_pnl"] for r in rows) / total_trades, 2) if len(rows) > 0 else (net_pnl if total_trades == 1 else 0.0)
+
+            # Grade: A = win % >= 60 and positive expectancy over last 30;
+            # B = fewer than 30 trades (LEARNING);
+            # C = below 60 or negative expectancy (LOW CONFIDENCE)
+            if total_trades < 30:
+                grade = "B"
+            elif win_pct >= 60.0 and (expectancy > 0 or avg_r > 0):
+                grade = "A"
+            else:
+                grade = "C"
+
+            conn.execute("""
+                INSERT OR REPLACE INTO setup_stats (
+                    setup_key, total_trades, wins, win_pct, avg_r, expectancy,
+                    rolling_30_trades, rolling_30_wins, rolling_30_win_pct, rolling_30_expectancy,
+                    grade, updated_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                setup_key, total_trades, wins, win_pct, avg_r, expectancy,
+                total_trades, wins, win_pct, expectancy,
+                grade, get_utc_iso()
+            ))
+            conn.commit()
+
+    def set_trade_taken(self, trade_id_or_pos_id: str, taken: bool, real_entry: Optional[float] = None, real_qty: Optional[int] = None) -> bool:
+        """Toggles 'Taken' flag on paper trade with optional real execution price & quantity (Phase 6e)."""
+        clean_id = trade_id_or_pos_id.replace("TRD_", "")
+        now_ist_str = get_ist_now().strftime("%Y-%m-%d %I:%M:%S %p IST")
+        with self._lock:
+            if clean_id in self.active_positions:
+                pos = self.active_positions[clean_id]
+                pos["taken"] = 1 if taken else 0
+                pos["taken_time_ist"] = now_ist_str
+                if real_entry is not None:
+                    pos["real_entry"] = float(real_entry)
+                if real_qty is not None:
+                    pos["real_qty"] = int(real_qty)
+
+        with self._get_connection() as conn:
+            conn.execute("""
+                UPDATE active_paper_positions 
+                SET taken = ?, taken_time_ist = ?, real_entry = COALESCE(?, real_entry), real_qty = COALESCE(?, real_qty)
+                WHERE position_id = ?
+            """, (1 if taken else 0, now_ist_str, real_entry, real_qty, clean_id))
+            conn.execute("""
+                UPDATE closed_paper_trades 
+                SET taken = ?, taken_time_ist = ?, real_entry = COALESCE(?, real_entry), real_qty = COALESCE(?, real_qty)
+                WHERE position_id = ? OR trade_id = ?
+            """, (1 if taken else 0, now_ist_str, real_entry, real_qty, clean_id, f"TRD_{clean_id}"))
+            conn.commit()
+        return True
+
+    def get_taken_summary(self) -> Dict[str, Any]:
+        """Returns counts of suggestions today, taken today, and taken this week (Phase 6e)."""
+        today_ist = get_ist_now().strftime("%Y-%m-%d")
+        now_dt = get_ist_now()
+        start_of_week = (now_dt - datetime.timedelta(days=now_dt.weekday())).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            open_today = conn.execute("SELECT COUNT(*), SUM(CASE WHEN taken=1 THEN 1 ELSE 0 END) FROM active_paper_positions WHERE entry_time_ist LIKE ?", (f"{today_ist}%",)).fetchone()
+            closed_today = conn.execute("SELECT COUNT(*), SUM(CASE WHEN taken=1 THEN 1 ELSE 0 END) FROM closed_paper_trades WHERE entry_time_ist LIKE ?", (f"{today_ist}%",)).fetchone()
+            sug_today = (open_today[0] or 0) + (closed_today[0] or 0)
+            taken_today = (open_today[1] or 0) + (closed_today[1] or 0)
+
+            open_week = conn.execute("SELECT SUM(CASE WHEN taken=1 THEN 1 ELSE 0 END) FROM active_paper_positions WHERE entry_time_ist >= ?", (start_of_week,)).fetchone()[0] or 0
+            closed_week = conn.execute("SELECT SUM(CASE WHEN taken=1 THEN 1 ELSE 0 END) FROM closed_paper_trades WHERE entry_time_ist >= ?", (start_of_week,)).fetchone()[0] or 0
+            taken_week = open_week + closed_week
+
+        return {
+            "date": today_ist,
+            "suggestions_today": sug_today,
+            "taken_today": taken_today,
+            "taken_this_week": taken_week,
+            "weekly_target": "10-20"
+        }
+
+    def record_funnel_metrics(self, metrics: Dict[str, Any]):
+        """Persists daily funnel counters to SQLite table funnel_metrics (Phase 6d)."""
+        today_ist = get_ist_now().strftime("%Y-%m-%d")
+        total_scanned = metrics.get("total_symbols_scanned", metrics.get("instruments_scanned", 0))
+        cand_detected = metrics.get("candidates_detected", metrics.get("candidates_by_setup", 0))
+        rem_wide_sl = metrics.get("removed_wide_sl", metrics.get("wide_sl_count", 0))
+        opened_on_panel = metrics.get("suggestions_opened_on_panel", metrics.get("trades_opened", 0))
+        ntfy_triggers = metrics.get("ntfy_triggers_sent", getattr(self, "daily_ntfy_triggers_count", 0))
+
+        with self._get_connection() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO funnel_metrics (
+                    date_str, instruments_scanned, total_symbols_scanned,
+                    candidates_by_setup, candidates_detected,
+                    removed_stale_feed, removed_data_suspect, removed_late,
+                    removed_regime_veto, removed_midday_freeze, removed_insufficient_history,
+                    removed_latch_used, removed_wide_sl, trades_opened,
+                    suggestions_opened_on_panel, ntfy_triggers_sent,
+                    wide_sl_count, over_capital_count, updated_at_utc
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                today_ist,
+                total_scanned,
+                total_scanned,
+                cand_detected,
+                cand_detected,
+                metrics.get("removed_stale_feed", 0),
+                metrics.get("removed_data_suspect", 0),
+                metrics.get("removed_late", 0),
+                metrics.get("removed_regime_veto", 0),
+                metrics.get("removed_midday_freeze", 0),
+                metrics.get("removed_insufficient_history", 0),
+                metrics.get("removed_latch_used", 0),
+                rem_wide_sl,
+                opened_on_panel,
+                opened_on_panel,
+                ntfy_triggers,
+                rem_wide_sl,
+                metrics.get("over_capital_count", 0),
+                get_utc_iso()
+            ))
+            conn.commit()
+
+    def get_funnel_summary(self, date_ist: Optional[str] = None) -> Dict[str, Any]:
+        """Returns daily funnel telemetry from SQLite (Phase 6d)."""
+        today_ist = date_ist or get_ist_now().strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            row = conn.execute("SELECT * FROM funnel_metrics WHERE date_str = ?", (today_ist,)).fetchone()
+            if row:
+                res = dict(row)
+                # Alias fields to guarantee both schemas match exactly
+                res["total_symbols_scanned"] = res.get("total_symbols_scanned", res.get("instruments_scanned", 0))
+                res["candidates_detected"] = res.get("candidates_detected", res.get("candidates_by_setup", 0))
+                res["suggestions_opened_on_panel"] = res.get("suggestions_opened_on_panel", res.get("trades_opened", 0))
+                res["removed_wide_sl"] = res.get("removed_wide_sl", res.get("wide_sl_count", 0))
+                res["ntfy_triggers_sent"] = res.get("ntfy_triggers_sent", getattr(self, "daily_ntfy_triggers_count", 0))
+                return res
+        return {
+            "date_str": today_ist,
+            "total_symbols_scanned": 0,
+            "instruments_scanned": 0,
+            "candidates_detected": 0,
+            "candidates_by_setup": 0,
+            "suggestions_opened_on_panel": 0,
+            "trades_opened": 0,
+            "removed_insufficient_history": 0,
+            "removed_stale_feed": 0,
+            "removed_data_suspect": 0,
+            "removed_regime_veto": 0,
+            "removed_late": 0,
+            "removed_wide_sl": 0,
+            "ntfy_triggers_sent": 0
+        }
+
+    def get_weekly_performance_report(self) -> Dict[str, Any]:
+        """Computes comprehensive Sunday weekly report (Phase 6g)."""
+        now_dt = get_ist_now()
+        start_of_week = (now_dt - datetime.timedelta(days=7)).strftime("%Y-%m-%d")
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT taken, setup_key, grade, net_pnl, COALESCE(r_multiple, 0.0) as r_val,
+                       (CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as win
+                FROM closed_paper_trades
+                WHERE exit_time_ist >= ?
+            """, (start_of_week,)).fetchall()
+
+            taken_trades = [r for r in rows if r["taken"] == 1]
+            untaken_trades = [r for r in rows if r["taken"] != 1]
+
+            def calc_metrics(trades):
+                n = len(trades)
+                if n == 0:
+                    return {"trades": 0, "win_pct": 0.0, "avg_r": 0.0, "expectancy": 0.0}
+                w = sum(t["win"] for t in trades)
+                return {
+                    "trades": n,
+                    "win_pct": round((w / n) * 100.0, 1),
+                    "avg_r": round(sum(t["r_val"] for t in trades) / n, 2),
+                    "expectancy": round(sum(t["net_pnl"] for t in trades) / n, 2)
+                }
+
+            taken_m = calc_metrics(taken_trades)
+            untaken_m = calc_metrics(untaken_trades)
+
+            setups = {}
+            for r in rows:
+                sk = r["setup_key"] or "GENERAL"
+                if sk not in setups:
+                    setups[sk] = []
+                setups[sk].append(r)
+            setup_breakdown = {k: calc_metrics(v) for k, v in setups.items()}
+
+            best_setup = max(setup_breakdown.items(), key=lambda x: (x[1]["win_pct"], x[1]["expectancy"]), default=("RANGE_BREAKOUT", {}))[0]
+
+        return {
+            "period": f"Last 7 Days (since {start_of_week})",
+            "suggestions_this_week": len(rows),
+            "taken_this_week": len(taken_trades),
+            "taken_metrics": taken_m,
+            "not_taken_metrics": untaken_m,
+            "taken_win_pct": taken_m["win_pct"],
+            "taken_avg_r": taken_m["avg_r"],
+            "taken_expectancy": taken_m["expectancy"],
+            "top_trusted_setup": best_setup,
+            "setup_breakdown": setup_breakdown
+        }
+
     def get_status_dict(self) -> Dict[str, Any]:
-        """Returns the complete payload expected by the FrontPage live.html cockpit."""
+        """Returns the complete payload expected by the FrontPage live.html cockpit (Phase 5i)."""
         active_list = list(self.active_positions.values())
         tot_unrealized = round(sum(p.get("unrealized_pnl", 0.0) for p in active_list), 2)
+
+        # Enriched active positions
+        enriched_active = []
+        for p in active_list:
+            item = dict(p)
+            entry = float(item.get("entry_price", 0.0))
+            trailing_sl = float(item.get("trailing_sl", 0.0))
+            qty = int(item.get("quantity", 1))
+            risk_r = float(item.get("risk_r", 1.0))
+            is_buy = (item.get("action") == "BUY")
+
+            if is_buy:
+                profit_locked_rupees = round(max(0.0, (trailing_sl - entry) * qty), 2)
+            else:
+                profit_locked_rupees = round(max(0.0, (entry - trailing_sl) * qty), 2)
+
+            profit_locked_r = round(profit_locked_rupees / (risk_r * qty), 2) if (risk_r > 0 and qty > 0) else 0.0
+            stop_dist_pct = round(abs(entry - trailing_sl) / entry * 100.0, 2) if entry > 0 else 0.0
+            rupees_at_risk = round(abs(entry - trailing_sl) * qty, 2)
+
+            item["profit_locked_rupees"] = profit_locked_rupees
+            item["profit_locked_r"] = profit_locked_r
+            item["stop_dist_pct"] = stop_dist_pct
+            item["rupees_at_risk"] = rupees_at_risk
+            enriched_active.append(item)
 
         # Get closed trades from SQLite
         closed_trades = []
@@ -1148,23 +1627,31 @@ class LivePaperTracker:
                         "total_charges": t["total_charges"],
                         "net_pnl": t["net_pnl"],
                         "exit_reason": t["exit_reason"],
-                        "trade_time": t["exit_time_ist"]
+                        "trade_time": t["exit_time_ist"],
+                        "setup_key": t.get("setup_key", ""),
+                        "grade": t.get("grade", "B"),
+                        "tags": t.get("tags", ""),
+                        "taken": t.get("taken", 0),
+                        "r_multiple": t.get("r_multiple", 0.0)
                     })
         except Exception as e:
             logger.error(f"Error fetching closed trades: {e}")
 
         tot_realized = round(tot_realized, 2)
         current_equity = round(self.virtual_capital + tot_realized + tot_unrealized, 2)
+        equity_pnl_pct = round(((current_equity - self.virtual_capital) / self.virtual_capital) * 100.0, 2)
 
         return {
             "status": "LIVE_ACTIVE",
             "virtual_starting_capital": self.virtual_capital,
             "current_equity": current_equity,
+            "equity_pnl_pct": equity_pnl_pct,
             "total_unrealized_pnl": tot_unrealized,
             "net_realized_pnl": tot_realized,
-            "active_positions_count": len(active_list),
-            "active_positions": active_list,
+            "active_positions_count": len(enriched_active),
+            "active_positions": enriched_active,
             "recent_closed_trades": closed_trades,
+            "taken_summary": self.get_taken_summary(),
             "ist_time": get_ist_time_str(),
             "timestamp_utc": get_utc_iso()
         }

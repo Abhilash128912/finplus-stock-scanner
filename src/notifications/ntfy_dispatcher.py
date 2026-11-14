@@ -9,7 +9,7 @@ import os
 import time
 import requests
 import json
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 from src.storage.schedule_ledger import ScheduleLedger
 
@@ -755,4 +755,198 @@ class NTFYDispatcher:
             if self._safe_post(url, message, headers):
                 success = True
                 
+        return success
+
+    def send_trade_trigger_alert(self, pos: Dict[str, Any], max_retries: int = 3) -> bool:
+        """
+        Dispatches instant priority NTFY alert on trade trigger (Phase 5h).
+        Message format: symbol, side, entry, initial stop, quantity, rupees at risk, grade,
+        and the line 'No target: trail the stop'. Retries up to 3 times on network failure.
+        """
+        sym = pos.get("symbol", "")
+        act = pos.get("action", "BUY")
+        entry = float(pos.get("entry_price", 0.0))
+        sl = float(pos.get("initial_sl", 0.0))
+        qty = int(pos.get("quantity", 1))
+        risk_rupees = round(abs(entry - sl) * qty, 0)
+        grade = pos.get("grade", "B")
+        setup = pos.get("setup_key", "BREAKOUT")
+
+        title = f"FinPlus Trigger | [{act}] {sym}"
+        lines = [
+            f"Symbol: {sym} ({act}) | Grade: {grade}",
+            f"Entry: Rs {entry:,.2f} | Initial SL: Rs {sl:,.2f}",
+            f"Qty: {qty} | Risk: Rs {risk_rupees:,.0f}",
+            f"Setup: {setup}",
+            "No target: trail the stop",
+            f"Cockpit: {RENDER_SCANNER_URL}/live"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "4",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/live",
+                "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live"
+            }
+            for attempt in range(max_retries):
+                if self._safe_post(url, message, headers, alert_type="TRADE_OPEN", is_priority=True):
+                    success = True
+                    break
+                time.sleep(1.0)
+        return success
+
+    def send_trailing_stop_moved_alert(self, pos: Dict[str, Any], new_sl: float, current_price: float) -> bool:
+        """
+        Dispatches trailing stop advance notification for TAKEN trades only (Phase 6f).
+        Rate limited to max 1 per 5m per trade; stops when daily quota reaches 240.
+        """
+        sym = pos.get("symbol", "")
+        act = pos.get("action", "BUY")
+        title = f"FinPlus Trail | {sym} Stop Advanced"
+        lines = [
+            f"TAKEN Trade Trailing Stop Moved: {sym} ({act})",
+            f"New Stop Loss: Rs {new_sl:,.2f}",
+            f"Current Price: Rs {current_price:,.2f}",
+            "Profit locked in. Trade continues running without target.",
+            f"Cockpit: {RENDER_SCANNER_URL}/live"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/live"
+            }
+            if self._safe_post(url, message, headers, alert_type="TRADE_CLOSE"):
+                success = True
+        return success
+
+    def send_stop_hit_alert(self, pos: Dict[str, Any], exit_price: float, net_pnl: float, reason: str) -> bool:
+        """Dispatches stop-hit notification for TAKEN trades (Phase 6f). Always sent."""
+        sym = pos.get("symbol", "")
+        act = pos.get("action", "BUY")
+        pnl_sign = "+" if net_pnl >= 0 else ""
+        title = f"FinPlus Exit | {sym} Stop Hit ({pnl_sign}Rs {net_pnl:,.2f})"
+        lines = [
+            f"Trade Closed: {sym} ({act})",
+            f"Exit Reason: {reason}",
+            f"Exit Price: Rs {exit_price:,.2f}",
+            f"Net P&L: {pnl_sign}Rs {net_pnl:,.2f}",
+            f"Cockpit: {RENDER_SCANNER_URL}/live"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "4" if net_pnl < 0 else "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/live"
+            }
+            # Emergency stop slot allowed
+            if self._safe_post(url, message, headers, alert_type="EMERGENCY_SL", is_priority=True):
+                success = True
+        return success
+
+    def send_watch_alert(self, symbol: str, setup: str, distance_pct: float, rvol: float) -> bool:
+        """Dispatches WATCH pulse for compression / impending breakout (Phase 5d). Max 1/10m per symbol."""
+        title = f"FinPlus Watch | {symbol} Approaching Break"
+        lines = [
+            f"Watch Alert: {symbol}",
+            f"Setup: {setup}",
+            f"Distance to Trigger: {distance_pct:.2f}%",
+            f"RVOL: {rvol:.1f}x",
+            "Compression detected. Watching for trigger bar.",
+            f"Cockpit: {RENDER_SCANNER_URL}/cockpit"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "2",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/cockpit"
+            }
+            if self._safe_post(url, message, headers, alert_type="ROUTINE"):
+                success = True
+        return success
+
+    def send_funnel_shortfall_alert(self, opened_count: int, top_reasons: List[Tuple[str, int]]) -> bool:
+        """Dispatches 14:00 IST alert if suggestions opened are below MIN_DAILY_SUGGESTIONS (6) (Phase 6d)."""
+        title = f"FinPlus Funnel Alert | Low Opportunity Volume ({opened_count}/6)"
+        reasons_text = "\n".join([f"- {r[0]}: {r[1]} removed" for r in top_reasons])
+        lines = [
+            f"Daily Opportunity Funnel Check (14:00 IST):",
+            f"Only {opened_count} trades opened today (target: 6-12).",
+            "Top filter removal reasons:",
+            reasons_text,
+            "Quality preserved, zero forced trades.",
+            f"Funnel telemetry: {RENDER_SCANNER_URL}/api/funnel"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/api/funnel"
+            }
+            if self._safe_post(url, message, headers, alert_type="ROUTINE"):
+                success = True
+        return success
+
+    def send_sunday_weekly_report(self, weekly_stats: Dict[str, Any]) -> bool:
+        """Dispatches Sunday 18:00 IST weekly review (Phase 6g)."""
+        title = "FinPlus Desk | Sunday Weekly Performance Report"
+        sug_cnt = weekly_stats.get("suggestions_this_week", 0)
+        taken_cnt = weekly_stats.get("taken_this_week", 0)
+        taken_win_pct = weekly_stats.get("taken_win_pct", 0.0)
+        taken_avg_r = weekly_stats.get("taken_avg_r", 0.0)
+        taken_exp = weekly_stats.get("taken_expectancy", 0.0)
+        top_setup = weekly_stats.get("top_trusted_setup", "RANGE_BREAKOUT")
+
+        lines = [
+            f"FinPlus Weekly Review | Sunday 18:00 IST",
+            f"Suggestions Made: {sug_cnt} | Taken by Trader: {taken_cnt}",
+            f"TAKEN Win Rate: {taken_win_pct:.1f}% | Avg R: {taken_avg_r:+.2f}R",
+            f"Expectancy after costs: Rs {taken_exp:,.2f}/trade",
+            f"Top Trusted Setup: {top_setup}",
+            f"Weekly breakdown: {RENDER_SCANNER_URL}/api/weekly"
+        ]
+        message = "\n".join(lines)
+        success = False
+
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": "3",
+                "Markdown": "yes",
+                "X-Markdown": "yes",
+                "Click": f"{RENDER_SCANNER_URL}/api/weekly"
+            }
+            if self._safe_post(url, message, headers, alert_type="ROUTINE"):
+                success = True
         return success

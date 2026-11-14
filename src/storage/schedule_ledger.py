@@ -41,6 +41,7 @@ SCHEDULED_MILESTONES = [
     {"slot_id": "13:00_PULSE", "target_h": 13, "target_m": 0, "name": "01:00 PM 30m Pulse"},
     {"slot_id": "13:30_PULSE", "target_h": 13, "target_m": 30, "name": "01:30 PM 30m Pulse"},
     {"slot_id": "14:00_PULSE", "target_h": 14, "target_m": 0, "name": "02:00 PM 30m Pulse"},
+    {"slot_id": "14:00_FUNNEL_CHECK", "target_h": 14, "target_m": 0, "name": "02:00 PM Funnel Opportunity Check"},
     {"slot_id": "14:30_PULSE", "target_h": 14, "target_m": 30, "name": "02:30 PM 30m Pulse"},
     {"slot_id": "15:00_SUMMARY", "target_h": 15, "target_m": 0, "name": "03:00 PM End of Trade Summary"},
     {"slot_id": "15:45_SELF_REPORT", "target_h": 15, "target_m": 45, "name": "03:45 PM Post-Market Self-Report"},
@@ -190,8 +191,15 @@ class ScheduleLedger:
 
     def ensure_daily_ledger_populated(self, date_str: str):
         """Ensures all required milestones for a trading day exist in the ledger as PENDING."""
+        milestones = list(SCHEDULED_MILESTONES)
+        try:
+            if datetime.datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6:
+                milestones.append({"slot_id": "18:00_WEEKLY_REPORT", "target_h": 18, "target_m": 0, "name": "Sunday 06:00 PM Weekly Report"})
+        except Exception:
+            pass
+
         with self._get_connection() as conn:
-            for item in SCHEDULED_MILESTONES:
+            for item in milestones:
                 target_str = f"{item['target_h']:02d}:{item['target_m']:02d}"
                 conn.execute("""
                     INSERT OR IGNORE INTO daily_schedule_ledger 

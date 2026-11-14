@@ -12,6 +12,7 @@ from src.feeds.market_data_feed import MarketDataFeed
 from src.analytics.range_detector_engine import RangeDetectorEngine
 from src.analytics.regime_interceptor import App1RegimeInterceptor
 from src.analytics.shortlist_engine import ShortlistEngine
+from src.analytics.multi_setup_engine import MultiSetupEngine
 from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.paper.live_paper_tracker import LivePaperTracker
 from src.paper.indmoney_live_feed import INDMoneyLiveFeed
@@ -50,6 +51,7 @@ class ScannerScheduler:
         self.MAX_CHASE_PCT = 0.70 # Lateness threshold (log only)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
         self.shortlist_engine = ShortlistEngine()
+        self.multi_setup_engine = MultiSetupEngine()
         self.dispatcher = NTFYDispatcher(min_interval_seconds=1800) # Strict 30 mins
         self.paper_tracker = LivePaperTracker()
         self.indmoney_feed = INDMoneyLiveFeed(cache_ttl_seconds=5.0)
@@ -189,6 +191,21 @@ class ScannerScheduler:
             logger.warning(f"FALLBACK_GUARD ACTIVATED: broker stale {int(feed_age_sec)}s (>180s) on priority symbols {priority_symbols}")
             self.dispatcher.send_fallback_guard_alert("START", f"Broker stale {int(feed_age_sec)}s. Prioritizing {len(priority_symbols)} symbols.")
 
+        # Daily Funnel Metrics & Trigger Candidate Collection (Phase 6c, 6d)
+        funnel_counts = {
+            "total_symbols_scanned": len(universe),
+            "candidates_detected": 0,
+            "removed_insufficient_history": 0,
+            "removed_stale_feed": 0,
+            "removed_data_suspect": 0,
+            "removed_regime_veto": 0,
+            "removed_late": 0,
+            "removed_wide_sl": 0,
+            "suggestions_opened_on_panel": 0,
+            "ntfy_triggers_sent": 0
+        }
+        candidate_triggers: List[Dict[str, Any]] = []
+
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
@@ -203,9 +220,13 @@ class ScannerScheduler:
                     is_priority_symbol=is_priority
                 )
                 if df.empty:
+                    funnel_counts["removed_insufficient_history"] += 1
                     continue
                     
                 eval_res = self.detector.evaluate_instrument(df, item)
+                if eval_res.get("status") == "INSUFFICIENT_DATA":
+                    funnel_counts["removed_insufficient_history"] += 1
+                    continue
 
                 # Fallback guard rule: Any detector output using YF_FALLBACK prices must NOT create a new entry signal
                 if df.attrs.get("data_source") == "YF_FALLBACK":
@@ -306,6 +327,46 @@ class ScannerScheduler:
                 eval_res["regime_data"] = regime_data
                 results.append(eval_res)
 
+                # Multi-Setup Evaluation (Phase 6b) & Two-Stage Trigger Detection (Phase 5d)
+                if hasattr(self, "multi_setup_engine") and self.multi_setup_engine:
+                    try:
+                        setups = self.multi_setup_engine.evaluate_setups(df, eval_res, item)
+                        for cand in setups:
+                            funnel_counts["candidates_detected"] += 1
+                            if cand.get("stage_type") == "WATCH":
+                                now_ts = time.time()
+                                last_w = self.multi_setup_engine.last_watch_alert_time.get(sym, 0.0)
+                                if (now_ts - last_w) >= 600.0:
+                                    self.multi_setup_engine.last_watch_alert_time[sym] = now_ts
+                                    self.dispatcher.send_watch_alert(
+                                        symbol=sym,
+                                        setup_name=cand["setup_name"],
+                                        boundary=cand["boundary"],
+                                        current_price=cand["entry_price"],
+                                        rvol=cand["rvol"]
+                                    )
+                            elif cand.get("stage_type") == "TRIGGER":
+                                if cand.get("is_late"):
+                                    funnel_counts["removed_late"] += 1
+                                    continue
+                                if "VETOED" in cand.get("regime_confluence", ""):
+                                    funnel_counts["removed_regime_veto"] += 1
+                                    continue
+                                if self.paper_tracker and sym in getattr(self.paper_tracker, "suspect_symbols", set()):
+                                    funnel_counts["removed_data_suspect"] += 1
+                                    continue
+                                if self.is_stale_feed:
+                                    funnel_counts["removed_stale_feed"] += 1
+                                    continue
+
+                                grade = self.paper_tracker.get_setup_grade(cand["setup_key"]) if self.paper_tracker else "B"
+                                cand["grade"] = grade
+                                cand["rank_score"] = self.multi_setup_engine.score_candidate(cand, grade=grade)
+                                cand["atr_val"] = eval_res.get("atr_val")
+                                candidate_triggers.append(cand)
+                    except Exception as setup_err:
+                        logger.debug(f"Multi-setup evaluation notice for {sym}: {setup_err}")
+
                 # Progressive update: Keep dashboard and shortlist fresh every 10 instruments
                 if len(results) % 10 == 0:
                     current_sorted = sorted(results, key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
@@ -323,6 +384,37 @@ class ScannerScheduler:
         results.sort(key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
         self.latest_scan_results = results
         self.last_scan_utc = get_utc_iso()
+
+        # Multi-Setup Menu Selection & Paper Placement (Phase 6b, 6c)
+        candidate_triggers.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
+        if self.paper_tracker:
+            for cand in candidate_triggers:
+                taken_sum = self.paper_tracker.get_taken_summary()
+                # Target: 6 to 12 suggestions per day opened on the panel (Phase 6c)
+                if taken_sum.get("suggestions_today", 0) >= 12:
+                    break
+
+                if cand.get("is_wide_sl"):
+                    funnel_counts["removed_wide_sl"] += 1
+
+                opened = self.paper_tracker.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector=cand["sector"],
+                    symbol=cand["symbol"],
+                    action=cand["action"],
+                    entry_price=cand["entry_price"],
+                    stop_loss=cand["stop_loss"],
+                    target=0.0,
+                    quantity=None, # Automatically sized to 20% of virtual capital (Phase 5c)
+                    notes=cand["notes"],
+                    setup_key=cand["setup_key"],
+                    atr_val=cand.get("atr_val")
+                )
+                if opened:
+                    funnel_counts["suggestions_opened_on_panel"] += 1
+
+            funnel_counts["ntfy_triggers_sent"] = getattr(self.paper_tracker, "daily_ntfy_triggers_count", 0)
+            self.paper_tracker.record_funnel_metrics(funnel_counts)
         
         # Evaluate 30-Minute Best-in-Class Shortlist
         shortlist = self.shortlist_engine.select_best_candidates(results)
@@ -439,6 +531,33 @@ class ScannerScheduler:
                                     self.dispatcher.send_morning_tactical_briefing,
                                     shortlist=self.latest_shortlist,
                                     force=True
+                                )
+                            elif slot_id == "14:00_FUNNEL_CHECK":
+                                # Funnel shortfall check (Phase 6d): if trades opened < 6, alert top 3 removal reasons
+                                funnel = self.paper_tracker.get_funnel_summary(date_str) if self.paper_tracker else {}
+                                opened_count = funnel.get("trades_opened", 0)
+                                if opened_count < 6:
+                                    removal_counts = [
+                                        ("Midday Freeze", funnel.get("removed_midday_freeze", 0)),
+                                        ("Regime Veto", funnel.get("removed_regime_veto", 0)),
+                                        ("Late Price Jump", funnel.get("removed_late", 0)),
+                                        ("Insufficient History", funnel.get("removed_insufficient_history", 0)),
+                                        ("Stale Feed", funnel.get("removed_stale_feed", 0)),
+                                        ("Data Suspect", funnel.get("removed_data_suspect", 0)),
+                                    ]
+                                    removal_counts.sort(key=lambda x: x[1], reverse=True)
+                                    top_3 = [r for r in removal_counts if r[1] > 0][:3]
+                                    delivered = await asyncio.to_thread(
+                                        self.dispatcher.send_funnel_shortfall_alert,
+                                        opened_count, top_3
+                                    )
+                                else:
+                                    delivered = True
+                            elif slot_id == "18:00_WEEKLY_REPORT":
+                                weekly_stats = self.paper_tracker.get_weekly_performance_report() if self.paper_tracker else {}
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_sunday_weekly_report,
+                                    weekly_stats
                                 )
                             elif slot_id == "15:00_SUMMARY":
                                 rej_tot = 0

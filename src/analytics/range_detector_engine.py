@@ -624,6 +624,7 @@ class RangeDetectorEngine:
             "reason": reason,
             
             # ATR Metadata (Configured vs Effective)
+            "atr_val": round(float(atr_vals[-1]), 2) if (len(atr_vals) > 0 and not np.isnan(atr_vals[-1])) else round(last_closed_price * 0.015, 2),
             "atr_len_configured": self.atr_len,
             "atr_len_effective": eff_atr_len,
             "break_window_bars": self.break_window_bars,
