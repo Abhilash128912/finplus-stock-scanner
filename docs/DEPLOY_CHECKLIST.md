@@ -73,3 +73,4 @@ After deployment starts on Render, check the following endpoints:
 - **`yfinance Legacy Scan Calls > 0`**: The legacy Yahoo path is intentionally ON (`ENABLE_LEGACY_YAHOO_SCAN_PATH=true`) as a safety valve. It has a separate 3,000 call/day ceiling and does not deplete the strict budget.
 - **`LOCAL_ONLY` on local laptop**: If `FIREBASE_CREDENTIALS_JSON` is not set locally on your machine, it safely falls back to local SQLite and will not overwrite production.
 - **Render Ephemeral Disk Warning**: The warning `"PERSISTENCE_NOTICE: Local files are temporary on Render"` disappears once `FIREBASE_CREDENTIALS_JSON` is active and connected.
+
