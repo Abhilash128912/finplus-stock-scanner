@@ -1217,6 +1217,8 @@ class LivePaperTracker:
                     NTFYDispatcher().send_stop_hit_alert(pos, exit_price, net_pnl, exit_reason)
                 except Exception as alert_err:
                     logger.debug(f"Stop hit alert notice: {alert_err}")
+            else:
+                self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
 
             # Mirror to Firestore if configured (Phase 2B)
             if hasattr(self, "firestore") and self.firestore and self.firestore.is_connected:
@@ -1250,9 +1252,11 @@ class LivePaperTracker:
 
     def get_rejected_ticks_telemetry(self) -> Dict[str, Any]:
         """Returns daily rejected-tick counter metrics per symbol and overall total."""
-        today_ist = get_ist_now().strftime("%Y-%m-%d")
-        if self.rejected_ticks_date_str != today_ist:
+        today_ist = self._get_now_ist().strftime("%Y-%m-%d")
+        if self.rejected_ticks_date_str and self.rejected_ticks_date_str != today_ist:
             self.daily_rejected_ticks_count = {}
+            self.rejected_ticks_date_str = today_ist
+        elif not self.rejected_ticks_date_str:
             self.rejected_ticks_date_str = today_ist
         total_rejected = sum(self.daily_rejected_ticks_count.values())
         return {

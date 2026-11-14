@@ -46,9 +46,10 @@ Format adheres to [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), adhe
 - **P0 - Full 858-Symbol History Backfill (`scripts/backfill_history.py`)**:
   - Successfully backfilled 559,698 15m bars across all 783 unique universe symbols into SQLite `candles.db`.
   - Achieved coverage: ATR 14: 100%, ATR 50: 99.9%, ATR 100: 99.7%, ATR 500: 94.1%.
-- **P0 - Scan Path Flipped to INDmoney/CandleStore First (`MarketDataFeed`, `ScannerScheduler`)**:
-  - Completely removed Yahoo prefetching (`prefetch_batch_15m_candles`) from the scan cycle during market hours.
-  - Closed 15m bars are served purely from `CandleStore` (INDmoney tick accumulator) and local SQLite cache, achieving **0 yfinance calls across healthy scan cycles**.
+- **P0 - Scan Path Architecture: INDmoney-First with Yahoo Safety Path (`MarketDataFeed`, `ScannerScheduler`)**:
+  - Implemented an **INDmoney-first** scan path where closed 15m bars are served primarily from `CandleStore` (INDmoney tick accumulator) and local SQLite cache, achieving **0 yfinance calls across healthy scan cycles**.
+  - **yfinance is NOT eliminated**: The legacy Yahoo path remains intentionally active (`ENABLE_LEGACY_YAHOO_SCAN_PATH=true`) as a safety path until the Bar Parity Recorder confirms >= 98% complete INDmoney bars and >= 99% tolerance match across 2 consecutive sessions.
+  - Legacy scan calls are strictly isolated with their own 3,000 requests/day budget ceiling and reason code `LEGACY_SCAN`, preventing any starvation of the scanner during session trading.
 - **P0 - Fallback Guard Restrictions (`MarketDataFeed`, `ScannerScheduler`)**:
   - Restricted Yahoo live fallback strictly to scenarios where the broker is stale for > 3 minutes (180s) **AND** the symbol has an open position or is in the top-3 candidates.
   - Dataframes fetched during fallback are strictly tagged `YF_FALLBACK`.
