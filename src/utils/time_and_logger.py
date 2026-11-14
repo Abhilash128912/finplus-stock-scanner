@@ -97,9 +97,35 @@ class SafeRotatingFileHandler(RotatingFileHandler):
         except (PermissionError, OSError):
             pass
 
+RECENT_ERRORS: list = []
+
+class ErrorTrackingFilter(logging.Filter):
+    def filter(self, record):
+        if record.levelno >= logging.ERROR:
+            RECENT_ERRORS.append((record.created, record.getMessage()))
+            # Retain only last 500 error records
+            if len(RECENT_ERRORS) > 500:
+                RECENT_ERRORS.pop(0)
+        return True
+
+_error_filter = ErrorTrackingFilter()
+
+def get_recent_error_count(seconds: int = 3600) -> int:
+    """Returns count of ERROR/CRITICAL log events recorded in the last `seconds` (default 1 hour)."""
+    import time
+    cutoff = time.time() - seconds
+    return sum(1 for ts, _ in RECENT_ERRORS if ts >= cutoff)
+
+def get_recent_errors(seconds: int = 3600) -> list:
+    """Returns list of error messages from the last `seconds`."""
+    import time
+    cutoff = time.time() - seconds
+    return [msg for ts, msg in RECENT_ERRORS if ts >= cutoff]
+
 def setup_logger(name: str = "FinPlus_StockScanner") -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(logging.INFO)
+    logger.addFilter(_error_filter)
     
     if not logger.handlers:
         formatter = UTCFormatter("[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s")

@@ -71,7 +71,7 @@ def test_01_history_coverage_calculation(temp_db_dir):
     assert cov2["missing_or_short_symbols"] == ["RELIANCE", "INFY"]
 
 
-def test_02_startup_restore_rule_and_yahoo_avoidance(temp_db_dir):
+def test_02_startup_restore_rule_and_yahoo_avoidance(temp_db_dir, monkeypatch):
     """
     Verifies that if coverage < 90%, Firestore restore is invoked BEFORE the scanner starts,
     and if Firestore brings coverage >= 90%, zero Yahoo calls are made.
@@ -82,10 +82,10 @@ def test_02_startup_restore_rule_and_yahoo_avoidance(temp_db_dir):
 
     # Mock tracked universe to 10 symbols
     mock_universe = [{"symbol": f"SYM_{i}", "yf_ticker": f"SYM_{i}.NS"} for i in range(10)]
-    sched.feed.get_all_universe_items = MagicMock(return_value=mock_universe)
+    monkeypatch.setattr(sched.feed, "get_all_universe_items", MagicMock(return_value=mock_universe))
 
     # Mock Firestore connected
-    sched.firestore.is_connected = True
+    monkeypatch.setattr(sched.firestore, "is_connected", True)
     
     # Mock restore_all_from_firestore to simulate populating 10 symbols with 530 bars each
     def fake_restore(candle_store, paper_tracker=None, schedule_ledger=None):
@@ -93,14 +93,14 @@ def test_02_startup_restore_rule_and_yahoo_avoidance(temp_db_dir):
             for i in range(10):
                 for b in range(530):
                     conn.execute("""
-                        INSERT INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
+                        INSERT OR REPLACE INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
                         VALUES (?, '15m', ?, '2026-11-01T00:00:00Z', '2026-11-01 05:30:00', 100, 105, 95, 100, 100)
                     """, (f"SYM_{i}", 1700000000 + b * 900))
             conn.commit()
         return {"symbols_restored": 10, "bars_restored": 5300}
 
-    sched.firestore.restore_all_from_firestore = MagicMock(side_effect=fake_restore)
-    sched.run_paced_history_backfill = MagicMock()
+    monkeypatch.setattr(sched.firestore, "restore_all_from_firestore", MagicMock(side_effect=fake_restore))
+    monkeypatch.setattr(sched, "run_paced_history_backfill", MagicMock())
 
     # Initial coverage is 0.0% (< 90%)
     res = asyncio.run(sched.check_and_restore_history(caller="test_startup"))

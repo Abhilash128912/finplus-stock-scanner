@@ -47,7 +47,13 @@ class FirestoreBackend:
             cls._instance._initialized = False
         return cls._instance
 
+    @classmethod
+    def reset_for_tests(cls):
+        cls._instance = None
+
     def __init__(self, env_prefix: Optional[str] = None, credentials_json: Optional[str] = None):
+        if env_prefix:
+            self.env_prefix = env_prefix.strip().lower()
         if getattr(self, "_initialized", False):
             return
 
@@ -390,8 +396,14 @@ class FirestoreBackend:
 
         logger.info(f"STARTUP RESTORE: Initiating data recovery from Firestore environment '{self.env_prefix}'...")
 
-        # 1. Restore Candles
+        # 1. Restore Candles (Per Symbol: Restore if Firestore has more bars than local SQLite)
+        firestore_symbols_found = set()
         try:
+            # Query local SQLite bar counts beforehand to compare per-symbol
+            with candle_store._get_connection() as conn:
+                local_rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
+            local_counts = {r[0].upper(): r[1] for r in local_rows}
+
             col = self.get_collection_path("candles")
             docs = self.client.collection(col).stream()
             for doc in docs:
@@ -400,15 +412,28 @@ class FirestoreBackend:
                 sym = data.get("symbol")
                 tf = data.get("timeframe", "15m")
                 b64_str = data.get("data_gz_b64")
+                fb_bars_count = data.get("bars_count", 0)
+                
                 if sym and b64_str:
                     clean_sym = sym.split(" ")[0].upper()
+                    firestore_symbols_found.add(clean_sym)
+
                     if symbols_filter and clean_sym not in symbols_filter:
                         continue
+
+                    local_cnt = local_counts.get(clean_sym, 0)
+                    # Per-symbol rule: Restore if Firestore has more bars than local database, or local is short
+                    if fb_bars_count > 0 and fb_bars_count <= local_cnt and local_cnt >= 522:
+                        continue
+
                     try:
                         compressed = base64.b64decode(b64_str.encode('ascii'))
                         raw_json = gzip.decompress(compressed).decode('utf-8')
                         matrix = json.loads(raw_json)
                         
+                        if len(matrix) <= local_cnt and local_cnt >= 522:
+                            continue
+
                         # High-speed bulk insert into SQLite via executemany
                         records = []
                         for row in matrix:
@@ -430,6 +455,7 @@ class FirestoreBackend:
                             conn.commit()
                         restored_symbols += 1
                         restored_candles_count += len(matrix)
+                        local_counts[clean_sym] = len(matrix)
                     except Exception as parse_err:
                         logger.warning(f"Error parsing candle document for {sym}: {parse_err}")
         except Exception as e:
@@ -612,6 +638,7 @@ class FirestoreBackend:
             "trades_restored": restored_trades,
             "reads_used": reads_used,
             "duration_sec": round(dur, 2),
+            "firestore_symbols": list(firestore_symbols_found),
             "timestamp_utc": get_utc_iso()
         }
         self.last_restore_result = restore_res
@@ -625,6 +652,11 @@ class FirestoreBackend:
         )
 
         return restore_res
+
+    def restore_per_symbol(self, candle_store, tracked_symbols = None, paper_tracker = None, schedule_ledger = None) -> Dict[str, Any]:
+        """Convenience method for per-symbol restore comparison against Firestore."""
+        sym_filter = set(tracked_symbols) if tracked_symbols else None
+        return self.restore_all_from_firestore(candle_store, paper_tracker, schedule_ledger, symbols_filter=sym_filter)
 
     # -------------------------------------------------------------
     # 4. TELEMETRY & HEALTH

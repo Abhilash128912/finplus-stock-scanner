@@ -369,6 +369,31 @@ class ScannerScheduler:
                                     funnel_counts["removed_stale_feed"] += 1
                                     continue
 
+                                dir_int = 1 if cand.get("action") == "BUY" else -1
+                                live_price = cand.get("entry_price", 0.0)
+                                now_ts = time.time()
+
+                                # Intrabar 60-Second Hold Verification (Requirement 1b)
+                                # Wicks (< 60s) are suppressed to prevent false triggers; held >= 60s qualifies
+                                if cand.get("is_intrabar", True):
+                                    if sym not in self.live_hold_buffer:
+                                        self.live_hold_buffer[sym] = (live_price, now_ts, dir_int)
+                                        logger.info(f"Intrabar hold started for {sym} at {live_price:.2f}. Awaiting 60s confirmation.")
+                                        continue
+                                    else:
+                                        init_p, init_ts, hold_dir = self.live_hold_buffer[sym]
+                                        elapsed_s = now_ts - init_ts
+                                        # Check if price retreated inside boundary
+                                        is_still_holding = (live_price >= init_p) if dir_int > 0 else (live_price <= init_p)
+                                        if not is_still_holding or hold_dir != dir_int:
+                                            # 20-second wick retreated back: clear buffer, no trigger
+                                            self.live_hold_buffer.pop(sym, None)
+                                            continue
+                                        if elapsed_s < 60.0:
+                                            # Still in hold confirmation window (< 60s)
+                                            continue
+                                        # Confirmed >= 60 seconds hold!
+
                                 # Check daily latch per symbol per day (Phase 5d / 2.5.4)
                                 date_str = get_ist_now().strftime("%Y-%m-%d")
                                 if self.ledger.is_symbol_latched_today(date_str, sym):
@@ -604,6 +629,14 @@ class ScannerScheduler:
                                 logger.info("08:30 IST Scheduled Check: Evaluating history coverage and restoring from Firestore if needed...")
                                 await self.check_and_restore_history(caller="08:30_scheduled")
                                 delivered = True
+                            elif slot_id == "08:45_PREFLIGHT":
+                                logger.info("08:45 IST Trading Day Preflight Check: Evaluating system readiness...")
+                                from src.api.server import compute_preflight_status
+                                preflight_data = compute_preflight_status()
+                                delivered = await asyncio.to_thread(
+                                    self.dispatcher.send_preflight_ntfy,
+                                    preflight_data
+                                )
                             elif slot_id == "16:00_HISTORY_BACKFILL":
                                 # Run off-hours history backfill runner via YFinanceGateway with HISTORY_BACKFILL
                                 logger.info(f"Triggering scheduled off-hours backfill runner ({slot_id})...")
@@ -636,58 +669,94 @@ class ScannerScheduler:
 
     async def check_and_restore_history(self, caller: str = "startup") -> Dict[str, Any]:
         """
-        Evaluates history coverage across tracked universe.
-        If coverage < 90% (< 90% of tracked symbols have >= 522 bars), restores missing or short symbols
-        from Firestore BEFORE the scanner starts.
-        Only then runs the paced Yahoo backfill for whatever is still missing.
-        Never downloads from Yahoo what Firestore already has.
+        Evaluates history coverage across distinct tracked tickers (Requirement 0b, 0c).
+        Logs timestamped steps:
+        - "STARTUP coverage X%"
+        - "firebase connected"
+        - "restore started N symbols / finished N symbols / skipped because <reason>"
+        - "backfill queued N symbols"
+        Restores per-symbol: if Firestore has more bars than local database, restores that symbol.
+        Yahoo backfill runs ONLY for symbols missing in Firestore AND not LISTING_TOO_NEW.
         """
         universe = self.feed.get_all_universe_items() if self.feed else []
-        all_symbols = [it.get("symbol", "").split(" ")[0].upper() for it in universe if it.get("symbol")]
-        
-        coverage = self.candle_store.get_history_coverage(all_symbols, timeframe="15m", target_bars=522)
+        seen_syms = set()
+        distinct_symbols = []
+        for it in universe:
+            sym = it.get("symbol", "").split(" ")[0].upper()
+            if sym and sym not in seen_syms:
+                seen_syms.add(sym)
+                distinct_symbols.append(sym)
+
+        coverage = self.candle_store.get_history_coverage(distinct_symbols, timeframe="15m", target_bars=522)
         cov_pct = coverage.get("coverage_522_pct", 0.0)
         missing = coverage.get("missing_or_short_symbols", [])
 
+        now_ist_str = get_ist_time_str()
+        logger.info(f"[{now_ist_str}] STARTUP coverage {cov_pct:.1f}% ({coverage['symbols_522_bars']['count']}/{len(distinct_symbols)} symbols)")
+
+        fb_connected = hasattr(self, "firestore") and self.firestore.is_connected
+        if fb_connected:
+            logger.info(f"[{now_ist_str}] firebase connected")
+        else:
+            logger.info(f"[{now_ist_str}] firebase local-only mode")
+
         if cov_pct < 90.0:
-            reason = f"Coverage {cov_pct:.1f}% is below 90.0% target ({coverage['symbols_522_bars']['count']}/{len(all_symbols)} symbols have >= 522 bars)"
-            logger.info(f"[{caller.upper()}] {reason}. Restoring missing or short symbols from Firestore BEFORE scanner starts...")
-            if hasattr(self, "firestore") and self.firestore.is_connected:
+            if fb_connected:
+                logger.info(f"[{now_ist_str}] restore started {len(missing)} symbols from Firestore...")
                 try:
                     restore_res = await asyncio.to_thread(
                         self.firestore.restore_all_from_firestore,
                         self.candle_store, self.paper_tracker, self.ledger
                     )
-                    logger.info(f"[{caller.upper()}] Firestore restore completed: {restore_res}")
-                    cov_after = self.candle_store.get_history_coverage(all_symbols, timeframe="15m", target_bars=522)
+                    restored_cnt = restore_res.get("candles_restored", 0)
+                    restored_sym_cnt = restore_res.get("symbols_restored", 0)
+                    fb_symbols = set(restore_res.get("firestore_symbols", []))
+
+                    logger.info(f"[{get_ist_time_str()}] restore finished {restored_sym_cnt} symbols ({restored_cnt} bars)")
+                    
+                    cov_after = self.candle_store.get_history_coverage(distinct_symbols, timeframe="15m", target_bars=522)
                     cov_after_pct = cov_after.get("coverage_522_pct", 0.0)
                     missing_after = cov_after.get("missing_or_short_symbols", [])
 
+                    # Backfill only symbols missing in Firestore AND not listing_too_new
+                    needed_yahoo = [s for s in missing_after if s not in fb_symbols]
+
                     if cov_after_pct < 90.0:
-                        self.firestore.last_restore_reason = (
-                            f"Restored from Firestore (coverage {cov_after_pct:.1f}% < 90.0%). "
-                            f"Queued paced Yahoo backfill for {len(missing_after)} remaining symbols."
-                        )
-                        logger.info(f"[{caller.upper()}] Post-Firestore coverage {cov_after_pct:.1f}% < 90.0%. Running paced Yahoo backfill for {len(missing_after)} remaining symbols...")
-                        asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing_after))
+                        if needed_yahoo:
+                            logger.info(f"[{get_ist_time_str()}] backfill queued {len(needed_yahoo)} symbols (missing in Firestore and not LISTING_TOO_NEW)")
+                            self.firestore.last_restore_reason = (
+                                f"Restored {restored_sym_cnt} symbols from Firestore (coverage {cov_after_pct:.1f}% < 90.0%). "
+                                f"Queued paced Yahoo backfill for {len(needed_yahoo)} symbols not found in Firestore."
+                            )
+                            asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=needed_yahoo))
+                        else:
+                            logger.info(f"[{get_ist_time_str()}] backfill skipped (0 symbols missing in Firestore; remaining short symbols are LISTING_TOO_NEW or pending next session)")
+                            self.firestore.last_restore_reason = (
+                                f"Restored {restored_sym_cnt} symbols from Firestore (coverage {cov_after_pct:.1f}%). "
+                                f"0 yfinance calls needed (all short symbols are newly listed or absent from Firestore)."
+                            )
                     else:
+                        logger.info(f"[{get_ist_time_str()}] backfill skipped (coverage {cov_after_pct:.1f}% >= 90.0% reached, 0 yfinance calls needed)")
                         self.firestore.last_restore_reason = (
-                            f"Restored from Firestore: coverage reached {cov_after_pct:.1f}% >= 90.0% "
-                            f"({cov_after['symbols_522_bars']['count']}/{len(all_symbols)} symbols). Zero Yahoo calls needed."
+                            f"Restored {restored_sym_cnt} symbols from Firestore: coverage reached {cov_after_pct:.1f}% >= 90.0% "
+                            f"({cov_after['symbols_522_bars']['count']}/{len(distinct_symbols)} symbols). Zero Yahoo calls needed."
                         )
-                        logger.info(f"[{caller.upper()}] Post-Firestore coverage {cov_after_pct:.1f}% >= 90.0%. Zero Yahoo calls needed.")
                     return cov_after
                 except Exception as restore_err:
                     logger.error(f"Error during Firestore startup restore: {restore_err}")
                     self.firestore.last_restore_reason = f"Error during Firestore restore: {restore_err}"
             else:
-                self.firestore.last_restore_reason = f"Firestore LOCAL_ONLY mode; queued Yahoo backfill for {len(missing)} symbols."
+                logger.info(f"[{now_ist_str}] restore skipped because firebase not connected (local-only mode)")
+                logger.info(f"[{now_ist_str}] backfill queued {len(missing)} symbols")
+                if hasattr(self, "firestore"):
+                    self.firestore.last_restore_reason = f"Firestore LOCAL_ONLY mode; queued Yahoo backfill for {len(missing)} symbols."
                 asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing))
         else:
-            reason = f"Coverage {cov_pct:.1f}% already >= 90.0% target ({coverage['symbols_522_bars']['count']}/{len(all_symbols)} symbols have >= 522 bars). No restore needed."
-            logger.info(f"[{caller.upper()}] {reason}")
+            skip_msg = f"coverage {cov_pct:.1f}% already >= 90.0% target ({coverage['symbols_522_bars']['count']}/{len(distinct_symbols)} distinct symbols have >= 522 bars)"
+            logger.info(f"[{now_ist_str}] restore skipped because {skip_msg}")
+            logger.info(f"[{now_ist_str}] backfill skipped (0 symbols needed)")
             if hasattr(self, "firestore"):
-                self.firestore.last_restore_reason = f"Skipped: {reason}"
+                self.firestore.last_restore_reason = f"Skipped: {skip_msg}"
 
         return coverage
 

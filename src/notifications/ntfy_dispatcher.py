@@ -49,6 +49,7 @@ class NTFYDispatcher:
             self.topics = DEFAULT_TOPICS
             
         self.auth_token = os.getenv("NTFY_AUTH_TOKEN", DEFAULT_NTFY_AUTH_TOKEN)
+        self.alerts_enabled = os.getenv("ALERTS_ENABLED", "true").lower() in ("true", "1", "yes")
         self.token_rejected = False
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
@@ -80,6 +81,12 @@ class NTFYDispatcher:
         - Only stop-loss alerts may use 241-248.
         - At 248, block everything and log WARNING once.
         """
+        # Safety Switch: ALERTS_ENABLED (Requirement 3)
+        # When false, no NTFY pushes are dispatched, but paper trading, panel, and Firebase mirror continue.
+        if not getattr(self, "alerts_enabled", True):
+            logger.info("ALERTS_ENABLED is false: NTFY push suppressed.")
+            return False
+
         today = get_ist_now().strftime("%Y-%m-%d")
         used_today = self.ledger.get_ntfy_sent_count(today)
 
@@ -153,6 +160,39 @@ class NTFYDispatcher:
         for topic in self.topics:
             url = f"https://ntfy.sh/{topic}"
             delivered = self._safe_post(url, msg, headers, alert_type="STARTUP")
+            if delivered:
+                res = True
+        return res
+
+    def send_preflight_ntfy(self, preflight_data: Dict[str, Any]) -> bool:
+        """
+        Dispatches 08:45 IST Trading Day Preflight Check NTFY push:
+        "[PREFLIGHT] ALL GREEN" or list of RED items.
+        Nothing is sent on weekends or holidays (handled by caller).
+        """
+        is_all_green = preflight_data.get("all_green", False)
+        red_items = preflight_data.get("red_items", [])
+        
+        if is_all_green:
+            msg = "[PREFLIGHT] ALL GREEN\nAll systems nominal for today's market session."
+            headers = {
+                "Title": "FinPlus+ Preflight: ALL GREEN",
+                "Priority": "high",
+                "Tags": "white_check_mark,green_circle"
+            }
+        else:
+            red_str = "\n".join([f"- {it['name']}: {it['details']}" for it in red_items])
+            msg = f"[PREFLIGHT] RED ISSUES DETECTED:\n{red_str}"
+            headers = {
+                "Title": "FinPlus+ Preflight: ATTENTION REQUIRED",
+                "Priority": "urgent",
+                "Tags": "warning,red_circle"
+            }
+
+        res = False
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            delivered = self._safe_post(url, msg, headers, alert_type="PREFLIGHT", is_priority=True)
             if delivered:
                 res = True
         return res

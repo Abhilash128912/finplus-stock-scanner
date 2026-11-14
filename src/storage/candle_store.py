@@ -8,11 +8,10 @@ Outputs clean time-series data for TradingView Lightweight Charts canvas.
 """
 
 import os
-import os
 import sqlite3
 import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set, Tuple
 import pandas as pd
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso
@@ -25,8 +24,13 @@ DB_PATH = DB_DIR / "candles.db"
 
 
 class CandleStore:
-    def __init__(self, db_path: str = str(DB_PATH)):
-        self.db_path = db_path
+    def __init__(self, db_path: Optional[str] = None):
+        if db_path is not None:
+            self.db_path = db_path
+        else:
+            data_dir = Path(os.getenv("DATA_DIR", Path(__file__).resolve().parent.parent.parent / "data"))
+            data_dir.mkdir(parents=True, exist_ok=True)
+            self.db_path = str(data_dir / "candles.db")
         self.symbol_last_extremes: Dict[str, Tuple[Optional[float], Optional[float], int]] = {}
         self._init_db()
 
@@ -261,15 +265,27 @@ class CandleStore:
         df.index = pd.to_datetime(df["time"], unit="s")
         return df[["Open", "High", "Low", "Close", "Volume"]]
 
-    def get_history_coverage(self, tracked_symbols: Optional[List[str]] = None, timeframe: str = "15m", target_bars: int = 522) -> Dict[str, Any]:
+    def get_history_coverage(
+        self,
+        tracked_symbols: Optional[List[str]] = None,
+        timeframe: str = "15m",
+        target_bars: int = 522,
+        listing_too_new_symbols: Optional[Set[str]] = None
+    ) -> Dict[str, Any]:
         """
-        Computes granular history coverage metrics for tracked symbols:
+        Computes granular history coverage metrics for distinct tracked tickers:
         - total bars stored
         - count and % of symbols with >= 122 bars (ATR 100 threshold)
         - count and % of symbols with >= target_bars (ATR 500 threshold, default 522)
+        - recognizes LISTING_TOO_NEW symbols (recent IPOs with all available bars since listing) as complete
         - oldest and newest bar timestamps
-        - list of symbols missing or short of target_bars
+        - list of symbols missing or short of target_bars (excluding LISTING_TOO_NEW)
         """
+        if listing_too_new_symbols is None:
+            listing_too_new_symbols = set()
+        else:
+            listing_too_new_symbols = {s.split(" ")[0].upper() for s in listing_too_new_symbols}
+
         with self._get_connection() as conn:
             agg_row = conn.execute("""
                 SELECT COUNT(*) as total_bars, MIN(timestamp_ist) as oldest_bar, MAX(timestamp_ist) as newest_bar
@@ -282,26 +298,52 @@ class CandleStore:
             newest_bar = agg_row["newest_bar"] if agg_row and agg_row["newest_bar"] else None
 
             rows = conn.execute("""
-                SELECT symbol, COUNT(*) as cnt
+                SELECT symbol, COUNT(*) as cnt, MIN(epoch) as min_ep, MAX(epoch) as max_ep
                 FROM candles
                 WHERE timeframe = ?
                 GROUP BY symbol
             """, (timeframe,)).fetchall()
             counts = {r["symbol"].upper(): r["cnt"] for r in rows}
+            min_epochs = {r["symbol"].upper(): r["min_ep"] for r in rows}
 
         if tracked_symbols is None:
             symbols_to_check = list(counts.keys())
         else:
-            symbols_to_check = [s.split(" ")[0].upper() for s in tracked_symbols if s]
+            # Preserve tracked_symbols order while deduplicating distinct uppercase tickers
+            seen = set()
+            symbols_to_check = []
+            for s in tracked_symbols:
+                if s:
+                    clean = s.split(" ")[0].upper()
+                    if clean not in seen:
+                        seen.add(clean)
+                        symbols_to_check.append(clean)
 
         total_tracked = len(symbols_to_check) if symbols_to_check else 1
 
-        cnt_122 = sum(1 for s in symbols_to_check if counts.get(s, 0) >= 122)
-        cnt_522 = sum(1 for s in symbols_to_check if counts.get(s, 0) >= target_bars)
-        missing_or_short = [s for s in symbols_to_check if counts.get(s, 0) < target_bars]
+        # Automatically detect newly listed symbols if they hold continuous bars since recent listing (< 45 trading days ago)
+        now_epoch = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
+        detected_new_listings = set(listing_too_new_symbols)
+        for s in symbols_to_check:
+            cnt = counts.get(s, 0)
+            if cnt > 0 and cnt < target_bars:
+                min_ep = min_epochs.get(s, 0)
+                # If oldest bar is within the last 40 calendar days (recent listing) and has >= 50 bars
+                if min_ep and (now_epoch - min_ep) <= (40 * 86400) and cnt >= 50:
+                    detected_new_listings.add(s)
+
+        cnt_122 = sum(1 for s in symbols_to_check if counts.get(s, 0) >= 122 or s in detected_new_listings)
+        cnt_522_raw = sum(1 for s in symbols_to_check if counts.get(s, 0) >= target_bars)
+        # Complete count includes symbols >= target_bars PLUS valid new listings
+        cnt_522_complete = sum(1 for s in symbols_to_check if counts.get(s, 0) >= target_bars or s in detected_new_listings)
+        
+        missing_or_short = [
+            s for s in symbols_to_check
+            if counts.get(s, 0) < target_bars and s not in detected_new_listings
+        ]
 
         pct_122 = round((cnt_122 / total_tracked) * 100.0, 1) if total_tracked > 0 else 0.0
-        pct_522 = round((cnt_522 / total_tracked) * 100.0, 1) if total_tracked > 0 else 0.0
+        pct_522 = round((cnt_522_complete / total_tracked) * 100.0, 1) if total_tracked > 0 else 0.0
 
         return {
             "total_bars": total_bars,
@@ -311,10 +353,13 @@ class CandleStore:
                 "percentage": pct_122
             },
             "symbols_522_bars": {
-                "count": cnt_522,
-                "percentage": pct_522
+                "count": cnt_522_complete,
+                "percentage": pct_522,
+                "raw_522_count": cnt_522_raw
             },
             "coverage_522_pct": pct_522,
+            "listing_too_new_count": len(detected_new_listings),
+            "listing_too_new_symbols": sorted(list(detected_new_listings)),
             "oldest_bar_time": oldest_bar,
             "newest_bar_time": newest_bar,
             "missing_or_short_symbols": missing_or_short,

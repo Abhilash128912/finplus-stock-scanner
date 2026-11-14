@@ -30,6 +30,7 @@ DB_PATH = DB_DIR / "schedule_ledger.db"
 # Target time is (hour, minute) in IST
 SCHEDULED_MILESTONES = [
     {"slot_id": "08:30_HISTORY_BACKFILL", "target_h": 8, "target_m": 30, "name": "08:30 AM Off-Hours History Backfill"},
+    {"slot_id": "08:45_PREFLIGHT", "target_h": 8, "target_m": 45, "name": "08:45 AM Trading Day Preflight Check"},
     {"slot_id": "09:00_AGENDA", "target_h": 9, "target_m": 0, "name": "09:00 AM Today's Agenda Briefing"},
     {"slot_id": "09:30_PULSE_FIRST", "target_h": 9, "target_m": 30, "name": "09:30 AM First Status & Suggestions"},
     {"slot_id": "10:00_PULSE", "target_h": 10, "target_m": 0, "name": "10:00 AM 30m Pulse"},

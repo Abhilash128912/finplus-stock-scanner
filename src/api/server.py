@@ -17,15 +17,22 @@ for _p in [_APP_ROOT, _SRC_DIR]:
         sys.path.insert(0, _p)
 
 import asyncio
+import base64
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.scheduler.scanner_scheduler import ScannerScheduler
-from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, is_market_open_ist
+from src.utils.time_and_logger import (
+    setup_logger, get_utc_iso, get_ist_time_str, get_ist_now,
+    is_market_open_ist, get_recent_error_count, get_recent_errors
+)
+from src.utils.indian_market_calendar import is_nse_holiday, check_calendar_coverage_next_n_trading_days
+from src.utils.memory_tracker import get_process_rss_mb
 
 logger = setup_logger("APIServer")
 
@@ -35,13 +42,58 @@ app = FastAPI(
     version="2.2.0"
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# Panel HTTP Basic Auth Middleware (Requirement 3)
+class PanelBasicAuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # HEAD requests are public for health check / uptime monitors
+        if request.method == "HEAD":
+            return await call_next(request)
+
+        panel_user = os.getenv("PANEL_USER")
+        panel_pass = os.getenv("PANEL_PASSWORD")
+
+        if panel_user and panel_pass:
+            path = request.url.path
+            # Public endpoints: /api/health, /api/health/deep, /api/preflight, /preflight
+            is_public = (
+                path.startswith("/api/health") or
+                path == "/api/preflight" or
+                path == "/preflight" or
+                path.startswith("/static")
+            )
+
+            # Protected: Panel HTML page ("/") and state-modifying requests (POST, PUT, DELETE)
+            needs_auth = not is_public and (
+                path == "/" or request.method in ("POST", "PUT", "DELETE", "PATCH")
+            )
+
+            # Special bypass for /api/admin/restore-now (which uses its own Bearer ADMIN_TOKEN)
+            if path == "/api/admin/restore-now":
+                return await call_next(request)
+
+            if needs_auth:
+                auth_hdr = request.headers.get("Authorization")
+                authenticated = False
+                if auth_hdr and auth_hdr.startswith("Basic "):
+                    try:
+                        encoded = auth_hdr.split(" ", 1)[1]
+                        decoded = base64.b64decode(encoded).decode("utf-8")
+                        u, p = decoded.split(":", 1)
+                        if u == panel_user and p == panel_pass:
+                            authenticated = True
+                    except Exception:
+                        authenticated = False
+
+                if not authenticated:
+                    return Response(
+                        status_code=401,
+                        content="401 Unauthorized: Invalid or missing credentials.",
+                        headers={"WWW-Authenticate": 'Basic realm="FinPlus Institutional Panel"'}
+                    )
+
+        return await call_next(request)
+
+app.add_middleware(PanelBasicAuthMiddleware)
 
 FRONTEND_DIR = os.path.join(_APP_ROOT, "finplus_stock_scanner", "frontend")
 if not os.path.exists(FRONTEND_DIR):
@@ -158,6 +210,11 @@ async def serve_live():
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
     return {"status": "ok", "app": "FinPlus-Stock-Scanner"}
+
+@app.api_route("/api/health", methods=["GET", "HEAD"])
+async def get_health_simple():
+    """Simple uptime healthcheck endpoint."""
+    return {"status": "HEALTHY", "service": "FinPlus-Stock-Scanner", "timestamp_utc": get_utc_iso()}
 
 @app.api_route("/api/health/deep", methods=["GET", "HEAD"])
 @app.api_route("/health/deep", methods=["GET", "HEAD"])
@@ -330,6 +387,12 @@ async def deep_health_check():
     yf_metrics = YFinanceGateway().get_metrics()
     parity_summary = scheduler.parity_recorder.get_daily_summary() if hasattr(scheduler, "parity_recorder") else {}
 
+    panel_auth_configured = bool(os.getenv("PANEL_USER") and os.getenv("PANEL_PASSWORD"))
+    if not panel_auth_configured:
+        issues.append("WARNING: Panel HTTP Basic Auth is not configured (panel is public)")
+
+    alerts_enabled = os.getenv("ALERTS_ENABLED", "true").lower() in ("true", "1", "yes")
+
     payload = {
         "status": overall_status,
         "market_open": market_open,
@@ -339,6 +402,11 @@ async def deep_health_check():
         "app": "FinPlus-Stock-Scanner",
         "ist_time": get_ist_time_str(),
         "timestamp_utc": get_utc_iso(),
+        "safety_switches": {
+            "alerts_enabled": alerts_enabled,
+            "panel_auth_configured": panel_auth_configured,
+            "panel_auth_warning": None if panel_auth_configured else "panel is public"
+        },
         "engine": {
             "is_running": is_engine_alive,
             "tracked_universe_count": len(scheduler.feed.get_all_universe_items()) if scheduler.feed else 0,
@@ -376,6 +444,292 @@ async def get_bar_parity():
     if hasattr(scheduler, "parity_recorder"):
         return scheduler.parity_recorder.get_daily_summary()
     return {"status": "UNAVAILABLE", "message": "BarParityRecorder not initialized"}
+
+# -------------------------------------------------------------
+# Admin Protected Endpoints (Requirement 0d)
+# -------------------------------------------------------------
+@app.post("/api/admin/restore-now")
+async def admin_restore_now(request: Request):
+    """
+    Protected by ADMIN_TOKEN env var (Bearer token).
+    Runs per-symbol restore immediately and returns:
+    symbols restored, bars restored, reads used, yfinance calls (0).
+    """
+    admin_token = os.getenv("ADMIN_TOKEN")
+    if not admin_token:
+        raise HTTPException(status_code=500, detail="ADMIN_TOKEN is not configured on the server")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing Bearer token")
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if token != admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid ADMIN_TOKEN")
+
+    if not hasattr(scheduler, "firestore") or not scheduler.firestore.is_connected:
+        return JSONResponse(status_code=503, content={"status": "ERROR", "message": "Firestore backend is not connected"})
+
+    # Run immediate per-symbol restore
+    try:
+        res = await asyncio.to_thread(
+            scheduler.firestore.restore_all_from_firestore,
+            scheduler.candle_store, scheduler.paper_tracker, scheduler.ledger
+        )
+        return {
+            "status": "SUCCESS",
+            "message": "Immediate per-symbol restore completed from Firestore",
+            "symbols_restored": res.get("symbols_restored", 0),
+            "bars_restored": res.get("candles_restored", 0),
+            "trades_restored": res.get("trades_restored", 0),
+            "reads_used": res.get("reads_used", 0),
+            "yfinance_calls": 0,
+            "duration_sec": res.get("duration_sec", 0.0),
+            "timestamp_utc": get_utc_iso()
+        }
+    except Exception as e:
+        logger.error(f"Error during admin restore-now: {e}")
+        return JSONResponse(status_code=500, content={"status": "ERROR", "message": str(e)})
+
+
+# -------------------------------------------------------------
+# Preflight System Health Check (Requirement 2)
+# -------------------------------------------------------------
+def compute_preflight_status() -> Dict[str, Any]:
+    """Computes comprehensive preflight readiness with plain English status lines."""
+    items = []
+    
+    # 1. Version and Branch
+    ver = get_code_version()
+    items.append({
+        "id": "version_branch",
+        "name": "Version & Branch",
+        "status": "GREEN",
+        "details": f"Commit {ver.get('commit', 'unknown')} on branch {ver.get('branch', 'unknown')}"
+    })
+
+    # 2. Trading Day Status (is today an NSE trading day or weekend/holiday)
+    now_ist = get_ist_now()
+    is_weekend = now_ist.weekday() >= 5
+    is_hol, hol_name = is_nse_holiday(now_ist.date())
+    if is_weekend:
+        day_status = "AMBER"
+        day_details = f"Weekend ({now_ist.strftime('%A')}) - Markets Closed"
+    elif is_hol:
+        day_status = "AMBER"
+        day_details = f"Official NSE Holiday ({hol_name}) - Exchange Closed"
+    else:
+        day_status = "GREEN"
+        day_details = f"Trading Day Active ({now_ist.strftime('%A, %d %b %Y')})"
+    items.append({
+        "id": "trading_day",
+        "name": "Trading Day Status",
+        "status": day_status,
+        "details": day_details
+    })
+
+    # 3. Broker Token
+    broker_ok = False
+    broker_msg = "Broker not configured"
+    if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
+        tok = scheduler.indmoney_feed.auth_client.get_valid_token(auto_refresh=False)
+        if tok and len(tok) > 20:
+            broker_ok = True
+            broker_msg = f"Token valid (length {len(tok)})"
+        else:
+            broker_msg = "Token missing or expired"
+    items.append({
+        "id": "broker_token",
+        "name": "Broker Token",
+        "status": "GREEN" if broker_ok else "RED",
+        "details": broker_msg
+    })
+
+    # 4. Firebase Connected & Last Restore Result
+    fb_conn = hasattr(scheduler, "firestore") and scheduler.firestore.is_connected
+    last_res = scheduler.firestore.last_restore_reason if hasattr(scheduler, "firestore") else "NO_RESTORE_RUN"
+    items.append({
+        "id": "firebase_connected",
+        "name": "Firebase Persistence",
+        "status": "GREEN" if fb_conn else "RED",
+        "details": f"Connected ({scheduler.firestore.env_prefix}) | Last Restore: {last_res}" if fb_conn else "Local-only mode (FIREBASE_CREDENTIALS_JSON missing)"
+    })
+
+    # 5. History Coverage >= 90%
+    universe = scheduler.feed.get_all_universe_items() if scheduler.feed else []
+    seen = set()
+    distinct_syms = []
+    for it in universe:
+        sym = it.get("symbol", "").split(" ")[0].upper()
+        if sym and sym not in seen:
+            seen.add(sym)
+            distinct_syms.append(sym)
+    cov = scheduler.candle_store.get_history_coverage(distinct_syms) if hasattr(scheduler, "candle_store") else {}
+    cov_pct = cov.get("coverage_522_pct", 0.0)
+    cnt_522 = cov.get("symbols_522_bars", {}).get("count", 0)
+    cov_ok = cov_pct >= 90.0
+    items.append({
+        "id": "history_coverage",
+        "name": "History Coverage (>= 90%)",
+        "status": "GREEN" if cov_ok else "RED",
+        "details": f"{cov_pct:.1f}% ({cnt_522}/{len(distinct_syms)} distinct tickers have >= 522 bars or valid new listing)"
+    })
+
+    # 6. NTFY Token
+    ntfy_tok = getattr(scheduler.dispatcher, "auth_token", "")
+    ntfy_rejected = getattr(scheduler.dispatcher, "token_rejected", False)
+    alerts_on = getattr(scheduler.dispatcher, "alerts_enabled", True)
+    if not ntfy_tok:
+        ntfy_status = "AMBER"
+        ntfy_details = "Public topic mode (no NTFY_AUTH_TOKEN set)"
+    elif ntfy_rejected:
+        ntfy_status = "RED"
+        ntfy_details = "Token rejected by NTFY server"
+    else:
+        ntfy_status = "GREEN"
+        ntfy_details = f"Token accepted (alerts {'enabled' if alerts_on else 'disabled by ALERTS_ENABLED switch'})"
+    items.append({
+        "id": "ntfy_token",
+        "name": "NTFY Push Gateway",
+        "status": ntfy_status,
+        "details": ntfy_details
+    })
+
+    # 7. Holiday Calendar Coverage (next 10 trading days)
+    cal_cov = check_calendar_coverage_next_n_trading_days(10)
+    cal_ok = cal_cov.get("covered", False)
+    items.append({
+        "id": "holiday_calendar",
+        "name": "Holiday Calendar Coverage",
+        "status": "GREEN" if cal_ok else "RED",
+        "details": f"Covers next 10 trading days (calendar extends through {cal_cov.get('latest_holiday_calendar_year')})"
+    })
+
+    # 8. Legacy Yahoo Budget
+    from src.gateway.yfinance_gateway import YFinanceGateway
+    yf_m = YFinanceGateway().get_metrics()
+    yf_calls = yf_m.get("daily_calls_used", 0)
+    yf_cb = yf_m.get("circuit_breaker_tripped", False)
+    yf_ok = (not yf_cb) and (yf_calls < 250)
+    items.append({
+        "id": "yahoo_budget",
+        "name": "Legacy Yahoo Budget",
+        "status": "GREEN" if yf_ok else "RED",
+        "details": f"{yf_calls}/250 daily calls used | Circuit Breaker: {'TRIPPED' if yf_cb else 'NORMAL'}"
+    })
+
+    # 9. Memory RSS
+    rss_mb = get_process_rss_mb()
+    # Alert if RSS > 400 MB (Render free tier limit is 512 MB)
+    mem_ok = rss_mb < 400.0
+    items.append({
+        "id": "memory_rss",
+        "name": "Process Memory (RSS)",
+        "status": "GREEN" if mem_ok else "RED",
+        "details": f"{rss_mb:.1f} MB (Limit: 512 MB, Warning at 400 MB)"
+    })
+
+    # 10. No Unresolved ERROR in Last Hour
+    err_cnt = get_recent_error_count(3600)
+    err_ok = (err_cnt == 0)
+    items.append({
+        "id": "unresolved_errors",
+        "name": "Recent Errors (Last 1 Hour)",
+        "status": "GREEN" if err_ok else "RED",
+        "details": f"{err_cnt} ERROR/CRITICAL events logged in the last 60 minutes"
+    })
+
+    # Determine overall status
+    reds = [it for it in items if it["status"] == "RED"]
+    all_green = (len(reds) == 0)
+
+    return {
+        "status": "ALL_GREEN" if all_green else "ATTENTION_REQUIRED",
+        "all_green": all_green,
+        "red_items": reds,
+        "items": items,
+        "ist_time": get_ist_time_str(),
+        "timestamp_utc": get_utc_iso()
+    }
+
+
+@app.get("/api/preflight")
+async def get_preflight_json():
+    """Returns preflight checklist status in JSON format."""
+    return JSONResponse(content=compute_preflight_status())
+
+
+@app.get("/preflight", response_class=HTMLResponse)
+async def get_preflight_html():
+    """Renders human-readable Preflight Dashboard with GREEN/RED status indicators in plain English."""
+    data = compute_preflight_status()
+    all_green = data.get("all_green", False)
+    banner_bg = "#065f46" if all_green else "#991b1b"
+    banner_text = "ALL SYSTEMS NOMINAL - READY FOR MARKET SESSION" if all_green else "PREFLIGHT ATTENTION REQUIRED"
+
+    rows_html = ""
+    for it in data.get("items", []):
+        color = "#10b981" if it["status"] == "GREEN" else ("#f59e0b" if it["status"] == "AMBER" else "#ef4444")
+        bg_chip = "rgba(16, 185, 129, 0.15)" if it["status"] == "GREEN" else ("rgba(245, 158, 11, 0.15)" if it["status"] == "AMBER" else "rgba(239, 68, 68, 0.15)")
+        rows_html += f"""
+        <tr style="border-bottom: 1px solid #1f2937;">
+            <td style="padding: 14px 16px; font-weight: 600; color: #f3f4f6;">{it['name']}</td>
+            <td style="padding: 14px 16px;">
+                <span style="background: {bg_chip}; color: {color}; font-weight: 700; padding: 4px 10px; border-radius: 6px; font-size: 0.85rem; border: 1px solid {color};">
+                    {it['status']}
+                </span>
+            </td>
+            <td style="padding: 14px 16px; color: #9ca3af; font-size: 0.95rem;">{it['details']}</td>
+        </tr>
+        """
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FinPlus+ Preflight Verification</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b0f19; color: #e5e7eb; margin: 0; padding: 24px; }}
+        .container {{ max-width: 900px; margin: 0 auto; background: #111827; border-radius: 12px; border: 1px solid #1f2937; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }}
+        .header {{ padding: 20px 24px; border-bottom: 1px solid #1f2937; display: flex; justify-content: space-between; align-items: center; background: #151e32; }}
+        .banner {{ padding: 16px 24px; background: {banner_bg}; color: #fff; font-weight: 700; font-size: 1.1rem; text-align: center; letter-spacing: 0.5px; }}
+        table {{ width: 100%; border-collapse: collapse; text-align: left; }}
+        th {{ padding: 12px 16px; background: #1a233a; color: #9ca3af; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; }}
+        .footer {{ padding: 16px 24px; border-top: 1px solid #1f2937; font-size: 0.85rem; color: #6b7280; display: flex; justify-content: space-between; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <h2 style="margin: 0; color: #38bdf8; font-size: 1.3rem;">FinPlus+ Preflight Checklist</h2>
+                <span style="font-size: 0.85rem; color: #9ca3af;">Institutional Operational Readiness Dashboard</span>
+            </div>
+            <div style="font-size: 0.9rem; color: #cbd5e1; font-weight: 600;">{data.get('ist_time')}</div>
+        </div>
+        <div class="banner">{banner_text}</div>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 30%;">Subsystem / Check</th>
+                    <th style="width: 15%;">Status</th>
+                    <th style="width: 55%;">Telemetry & Details</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+        <div class="footer">
+            <span>FinPlus+ Scanner v2.7.3</span>
+            <span>Refreshes dynamically on request</span>
+        </div>
+    </div>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
 
 @app.api_route("/api/broker/refresh", methods=["GET", "POST"])
 async def broker_refresh():

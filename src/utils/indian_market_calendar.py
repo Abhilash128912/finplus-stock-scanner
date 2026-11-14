@@ -238,3 +238,39 @@ def is_candle_fresh_today(candle_timestamp: Any, max_stale_hours: float = 24.0) 
     except Exception:
         return False
 
+
+def check_calendar_coverage_next_n_trading_days(n: int = 10) -> Dict[str, Any]:
+    """
+    Verifies that the holiday calendar accurately covers the next N trading days from today.
+    Returns status: bool, trading_days: list, and covered: bool.
+    """
+    now_ist = get_current_ist_datetime()
+    curr_date = now_ist.date()
+    trading_days = []
+    checked_days = 0
+    test_date = curr_date
+    
+    # Check forward until we identify n trading days
+    while len(trading_days) < n and checked_days < 60:
+        checked_days += 1
+        test_date += datetime.timedelta(days=1)
+        if test_date.weekday() >= 5: # Saturday / Sunday
+            continue
+        is_hol, _ = is_nse_holiday(test_date)
+        if not is_hol:
+            trading_days.append(test_date.strftime("%Y-%m-%d"))
+
+    # Determine if current configured calendar contains definitions covering the range
+    max_cal_year = max([int(d.split("-")[0]) for d in NSE_TRADING_HOLIDAYS.keys()] or [2026])
+    last_needed_year = int(trading_days[-1].split("-")[0]) if trading_days else curr_date.year
+    covered = (max_cal_year >= last_needed_year) and len(trading_days) >= n
+
+    return {
+        "covered": covered,
+        "required_trading_days": n,
+        "found_trading_days_count": len(trading_days),
+        "next_trading_days": trading_days,
+        "latest_holiday_calendar_year": max_cal_year
+    }
+
+
