@@ -260,3 +260,64 @@ class CandleStore:
         }, inplace=True)
         df.index = pd.to_datetime(df["time"], unit="s")
         return df[["Open", "High", "Low", "Close", "Volume"]]
+
+    def get_history_coverage(self, tracked_symbols: Optional[List[str]] = None, timeframe: str = "15m", target_bars: int = 522) -> Dict[str, Any]:
+        """
+        Computes granular history coverage metrics for tracked symbols:
+        - total bars stored
+        - count and % of symbols with >= 122 bars (ATR 100 threshold)
+        - count and % of symbols with >= target_bars (ATR 500 threshold, default 522)
+        - oldest and newest bar timestamps
+        - list of symbols missing or short of target_bars
+        """
+        with self._get_connection() as conn:
+            agg_row = conn.execute("""
+                SELECT COUNT(*) as total_bars, MIN(timestamp_ist) as oldest_bar, MAX(timestamp_ist) as newest_bar
+                FROM candles
+                WHERE timeframe = ?
+            """, (timeframe,)).fetchone()
+            
+            total_bars = agg_row["total_bars"] if agg_row and agg_row["total_bars"] else 0
+            oldest_bar = agg_row["oldest_bar"] if agg_row and agg_row["oldest_bar"] else None
+            newest_bar = agg_row["newest_bar"] if agg_row and agg_row["newest_bar"] else None
+
+            rows = conn.execute("""
+                SELECT symbol, COUNT(*) as cnt
+                FROM candles
+                WHERE timeframe = ?
+                GROUP BY symbol
+            """, (timeframe,)).fetchall()
+            counts = {r["symbol"].upper(): r["cnt"] for r in rows}
+
+        if tracked_symbols is None:
+            symbols_to_check = list(counts.keys())
+        else:
+            symbols_to_check = [s.split(" ")[0].upper() for s in tracked_symbols if s]
+
+        total_tracked = len(symbols_to_check) if symbols_to_check else 1
+
+        cnt_122 = sum(1 for s in symbols_to_check if counts.get(s, 0) >= 122)
+        cnt_522 = sum(1 for s in symbols_to_check if counts.get(s, 0) >= target_bars)
+        missing_or_short = [s for s in symbols_to_check if counts.get(s, 0) < target_bars]
+
+        pct_122 = round((cnt_122 / total_tracked) * 100.0, 1) if total_tracked > 0 else 0.0
+        pct_522 = round((cnt_522 / total_tracked) * 100.0, 1) if total_tracked > 0 else 0.0
+
+        return {
+            "total_bars": total_bars,
+            "tracked_symbols_count": len(symbols_to_check),
+            "symbols_122_bars": {
+                "count": cnt_122,
+                "percentage": pct_122
+            },
+            "symbols_522_bars": {
+                "count": cnt_522,
+                "percentage": pct_522
+            },
+            "coverage_522_pct": pct_522,
+            "oldest_bar_time": oldest_bar,
+            "newest_bar_time": newest_bar,
+            "missing_or_short_symbols": missing_or_short,
+            "db_path": self.db_path
+        }
+

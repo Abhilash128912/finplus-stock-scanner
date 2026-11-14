@@ -49,6 +49,7 @@ class NTFYDispatcher:
             self.topics = DEFAULT_TOPICS
             
         self.auth_token = os.getenv("NTFY_AUTH_TOKEN", DEFAULT_NTFY_AUTH_TOKEN)
+        self.token_rejected = False
         self.min_interval = min_interval_seconds
         self.last_pulse_timestamp = 0.0
         self.ledger = ledger or ScheduleLedger()
@@ -121,15 +122,40 @@ class NTFYDispatcher:
         try:
             resp = requests.post(url, data=message.encode('utf-8'), headers=out_headers, timeout=10)
             if resp.status_code == 200:
+                self.token_rejected = False
                 new_count = self.ledger.increment_ntfy_sent_count(today)
                 logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Type={alert_type_norm})")
                 return True
             else:
-                logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
+                if resp.status_code in (401, 403):
+                    self.token_rejected = True
+                    logger.error(f"NTFY push authorization failed (HTTP {resp.status_code}): Token was rejected by NTFY server. Notifications disabled.")
+                else:
+                    logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
                 return False
         except Exception as e:
             logger.error(f"Failed delivering push to '{url}': {e}")
             return False
+
+    def send_startup_bulletin(self, version_hash: str, firebase_status: str, history_coverage_pct: float) -> bool:
+        """
+        Dispatches priority startup NTFY alert:
+        "[STARTUP] version <hash> online | Firebase connected | history X% | token OK"
+        Never logs or exposes the NTFY auth token.
+        """
+        msg = f"[STARTUP] version {version_hash} online | Firebase {firebase_status} | history {history_coverage_pct:.1f}% | token OK"
+        headers = {
+            "Title": "FinPlus+ Scanner Online",
+            "Priority": "default",
+            "Tags": "rocket,white_check_mark"
+        }
+        res = False
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            delivered = self._safe_post(url, msg, headers, alert_type="STARTUP")
+            if delivered:
+                res = True
+        return res
 
     def _fetch_app1_regime(self) -> Dict[str, Any]:
         """Queries App #1 Macro Trend & Air Traffic Control locally or in cloud."""

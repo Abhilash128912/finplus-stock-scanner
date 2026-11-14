@@ -7,8 +7,9 @@ Prevents false breakout generation, stale candle processing, and phantom trades 
 import datetime
 import json
 import os
+import sys
 from pathlib import Path
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, Union
 import pytz
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -117,23 +118,32 @@ MCX_FULL_DAY_HOLIDAYS = {
 
 
 def get_current_ist_datetime() -> datetime.datetime:
-    """Returns timezone-aware current datetime in IST, with optional FAKED_SYSTEM_IST override."""
-    faked = os.getenv("FAKED_SYSTEM_IST")
-    if faked:
-        try:
-            return datetime.datetime.fromisoformat(faked).astimezone(IST)
-        except Exception:
-            pass
+    """Returns timezone-aware current datetime in IST, with optional FAKED_SYSTEM_IST override strictly under pytest."""
+    if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):
+        faked = os.getenv("FAKED_SYSTEM_IST")
+        if faked:
+            try:
+                return datetime.datetime.fromisoformat(faked).astimezone(IST)
+            except Exception:
+                pass
     return datetime.datetime.now(tz=IST)
 
 
-def is_nse_holiday(check_date: Optional[datetime.date] = None) -> Tuple[bool, str]:
+def is_nse_holiday(check_date: Union[datetime.date, str, None] = None) -> Tuple[bool, str]:
     """
     Checks if given date is an official NSE trading holiday.
+    Accepts datetime.date, datetime.datetime, YYYY-MM-DD str, or None (defaults to today in IST).
     Returns (True, Holiday Name) or (False, '').
     """
     if check_date is None:
         check_date = get_current_ist_datetime().date()
+    elif isinstance(check_date, str):
+        try:
+            check_date = datetime.datetime.strptime(check_date, "%Y-%m-%d").date()
+        except Exception:
+            return False, ""
+    elif isinstance(check_date, datetime.datetime):
+        check_date = check_date.date()
 
     date_str = check_date.strftime("%Y-%m-%d")
     if date_str in NSE_TRADING_HOLIDAYS:

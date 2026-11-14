@@ -20,7 +20,7 @@ import base64
 import time
 import datetime
 import threading
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 from pathlib import Path
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso
@@ -72,6 +72,7 @@ class FirestoreBackend:
 
         # Restore and Sync Telemetry
         self.last_restore_result: Dict[str, Any] = {}
+        self.last_restore_reason: str = "NO_RESTORE_RUN"
         self.last_candle_sync_time: Optional[str] = None
 
         self._init_client()
@@ -372,12 +373,14 @@ class FirestoreBackend:
     # -------------------------------------------------------------
     # 3. RESTORE AT STARTUP
     # -------------------------------------------------------------
-    def restore_all_from_firestore(self, candle_store, paper_tracker = None, schedule_ledger = None) -> Dict[str, Any]:
+    def restore_all_from_firestore(self, candle_store, paper_tracker = None, schedule_ledger = None, symbols_filter: Optional[Set[str]] = None) -> Dict[str, Any]:
         """
         Restores local SQLite databases from Firestore at cold startup.
         Pulls candles, active paper positions, schedule milestones, and quota.
+        If symbols_filter is provided, only candles for those symbols are written to SQLite.
         """
         if not self.is_connected or not self.client:
+            self.last_restore_reason = "Skipped: Firestore not connected (LOCAL_ONLY mode)"
             return {"status": "SKIPPED", "message": "Firestore not connected (LOCAL_ONLY mode)"}
 
         start_ts = time.time()
@@ -398,27 +401,32 @@ class FirestoreBackend:
                 tf = data.get("timeframe", "15m")
                 b64_str = data.get("data_gz_b64")
                 if sym and b64_str:
+                    clean_sym = sym.split(" ")[0].upper()
+                    if symbols_filter and clean_sym not in symbols_filter:
+                        continue
                     try:
                         compressed = base64.b64decode(b64_str.encode('ascii'))
                         raw_json = gzip.decompress(compressed).decode('utf-8')
                         matrix = json.loads(raw_json)
                         
-                        # Bulk insert into SQLite
+                        # High-speed bulk insert into SQLite via executemany
+                        records = []
+                        for row in matrix:
+                            epoch, o, h, l, c, v = row
+                            utc_dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
+                            ist_dt = utc_dt + datetime.timedelta(hours=5, minutes=30)
+                            records.append((
+                                clean_sym, tf, int(epoch),
+                                utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                                ist_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                                float(o), float(h), float(l), float(c), int(v)
+                            ))
                         with candle_store._get_connection() as conn:
-                            for row in matrix:
-                                epoch, o, h, l, c, v = row
-                                utc_dt = datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc)
-                                ist_dt = utc_dt + datetime.timedelta(hours=5, minutes=30)
-                                conn.execute("""
-                                    INSERT OR REPLACE INTO candles
-                                    (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
-                                    sym, tf, int(epoch),
-                                    utc_dt.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                                    ist_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                                    float(o), float(h), float(l), float(c), int(v)
-                                ))
+                            conn.executemany("""
+                                INSERT OR REPLACE INTO candles
+                                (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, records)
                             conn.commit()
                         restored_symbols += 1
                         restored_candles_count += len(matrix)
@@ -607,6 +615,10 @@ class FirestoreBackend:
             "timestamp_utc": get_utc_iso()
         }
         self.last_restore_result = restore_res
+        self.last_restore_reason = (
+            f"Restored {restored_symbols} symbols ({restored_candles_count} bars), "
+            f"{restored_trades} paper trades from Firestore in {dur:.2f}s"
+        )
         logger.info(
             f"STARTUP RESTORE FINISHED: {restored_symbols} symbols ({restored_candles_count} bars), "
             f"{restored_trades} paper trades restored in {dur:.2f}s (Reads used: {reads_used})."
@@ -626,6 +638,7 @@ class FirestoreBackend:
             "env_prefix": self.env_prefix,
             "date_ist": self.current_ist_date,
             "last_restore": self.last_restore_result or {"source": "none", "status": "NO_RESTORE_RUN"},
+            "last_restore_reason": self.last_restore_reason,
             "last_candle_sync_time": self.last_candle_sync_time,
             "reads_today": self.reads_today,
             "max_reads_per_day": MAX_READS_PER_DAY,

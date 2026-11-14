@@ -600,7 +600,11 @@ class ScannerScheduler:
                                 if hasattr(self, "firestore") and self.firestore.is_connected:
                                     logger.info("15:45 Post-Market: Uploading daily candle history to Firestore...")
                                     asyncio.create_task(asyncio.to_thread(self.firestore.upload_all_candles_from_sqlite, self.candle_store))
-                            elif slot_id in ("08:30_HISTORY_BACKFILL", "16:00_HISTORY_BACKFILL"):
+                            elif slot_id == "08:30_HISTORY_BACKFILL":
+                                logger.info("08:30 IST Scheduled Check: Evaluating history coverage and restoring from Firestore if needed...")
+                                await self.check_and_restore_history(caller="08:30_scheduled")
+                                delivered = True
+                            elif slot_id == "16:00_HISTORY_BACKFILL":
                                 # Run off-hours history backfill runner via YFinanceGateway with HISTORY_BACKFILL
                                 logger.info(f"Triggering scheduled off-hours backfill runner ({slot_id})...")
                                 universe = self.feed.get_all_universe_items() if self.feed else []
@@ -630,7 +634,70 @@ class ScannerScheduler:
                 logger.error(f"Error in Clock Dispatcher loop: {e}")
                 await asyncio.sleep(10)
 
-    async def run_paced_history_backfill(self, target_coverage: float = 0.90, chunk_size: int = 30, pause_seconds: float = 15.0):
+    async def check_and_restore_history(self, caller: str = "startup") -> Dict[str, Any]:
+        """
+        Evaluates history coverage across tracked universe.
+        If coverage < 90% (< 90% of tracked symbols have >= 522 bars), restores missing or short symbols
+        from Firestore BEFORE the scanner starts.
+        Only then runs the paced Yahoo backfill for whatever is still missing.
+        Never downloads from Yahoo what Firestore already has.
+        """
+        universe = self.feed.get_all_universe_items() if self.feed else []
+        all_symbols = [it.get("symbol", "").split(" ")[0].upper() for it in universe if it.get("symbol")]
+        
+        coverage = self.candle_store.get_history_coverage(all_symbols, timeframe="15m", target_bars=522)
+        cov_pct = coverage.get("coverage_522_pct", 0.0)
+        missing = coverage.get("missing_or_short_symbols", [])
+
+        if cov_pct < 90.0:
+            reason = f"Coverage {cov_pct:.1f}% is below 90.0% target ({coverage['symbols_522_bars']['count']}/{len(all_symbols)} symbols have >= 522 bars)"
+            logger.info(f"[{caller.upper()}] {reason}. Restoring missing or short symbols from Firestore BEFORE scanner starts...")
+            if hasattr(self, "firestore") and self.firestore.is_connected:
+                try:
+                    restore_res = await asyncio.to_thread(
+                        self.firestore.restore_all_from_firestore,
+                        self.candle_store, self.paper_tracker, self.ledger
+                    )
+                    logger.info(f"[{caller.upper()}] Firestore restore completed: {restore_res}")
+                    cov_after = self.candle_store.get_history_coverage(all_symbols, timeframe="15m", target_bars=522)
+                    cov_after_pct = cov_after.get("coverage_522_pct", 0.0)
+                    missing_after = cov_after.get("missing_or_short_symbols", [])
+
+                    if cov_after_pct < 90.0:
+                        self.firestore.last_restore_reason = (
+                            f"Restored from Firestore (coverage {cov_after_pct:.1f}% < 90.0%). "
+                            f"Queued paced Yahoo backfill for {len(missing_after)} remaining symbols."
+                        )
+                        logger.info(f"[{caller.upper()}] Post-Firestore coverage {cov_after_pct:.1f}% < 90.0%. Running paced Yahoo backfill for {len(missing_after)} remaining symbols...")
+                        asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing_after))
+                    else:
+                        self.firestore.last_restore_reason = (
+                            f"Restored from Firestore: coverage reached {cov_after_pct:.1f}% >= 90.0% "
+                            f"({cov_after['symbols_522_bars']['count']}/{len(all_symbols)} symbols). Zero Yahoo calls needed."
+                        )
+                        logger.info(f"[{caller.upper()}] Post-Firestore coverage {cov_after_pct:.1f}% >= 90.0%. Zero Yahoo calls needed.")
+                    return cov_after
+                except Exception as restore_err:
+                    logger.error(f"Error during Firestore startup restore: {restore_err}")
+                    self.firestore.last_restore_reason = f"Error during Firestore restore: {restore_err}"
+            else:
+                self.firestore.last_restore_reason = f"Firestore LOCAL_ONLY mode; queued Yahoo backfill for {len(missing)} symbols."
+                asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing))
+        else:
+            reason = f"Coverage {cov_pct:.1f}% already >= 90.0% target ({coverage['symbols_522_bars']['count']}/{len(all_symbols)} symbols have >= 522 bars). No restore needed."
+            logger.info(f"[{caller.upper()}] {reason}")
+            if hasattr(self, "firestore"):
+                self.firestore.last_restore_reason = f"Skipped: {reason}"
+
+        return coverage
+
+    async def run_paced_history_backfill(
+        self,
+        target_coverage: float = 0.90,
+        chunk_size: int = 30,
+        pause_seconds: float = 15.0,
+        missing_symbols_override: Optional[List[str]] = None
+    ):
         """
         Background paced history backfill.
         If universe coverage is under 90%, downloads missing symbols in paced chunks (15-20s pause)
@@ -652,22 +719,26 @@ class ScannerScheduler:
             all_symbols = list(universe_tickers.keys())
             target_bars = 522 # ATR 500
 
-            with self.candle_store._get_connection() as conn:
-                rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
-            counts = {r[0].upper(): r[1] for r in rows}
+            if missing_symbols_override is not None:
+                missing_symbols = [s for s in missing_symbols_override if s in universe_tickers]
+            else:
+                with self.candle_store._get_connection() as conn:
+                    rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
+                counts = {r[0].upper(): r[1] for r in rows}
+                covered_count = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
+                cov_ratio = (covered_count / len(all_symbols)) if all_symbols else 1.0
 
-            covered_count = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
-            cov_ratio = (covered_count / len(all_symbols)) if all_symbols else 1.0
+                if cov_ratio >= target_coverage:
+                    logger.info(f"STARTUP BACKFILL: Coverage is already {cov_ratio*100:.1f}% (>= {target_coverage*100:.0f}%). No backfill needed.")
+                    return
+                missing_symbols = [s for s in all_symbols if counts.get(s, 0) < target_bars]
 
-            if cov_ratio >= target_coverage:
-                logger.info(f"STARTUP BACKFILL: Coverage is already {cov_ratio*100:.1f}% (>= {target_coverage*100:.0f}%). No backfill needed.")
+            if not missing_symbols:
                 return
 
-            missing_symbols = [s for s in all_symbols if counts.get(s, 0) < target_bars]
             logger.info(
-                f"STARTUP BACKFILL ACTIVATED: Coverage {cov_ratio*100:.1f}% is below target {target_coverage*100:.0f}%. "
-                f"{len(missing_symbols)} symbols to backfill in chunks of {chunk_size} (pacing {pause_seconds}s). "
-                "Legacy scan path remains ON to serve market data meanwhile."
+                f"PACED YAHOO BACKFILL ACTIVATED: {len(missing_symbols)} symbols to backfill "
+                f"in chunks of {chunk_size} (pacing {pause_seconds}s). Legacy scan path remains ON meanwhile."
             )
 
             chunks = [missing_symbols[i:i + chunk_size] for i in range(0, len(missing_symbols), chunk_size)]
@@ -720,26 +791,8 @@ class ScannerScheduler:
             logger.error(f"Error in startup backfill task: {err}")
 
     async def _scanner_worker_loop(self):
-        """Background universe data refresher with startup history sanity check and Firestore restore."""
+        """Background universe data refresher."""
         logger.info("Scanner Data Worker Loop active.")
-        
-        # Phase 2B: Restore from Firestore if local DB is empty/cold
-        if hasattr(self, "firestore") and self.firestore.is_connected:
-            try:
-                with self.candle_store._get_connection() as conn:
-                    bar_cnt = conn.execute("SELECT COUNT(*) FROM candles").fetchone()[0]
-                if bar_cnt < 500:
-                    logger.info("Cold start detected (bars < 500). Restoring database state from Firestore...")
-                    restore_res = await asyncio.to_thread(
-                        self.firestore.restore_all_from_firestore,
-                        self.candle_store, self.paper_tracker, self.ledger
-                    )
-                    logger.info(f"Firestore restore completed: {restore_res}")
-            except Exception as restore_err:
-                logger.error(f"Error during Firestore startup restore: {restore_err}")
-
-        # Launch paced history backfill in background if coverage < 90%
-        asyncio.create_task(self.run_paced_history_backfill())
 
         # Perform initial scan in background worker so start_loop does not block clock dispatcher
         try:
@@ -762,8 +815,14 @@ class ScannerScheduler:
         """Launches clock dispatcher, background scanner, and live paper tracking loop concurrently."""
         self.is_running = True
         logger.info("ScannerScheduler background daemon starting...")
-        
-        # Run loops concurrently immediately without blocking clock dispatcher or paper tracker
+
+        # Step 1: Compute history coverage and restore from Firestore BEFORE starting scanner worker
+        try:
+            await self.check_and_restore_history(caller="startup")
+        except Exception as e:
+            logger.error(f"Error checking and restoring history at startup: {e}")
+
+        # Step 2: Run loops concurrently immediately without blocking clock dispatcher or paper tracker
         await asyncio.gather(
             self._clock_dispatcher_loop(),
             self._scanner_worker_loop(),

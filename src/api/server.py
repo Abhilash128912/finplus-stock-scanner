@@ -50,6 +50,28 @@ if not os.path.exists(FRONTEND_DIR):
 if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
+def get_code_version() -> Dict[str, str]:
+    """Retrieves deployment git commit hash and branch name."""
+    commit = os.getenv("RENDER_GIT_COMMIT", "")
+    branch = os.getenv("RENDER_GIT_BRANCH", "")
+    if not commit or not branch:
+        try:
+            import subprocess
+            if not commit:
+                res = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=2)
+                if res.returncode == 0:
+                    commit = res.stdout.strip()
+            if not branch:
+                res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True, timeout=2)
+                if res.returncode == 0:
+                    branch = res.stdout.strip()
+        except Exception:
+            pass
+    return {
+        "commit": commit or "unknown",
+        "branch": branch or "release/v2.7.2"
+    }
+
 scheduler = ScannerScheduler()
 scheduler_task = None
 
@@ -77,6 +99,23 @@ async def startup_event():
     )
 
     scheduler_task = asyncio.create_task(scheduler.start_loop())
+
+    # Startup NTFY priority bulletin
+    async def _send_startup_ntfy():
+        try:
+            await asyncio.sleep(2.0) # Allow startup restore and history check to complete
+            code_ver = get_code_version()
+            fb_status = "connected" if (scheduler.firestore and scheduler.firestore.is_connected) else "local-only"
+            universe = scheduler.feed.get_all_universe_items() if scheduler.feed else []
+            all_syms = [it.get("symbol", "").split(" ")[0].upper() for it in universe if it.get("symbol")]
+            cov = scheduler.candle_store.get_history_coverage(all_syms) if hasattr(scheduler, "candle_store") else {}
+            cov_pct = cov.get("coverage_522_pct", 0.0)
+            scheduler.dispatcher.send_startup_bulletin(code_ver["commit"], fb_status, cov_pct)
+        except Exception as e:
+            logger.error(f"Error sending startup NTFY bulletin: {e}")
+
+    asyncio.create_task(_send_startup_ntfy())
+
     # Warm up broker authentication in background thread
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
         async def _warmup_broker():
@@ -217,7 +256,11 @@ async def deep_health_check():
             "remaining": rem_q,
             "cap": 220
         }
-        subsystem_status["notifications"] = "QUOTA_EXHAUSTED" if rem_q <= 0 else "HEALTHY"
+        if getattr(scheduler.dispatcher, "token_rejected", False):
+            subsystem_status["notifications"] = "TOKEN_REJECTED"
+            issues.append("NTFY notification token was rejected by server (HTTP 401/403)")
+        else:
+            subsystem_status["notifications"] = "QUOTA_EXHAUSTED" if rem_q <= 0 else "HEALTHY"
     else:
         subsystem_status["notifications"] = "DISABLED"
 
@@ -237,6 +280,41 @@ async def deep_health_check():
         issues.append(
             "PERSISTENCE_NOTICE: Local files are temporary on Render. Durable data is mirrored to Firebase (see Phase 2B)."
         )
+
+    # 8. History Coverage & Deployment Version Telemetry
+    universe = scheduler.feed.get_all_universe_items() if scheduler.feed else []
+    all_syms = [it.get("symbol", "").split(" ")[0].upper() for it in universe if it.get("symbol")]
+    cov_telemetry = scheduler.candle_store.get_history_coverage(all_syms) if hasattr(scheduler, "candle_store") else {}
+    code_version = get_code_version()
+
+    data_dir_env = os.getenv("DATA_DIR")
+    data_dir = Path(data_dir_env) if data_dir_env else (Path(_APP_ROOT) / "data")
+    db_file_sizes = {}
+    for db_name in ["candles.db", "schedule_ledger.db", "paper_trading.db"]:
+        p = data_dir / db_name
+        if p.exists():
+            db_file_sizes[db_name] = round(p.stat().st_size / 1024.0, 1) # in KB
+        else:
+            db_file_sizes[db_name] = 0.0
+
+    last_restore_reason = (
+        scheduler.firestore.last_restore_reason
+        if (hasattr(scheduler, "firestore") and hasattr(scheduler.firestore, "last_restore_reason"))
+        else "NO_RESTORE_RUN"
+    )
+
+    history_coverage = {
+        "total_bars": cov_telemetry.get("total_bars", 0),
+        "tracked_symbols_count": len(all_syms),
+        "symbols_122_bars": cov_telemetry.get("symbols_122_bars", {"count": 0, "percentage": 0.0}),
+        "symbols_522_bars": cov_telemetry.get("symbols_522_bars", {"count": 0, "percentage": 0.0}),
+        "oldest_bar_time": cov_telemetry.get("oldest_bar_time"),
+        "newest_bar_time": cov_telemetry.get("newest_bar_time"),
+        "db_path": str(data_dir / "candles.db"),
+        "file_sizes_kb": db_file_sizes,
+        "code_version": code_version,
+        "last_restore_reason": last_restore_reason
+    }
 
     # Off-hours rule: Return 200 outside market hours
     # If is_equity_market_open_ist() returns False (which handles weekends, holidays, and off-hours), return 200.
@@ -277,6 +355,8 @@ async def deep_health_check():
         "rejected_ticks": rejected_ticks_info,
         "yfinance_gateway": yf_metrics,
         "firebase": firebase_telemetry,
+        "history_coverage": history_coverage,
+        "code_version": code_version,
         "bar_parity": parity_summary,
         "shadow_variants": scheduler.ledger.get_shadow_variant_stats(date_str) if hasattr(scheduler, "ledger") else {},
         "issues": issues

@@ -190,22 +190,57 @@ class ScheduleLedger:
             return self.get_ntfy_sent_count(date_str)
 
     def ensure_daily_ledger_populated(self, date_str: str):
-        """Ensures all required milestones for a trading day exist in the ledger as PENDING."""
+        """
+        Ensures all required milestones for a day exist in the ledger.
+        On weekends (Saturday, Sunday) and listed NSE holidays:
+        All 09:00 to 16:00 market bulletins are marked 'SKIPPED_MARKET_CLOSED' at the start of the day.
+        Only Sunday 18:00 Weekly Report remains PENDING on Sunday.
+        """
         milestones = list(SCHEDULED_MILESTONES)
+        is_weekend = False
+        is_holiday = False
+        holiday_name = ""
+
         try:
-            if datetime.datetime.strptime(date_str, "%Y-%m-%d").weekday() == 6:
+            dt = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+            weekday = dt.weekday()
+            is_weekend = (weekday in (5, 6)) # Saturday=5, Sunday=6
+            if weekday == 6:
                 milestones.append({"slot_id": "18:00_WEEKLY_REPORT", "target_h": 18, "target_m": 0, "name": "Sunday 06:00 PM Weekly Report"})
+            from src.utils.indian_market_calendar import is_nse_holiday
+            is_holiday, holiday_name = is_nse_holiday(date_str)
         except Exception:
             pass
+
+        is_market_closed = is_weekend or is_holiday
+        closed_reason = f"Market closed (NSE Holiday: {holiday_name})" if is_holiday else "Market closed (Weekend)"
 
         with self._get_connection() as conn:
             for item in milestones:
                 target_str = f"{item['target_h']:02d}:{item['target_m']:02d}"
+                slot_id = item["slot_id"]
+                
+                if is_market_closed and slot_id != "18:00_WEEKLY_REPORT":
+                    status = "SKIPPED_MARKET_CLOSED"
+                    err_msg = closed_reason
+                else:
+                    status = "PENDING"
+                    err_msg = None
+
                 conn.execute("""
                     INSERT OR IGNORE INTO daily_schedule_ledger 
-                    (date_str, slot_id, target_time_ist, status, attempts)
-                    VALUES (?, ?, ?, 'PENDING', 0)
-                """, (date_str, item["slot_id"], target_str))
+                    (date_str, slot_id, target_time_ist, status, attempts, error_message)
+                    VALUES (?, ?, ?, ?, 0, ?)
+                """, (date_str, slot_id, target_str, status, err_msg))
+
+            # If existing rows were already inserted as PENDING for a weekend or holiday, update them
+            if is_market_closed:
+                conn.execute("""
+                    UPDATE daily_schedule_ledger
+                    SET status = 'SKIPPED_MARKET_CLOSED', error_message = ?
+                    WHERE date_str = ? AND status = 'PENDING' AND slot_id != '18:00_WEEKLY_REPORT'
+                """, (closed_reason, date_str))
+
             conn.commit()
 
     def get_pending_due_events(self, ist_now: datetime.datetime) -> List[Dict[str, Any]]:
