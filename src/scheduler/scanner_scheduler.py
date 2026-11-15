@@ -149,11 +149,20 @@ class ScannerScheduler:
 
         # Track broker health and consecutive good cycles
         if is_open and self.indmoney_feed:
-            feed_age = time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)
+            last_fetch = getattr(self.indmoney_feed, "_last_fetch_time", 0.0)
+            if last_fetch <= 0.0:
+                feed_age = 999.0
+                feed_age_desc = "no tick yet"
+            else:
+                feed_age = time.time() - last_fetch
+                feed_age_desc = f"{int(feed_age)}s"
+
             if feed_age <= 60.0 and len(ind_quotes_map) > 0:
                 self.consecutive_good_broker_cycles += 1
                 if self.is_stale_feed:
                     self.is_stale_feed = False
+                    if hasattr(self, "paper_tracker") and self.paper_tracker:
+                        self.paper_tracker.is_stale_feed = False
                     logger.info("INDmoney feed restored: broker quotes fresh and responsive.")
                 # Fallback ends after 2 consecutive good broker cycles
                 if self.fallback_active and self.consecutive_good_broker_cycles >= 2:
@@ -166,7 +175,9 @@ class ScannerScheduler:
                 self.consecutive_good_broker_cycles = 0
                 if feed_age > 60.0:
                     self.is_stale_feed = True
-                    logger.warning(f"Feed data is {int(feed_age)}s old (>60s). Feed marked STALE_FEED.")
+                    if hasattr(self, "paper_tracker") and self.paper_tracker:
+                        self.paper_tracker.is_stale_feed = True
+                    logger.warning(f"Feed data is {feed_age_desc} old (>60s). Feed marked STALE_FEED.")
 
         # Determine active open symbols and top-3 priority symbols for fallback guard
         open_symbols = set()
@@ -181,15 +192,21 @@ class ScannerScheduler:
                     top3_symbols.add(it["symbol"].split()[0].upper())
 
         priority_symbols = open_symbols | top3_symbols
-        feed_age_sec = (time.time() - getattr(self.indmoney_feed, "_last_fetch_time", 0.0)) if self.indmoney_feed else 999.0
+        last_fetch = getattr(self.indmoney_feed, "_last_fetch_time", 0.0) if self.indmoney_feed else 0.0
+        if last_fetch <= 0.0:
+            feed_age_sec = 999.0
+            feed_age_desc = "no tick yet"
+        else:
+            feed_age_sec = time.time() - last_fetch
+            feed_age_desc = f"{int(feed_age_sec)}s"
 
         # Check if fallback guard is triggering for the first time
         if feed_age_sec > 180.0 and len(priority_symbols) > 0 and not self.fallback_active:
             self.fallback_active = True
             if hasattr(self.feed, "gateway"):
                 self.feed.gateway.fallback_active = True
-            logger.warning(f"FALLBACK_GUARD ACTIVATED: broker stale {int(feed_age_sec)}s (>180s) on priority symbols {priority_symbols}")
-            self.dispatcher.send_fallback_guard_alert("START", f"Broker stale {int(feed_age_sec)}s. Prioritizing {len(priority_symbols)} symbols.")
+            logger.warning(f"FALLBACK_GUARD ACTIVATED: broker stale {feed_age_desc} (>180s) on priority symbols {priority_symbols}")
+            self.dispatcher.send_fallback_guard_alert("START", f"Broker stale {feed_age_desc}. Prioritizing {len(priority_symbols)} symbols.")
 
         # Daily Funnel Metrics & Trigger Candidate Collection (Phase 6c, 6d)
         funnel_counts = {

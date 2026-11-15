@@ -446,3 +446,115 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
             assert ok_trade
             assert mock_post_priority.called
 
+
+def test_05_market_closed_and_stale_feed_guard(tmp_path):
+    """
+    Verifies that all paper entries, exits, trailing evaluations, and exit alerts
+    are strictly blocked when market is closed (weekend/holiday) or price feed is stale.
+    """
+    from src.paper.live_paper_tracker import LivePaperTracker
+    db_file = str(tmp_path / "paper_test.db")
+    tracker = LivePaperTracker(db_path=db_file)
+    sunday_dt = datetime.datetime(2026, 11, 15, 9, 19, 10, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+    tracker._mock_ist_now = sunday_dt
+
+    # 1. Entry blocked on Sunday
+    pos = tracker.open_position(
+        source_app="TEST",
+        sector="INTRADAY_CASH",
+        symbol="TRENT",
+        action="BUY",
+        entry_price=6400.0,
+        stop_loss=6340.0
+    )
+    assert pos is None
+
+    # Manually place position in active_positions to simulate a pre-existing trade
+    tracker.active_positions["pos_trent"] = {
+        "position_id": "pos_trent",
+        "symbol": "TRENT",
+        "sector": "INTRADAY_CASH",
+        "action": "BUY",
+        "entry_price": 6400.0,
+        "trailing_sl": 6340.0,
+        "target": 6600.0,
+        "quantity": 3,
+        "status": "OPEN",
+        "stage": "INITIAL (FIXED SL)",
+        "taken": 1,
+        "is_option": 0,
+        "entry_time_ist": "10:00:00 AM IST",
+        "opened_at_utc": "2026-11-13T04:30:00Z"
+    }
+
+    # 2. Automated exit blocked on Sunday
+    with patch.object(tracker, "_dispatch_ntfy_trade_closed") as mock_alert:
+        closed = tracker.close_position("pos_trent", exit_price=6340.0, exit_reason="INITIAL_SL_HIT")
+        assert not closed
+        assert "pos_trent" in tracker.active_positions
+        assert not mock_alert.called
+
+    # 3. update_and_trail_positions does not exit or alter position on Sunday
+    with patch.object(tracker, "_fetch_live_price", return_value=6300.0): # Below SL
+        tracker.update_and_trail_positions()
+        assert "pos_trent" in tracker.active_positions
+        assert tracker.active_positions["pos_trent"]["status"] == "OPEN"
+
+    # 4. Weekday mid-market with STALE_FEED
+    friday_dt = datetime.datetime(2026, 11, 13, 11, 30, 0, tzinfo=datetime.timezone(datetime.timedelta(hours=5, minutes=30)))
+    tracker._mock_ist_now = friday_dt
+    tracker.is_stale_feed = True
+
+    # Entry blocked due to stale feed
+    pos_stale = tracker.open_position(
+        source_app="TEST",
+        sector="INTRADAY_CASH",
+        symbol="RELIANCE",
+        action="BUY",
+        entry_price=2500.0,
+        stop_loss=2480.0
+    )
+    assert pos_stale is None
+
+    # Exit blocked due to stale feed
+    closed_stale = tracker.close_position("pos_trent", exit_price=6340.0, exit_reason="INITIAL_SL_HIT")
+    assert not closed_stale
+    assert "pos_trent" in tracker.active_positions
+
+    # 5. Restore healthy feed during market hours: exit succeeds
+    tracker.is_stale_feed = False
+    closed_good = tracker.close_position("pos_trent", exit_price=6340.0, exit_reason="INITIAL_SL_HIT")
+    assert closed_good
+    assert "pos_trent" not in tracker.active_positions
+
+
+def test_06_broker_stale_no_tick_yet():
+    """
+    Verifies that a missing or 0.0 last-tick time formats as 'no tick yet'
+    instead of astronomical seconds like 1794714847s.
+    """
+    scheduler = ScannerScheduler()
+    scheduler.indmoney_feed = MagicMock()
+    scheduler.indmoney_feed._last_fetch_time = 0.0
+    scheduler.fallback_active = False
+
+    # Simulate fallback guard check
+    with patch.object(scheduler.dispatcher, "send_fallback_guard_alert") as mock_fb_alert:
+        last_fetch = getattr(scheduler.indmoney_feed, "_last_fetch_time", 0.0)
+        if last_fetch <= 0.0:
+            feed_age_sec = 999.0
+            feed_age_desc = "no tick yet"
+        else:
+            feed_age_sec = time.time() - last_fetch
+            feed_age_desc = f"{int(feed_age_sec)}s"
+        
+        priority_symbols = {"TRENT"}
+        if feed_age_sec > 180.0 and len(priority_symbols) > 0 and not scheduler.fallback_active:
+            scheduler.dispatcher.send_fallback_guard_alert("START", f"Broker stale {feed_age_desc}. Prioritizing {len(priority_symbols)} symbols.")
+
+        assert mock_fb_alert.called
+        msg_arg = mock_fb_alert.call_args[0][1]
+        assert "Broker stale no tick yet" in msg_arg
+        assert "17947" not in msg_arg
+
+

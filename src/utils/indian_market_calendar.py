@@ -135,17 +135,17 @@ def is_nse_holiday(check_date: Union[datetime.date, str, None] = None) -> Tuple[
     Accepts datetime.date, datetime.datetime, YYYY-MM-DD str, or None (defaults to today in IST).
     Returns (True, Holiday Name) or (False, '').
     """
-    if check_date is None:
-        check_date = get_current_ist_datetime().date()
-    elif isinstance(check_date, str):
-        try:
-            check_date = datetime.datetime.strptime(check_date, "%Y-%m-%d").date()
-        except Exception:
-            return False, ""
-    elif isinstance(check_date, datetime.datetime):
-        check_date = check_date.date()
+    date_str = ""
+    try:
+        if check_date is None:
+            check_date = get_current_ist_datetime().date()
+        if hasattr(check_date, "strftime"):
+            date_str = check_date.strftime("%Y-%m-%d")
+        elif isinstance(check_date, str):
+            date_str = check_date[:10]
+    except Exception:
+        date_str = ""
 
-    date_str = check_date.strftime("%Y-%m-%d")
     if date_str in NSE_TRADING_HOLIDAYS:
         return True, NSE_TRADING_HOLIDAYS[date_str]
     return False, ""

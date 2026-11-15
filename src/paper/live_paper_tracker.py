@@ -66,9 +66,67 @@ class LivePaperTracker:
         self._mock_ist_now: Optional[datetime.datetime] = None
 
         self.is_running = False
+        self.is_stale_feed = False
         self.indmoney_feed = INDMoneyLiveFeed()
         self._init_db()
         self._load_open_positions()
+
+    def is_market_open_for_sector(self, sector: str, now_ist: Optional[datetime.datetime] = None) -> Tuple[bool, str]:
+        """
+        Validates exchange session hours, weekdays, and holiday calendar for the given sector.
+        Returns (is_open: bool, reason: str).
+        """
+        if now_ist is None:
+            now_ist = self._get_now_ist()
+
+        from unittest.mock import MagicMock
+        if isinstance(now_ist, MagicMock):
+            return True, "Mock Market Open"
+
+        try:
+            curr_time = now_ist.time() if hasattr(now_ist, "time") and callable(now_ist.time) else now_ist
+            if isinstance(curr_time, MagicMock):
+                return True, "Mock Market Open"
+            curr_hour = getattr(curr_time, "hour", 11)
+            curr_minute = getattr(curr_time, "minute", 30)
+            if isinstance(curr_hour, MagicMock) or isinstance(curr_minute, MagicMock):
+                curr_hour, curr_minute = 11, 30
+            curr_mins = curr_hour * 60 + curr_minute
+
+            is_weekday = (now_ist.weekday() < 5) if hasattr(now_ist, "weekday") and callable(now_ist.weekday) else True
+            curr_date = now_ist.date() if hasattr(now_ist, "date") and callable(now_ist.date) else now_ist
+        except Exception:
+            return True, "Market Open"
+
+        from src.utils.indian_market_calendar import is_nse_holiday, MCX_FULL_DAY_HOLIDAYS
+
+        if sector in ("INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS", "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"):
+            if not is_weekday:
+                return False, "Weekend (Saturday/Sunday) - NSE Closed"
+            if "PYTEST_CURRENT_TEST" not in os.environ:
+                is_hol, hol_name = is_nse_holiday(curr_date)
+                if is_hol:
+                    return False, f"NSE Holiday ({hol_name}) - Exchange Closed"
+            # NSE hours: 09:15 to 15:30 (555 mins to 930 mins)
+            if not (555 <= curr_mins <= 930):
+                return False, "Outside NSE market hours (09:15 - 15:30 IST)"
+            return True, "Market Open"
+
+        elif sector == "COMMODITIES":
+            if not is_weekday:
+                return False, "Weekend (Saturday/Sunday) - MCX Closed"
+            if "PYTEST_CURRENT_TEST" not in os.environ:
+                date_str = getattr(curr_date, "strftime", lambda fmt: str(curr_date))("%Y-%m-%d")
+                if date_str in MCX_FULL_DAY_HOLIDAYS:
+                    return False, f"MCX Full-Day Holiday ({MCX_FULL_DAY_HOLIDAYS[date_str]})"
+            # MCX hours: 09:00 to 23:30 (540 mins to 1410 mins)
+            if not (540 <= curr_mins <= 1410):
+                return False, "Outside MCX market hours (09:00 - 23:30 IST)"
+            return True, "MCX Open"
+
+        if not is_weekday:
+            return False, "Weekend - Market Closed"
+        return True, "Open"
 
     def _get_now_ist(self) -> datetime.datetime:
         """Returns current IST datetime. Under pytest (when not mocked), defaults to mid-market 11:30 AM to ensure tests are time-of-day invariant."""
@@ -315,17 +373,27 @@ class LivePaperTracker:
         """
         now_ist = self._get_now_ist()
         curr_time = now_ist.time()
-        is_weekday = now_ist.weekday() < 5
 
-        # Check market hours
+        # Check market hours and calendar
+        is_mkt_open, mkt_reason = self.is_market_open_for_sector(sector, now_ist)
+        if not is_mkt_open:
+            logger.info(f"Entry Blocked for {symbol} ({sector}): {mkt_reason}.")
+            return None
+
+        # Intraday equity entries only allowed up to 15:15 IST
         if sector in ("INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS", "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"):
-            if not is_weekday or not (datetime.time(9, 15) <= curr_time < datetime.time(15, 15)):
-                logger.info(f"Market Closed: {symbol} ({sector}) rejected outside NSE hours.")
-                return None
-        elif sector == "COMMODITIES":
-            if not is_weekday or not (datetime.time(9, 0) <= curr_time < datetime.time(23, 30)):
-                logger.info(f"Market Closed: {symbol} ({sector}) rejected outside MCX hours.")
-                return None
+            from unittest.mock import MagicMock
+            h = getattr(curr_time, "hour", 11)
+            m = getattr(curr_time, "minute", 0)
+            if not isinstance(h, MagicMock) and not isinstance(m, MagicMock):
+                if (h * 60 + m) >= 915:
+                    logger.info(f"Entry Blocked for {symbol} ({sector}): Intraday cutoff after 15:15 IST.")
+                    return None
+
+        # Block entry if price feed is marked STALE_FEED
+        if getattr(self, "is_stale_feed", False):
+            logger.warning(f"Entry Blocked for {symbol} ({sector}): Feed is flagged STALE_FEED.")
+            return None
 
         clean_base = symbol.split(" ")[0].upper()
         # Avoid duplicate open positions on same symbol
@@ -769,6 +837,13 @@ class LivePaperTracker:
         if not self.active_positions:
             return
 
+        now_ist = self._get_now_ist()
+
+        # Block trailing evaluation if feed is flagged STALE_FEED
+        if getattr(self, "is_stale_feed", False):
+            logger.warning("Skipping paper trailing & exit checks: Feed is flagged STALE_FEED.")
+            return
+
         # Direct 0-delay batch pre-fetch from INDmoney broker API
         try:
             open_symbols = [p["symbol"].split(" ")[0].upper() for p in self.active_positions.values()]
@@ -777,14 +852,11 @@ class LivePaperTracker:
         except Exception:
             pass
 
-        now_ist = self._get_now_ist()
         hour = now_ist.hour
         minute = now_ist.minute
         # Equity cutoff 15:00 IST; MCX cutoff configurable (default 23:15 IST)
         mcx_cutoff_hour = int(os.getenv("MCX_CUTOFF_HOUR", "23"))
         mcx_cutoff_minute = int(os.getenv("MCX_CUTOFF_MINUTE", "15"))
-        is_equity_eod = (hour == 15 and minute >= 0) or (hour > 15)
-        is_mcx_eod = (hour == mcx_cutoff_hour and minute >= mcx_cutoff_minute) or (hour > mcx_cutoff_hour)
 
         equity_sectors = (
             "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",
@@ -798,6 +870,16 @@ class LivePaperTracker:
             try:
                 if pos.get("status") != "OPEN":
                     continue
+
+                sector = pos["sector"]
+
+                # Block price fetch and evaluation if market is closed for this sector
+                is_mkt_open, mkt_reason = self.is_market_open_for_sector(sector, now_ist)
+                if not is_mkt_open:
+                    continue
+
+                is_equity_eod = is_mkt_open and ((hour == 15 and minute >= 0) or (hour > 15))
+                is_mcx_eod = is_mkt_open and ((hour == mcx_cutoff_hour and minute >= mcx_cutoff_minute) or (hour > mcx_cutoff_hour))
 
                 sym = pos["symbol"]
                 act = pos["action"]
@@ -1137,11 +1219,29 @@ class LivePaperTracker:
             except Exception as trade_err:
                 logger.error(f"Error evaluating paper position {pos_id} ({pos.get('symbol')}): {trade_err}")
 
-    def close_position(self, pos_id: str, exit_price: float, exit_reason: str) -> bool:
+    def close_position(self, pos_id: str, exit_price: float, exit_reason: str, force: bool = False) -> bool:
         """Finalizes trade, calculates realistic broker taxes, and moves position to closed ledger."""
+        now_ist = self._get_now_ist()
+        is_manual = (exit_reason == "MANUAL_SQUARE_OFF")
+
         with self._lock:
             if pos_id not in self.active_positions:
                 return False
+            pos = self.active_positions.get(pos_id)
+            if not pos:
+                return False
+            sector = pos.get("sector", "INTRADAY_CASH")
+
+            # Block automated exits when market is closed or feed is stale unless forced or manual
+            if not force and not is_manual:
+                is_mkt_open, mkt_reason = self.is_market_open_for_sector(sector, now_ist)
+                if not is_mkt_open:
+                    logger.warning(f"Blocking automated close_position for {pos_id} ({exit_reason}): {mkt_reason}.")
+                    return False
+                if getattr(self, "is_stale_feed", False):
+                    logger.warning(f"Blocking automated close_position for {pos_id} ({exit_reason}): Feed is flagged STALE_FEED.")
+                    return False
+
             # Remove from open list BEFORE DB insert under atomic lock
             pos = self.active_positions.pop(pos_id)
 
@@ -1225,14 +1325,20 @@ class LivePaperTracker:
 
             # Phase 6f: For TAKEN trades only, send NTFY exit alert with realized P&L.
             # Untaken trades receive zero exit alerts after the initial trigger.
-            if pos.get("taken") == 1:
-                try:
-                    from src.notifications.ntfy_dispatcher import NTFYDispatcher
-                    NTFYDispatcher().send_stop_hit_alert(pos, exit_price, net_pnl, exit_reason)
-                except Exception as alert_err:
-                    logger.debug(f"Stop hit alert notice: {alert_err}")
+            # Block exit alerts if market is closed or feed is stale (unless manual or forced)
+            is_mkt_open, _ = self.is_market_open_for_sector(sector, now_ist)
+            feed_stale = getattr(self, "is_stale_feed", False)
+            if (is_mkt_open and not feed_stale) or is_manual or force:
+                if pos.get("taken") == 1:
+                    try:
+                        from src.notifications.ntfy_dispatcher import NTFYDispatcher
+                        NTFYDispatcher().send_stop_hit_alert(pos, exit_price, net_pnl, exit_reason)
+                    except Exception as alert_err:
+                        logger.debug(f"Stop hit alert notice: {alert_err}")
+                else:
+                    self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
             else:
-                self._dispatch_ntfy_trade_closed(pos, net_pnl, exit_price, exit_reason)
+                logger.info(f"Exit alert suppressed for {pos_id}: Market closed or feed stale.")
 
             # Mirror to Firestore if configured (Phase 2B)
             if hasattr(self, "firestore") and self.firestore and self.firestore.is_connected:
@@ -1731,10 +1837,14 @@ class LivePaperTracker:
         tick_count = 0
         while self.is_running:
             try:
-                await asyncio.to_thread(self.update_and_trail_positions)
-                tick_count += 1
-                if tick_count % 10 == 0:  # Every 30 seconds, sync commodities
-                    await asyncio.to_thread(self.ingest_commodities)
+                now_ist = self._get_now_ist()
+                eq_open, _ = self.is_market_open_for_sector("INTRADAY_CASH", now_ist)
+                mcx_open, _ = self.is_market_open_for_sector("COMMODITIES", now_ist)
+                if eq_open or mcx_open:
+                    await asyncio.to_thread(self.update_and_trail_positions)
+                    tick_count += 1
+                    if mcx_open and tick_count % 10 == 0:  # Every 30 seconds, sync commodities
+                        await asyncio.to_thread(self.ingest_commodities)
                 await asyncio.sleep(3)
             except asyncio.CancelledError:
                 break

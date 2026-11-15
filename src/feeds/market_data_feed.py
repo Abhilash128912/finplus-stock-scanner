@@ -187,11 +187,12 @@ class MarketDataFeed:
             time_since_last_fb = now - self.last_fallback_batch_time
             if bar_age_sec > 300.0 and (time_since_last_fb >= self.fallback_batch_min_interval or self.last_fallback_batch_time == 0.0):
                 self.last_fallback_batch_time = now
+                stale_desc = "no tick yet" if (broker_stale_seconds >= 1000000.0 or broker_stale_seconds <= 0.0) else f"{int(broker_stale_seconds)}s"
                 logger.warning(
-                    f"FALLBACK_GUARD ACTIVATED for {ticker}: Broker stale {int(broker_stale_seconds)}s (>180s), "
+                    f"FALLBACK_GUARD ACTIVATED for {ticker}: Broker stale {stale_desc} (>180s), "
                     f"latest CandleStore bar is {int(bar_age_sec)}s old (>300s). Querying gateway..."
                 )
-                df = self.gateway.download(ticker, reason="FALLBACK_GUARD", caller="MarketDataFeed", trigger_detail="Broker stale > 3m & CandleStore bar > 5m", period=period, interval="15m")
+                df = self.gateway.download(ticker, reason="FALLBACK_GUARD", caller="MarketDataFeed", trigger_detail=f"Broker stale {stale_desc} & CandleStore bar > 5m", period=period, interval="15m")
                 if not df.empty:
                     if isinstance(df.columns, pd.MultiIndex):
                         df.columns = df.columns.get_level_values(0)
