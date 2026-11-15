@@ -166,6 +166,7 @@ def test_04_startup_bulletin_and_token_rejection(temp_db_dir):
         assert "[STARTUP] version 3f9143f online | Firebase connected | history 92.5% | token OK" in posted_data
 
     # Simulate token rejection (401 Unauthorized)
+    dispatcher._recent_alert_cache.clear()
     with patch("requests.post") as mock_post:
         mock_post.return_value.status_code = 401
         mock_post.return_value.text = "Unauthorized"

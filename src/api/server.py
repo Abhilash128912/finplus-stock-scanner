@@ -105,7 +105,7 @@ if os.path.exists(FRONTEND_DIR):
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 def get_code_version() -> Dict[str, str]:
-    """Retrieves deployment git commit hash and branch name."""
+    """Retrieves deployment git commit hash (7-char) and branch name."""
     commit = os.getenv("RENDER_GIT_COMMIT", "")
     branch = os.getenv("RENDER_GIT_BRANCH", "")
     if not commit or not branch:
@@ -121,6 +121,8 @@ def get_code_version() -> Dict[str, str]:
                     branch = res.stdout.strip()
         except Exception:
             pass
+    if commit and len(commit) > 7:
+        commit = commit[:7]
     return {
         "commit": commit or "unknown",
         "branch": branch or "release/v2.7.2"
@@ -159,22 +161,6 @@ async def startup_event():
         logger.error(f"[STARTUP] Error during startup history restore: {e}")
 
     scheduler_task = asyncio.create_task(scheduler.start_loop())
-
-    # Startup NTFY priority bulletin
-    async def _send_startup_ntfy():
-        try:
-            await asyncio.sleep(2.0) # Allow startup restore and history check to complete
-            code_ver = get_code_version()
-            fb_status = "connected" if (scheduler.firestore and scheduler.firestore.is_connected) else "local-only"
-            universe = scheduler.feed.get_all_universe_items() if scheduler.feed else []
-            all_syms = [it.get("symbol", "").split(" ")[0].upper() for it in universe if it.get("symbol")]
-            cov = scheduler.candle_store.get_history_coverage(all_syms) if hasattr(scheduler, "candle_store") else {}
-            cov_pct = cov.get("coverage_522_pct", 0.0)
-            scheduler.dispatcher.send_startup_bulletin(code_ver["commit"], fb_status, cov_pct)
-        except Exception as e:
-            logger.error(f"Error sending startup NTFY bulletin: {e}")
-
-    asyncio.create_task(_send_startup_ntfy())
 
     # Warm up broker authentication in background thread
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
@@ -535,7 +521,7 @@ def compute_preflight_status() -> Dict[str, Any]:
     
     # 1. Version and Branch
     ver = get_code_version()
-    v_commit = ver.get("commit", "unknown")
+    v_commit = str(ver.get("commit", "unknown"))[:7]
     v_branch = ver.get("branch", "unknown")
     v_details = f"Release commit {v_commit} on branch {v_branch}"
     items.append({
@@ -717,15 +703,15 @@ def compute_preflight_status() -> Dict[str, Any]:
         "line": f"Simulation Capital: {vc_details}"
     })
 
-    # 13. Safety Switches (RED if PANEL_USER or PANEL_PASSWORD is unset, AMBER if ALERTS_ENABLED is false)
+    # 13. Safety Switches (AMBER "open access (by choice)" if unset, AMBER if ALERTS_ENABLED is false)
     p_user = os.getenv("PANEL_USER")
     p_pass = os.getenv("PANEL_PASSWORD")
     auth_set = bool(p_user and p_pass)
     alerts_on = getattr(scheduler.dispatcher, "alerts_enabled", True) if hasattr(scheduler, "dispatcher") else True
 
     if not auth_set:
-        sw_status = "RED"
-        sw_details = "Administrative access protection unset"
+        sw_status = "AMBER"
+        sw_details = "open access (by choice)"
     elif not alerts_on:
         sw_status = "AMBER"
         sw_details = "Alert notifications suppressed by safety switch"
@@ -739,6 +725,38 @@ def compute_preflight_status() -> Dict[str, Any]:
         "status": sw_status,
         "details": sw_details,
         "line": f"Safety Switches: {sw_details}"
+    })
+
+    # 14. Alert Quota (AMBER if reached)
+    current_utc_date = get_utc_iso()[:10]
+    quota_exhausted = False
+    if hasattr(scheduler, "dispatcher"):
+        if getattr(scheduler.dispatcher, "quota_exhausted_utc_date", None) == current_utc_date:
+            quota_exhausted = True
+        elif hasattr(scheduler.dispatcher, "get_remaining_quota") and scheduler.dispatcher.get_remaining_quota() <= 0:
+            quota_exhausted = True
+    quota_status = "AMBER" if quota_exhausted else "GREEN"
+    quota_text = "limit reached today" if quota_exhausted else "ok"
+    items.append({
+        "id": "alert_quota",
+        "name": "Alert Quota",
+        "status": quota_status,
+        "details": f"Alert quota: {quota_text}",
+        "line": f"Alert quota: {quota_text}"
+    })
+
+    # 15. Yahoo Fallback Used Today (AMBER if yes)
+    from src.gateway.yfinance_gateway import YFinanceGateway
+    yf_stats = YFinanceGateway().get_today_stats()
+    fallback_used = (yf_stats.get("fallback_calls", 0) > 0) or getattr(scheduler, "fallback_active", False)
+    fb_status = "AMBER" if fallback_used else "GREEN"
+    fb_text = "yes" if fallback_used else "no"
+    items.append({
+        "id": "yahoo_fallback",
+        "name": "Gateway Fallback",
+        "status": fb_status,
+        "details": f"Yahoo fallback used today: {fb_text}",
+        "line": f"Yahoo fallback used today: {fb_text}"
     })
 
     # Determine overall status

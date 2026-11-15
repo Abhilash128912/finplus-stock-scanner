@@ -43,28 +43,28 @@ def test_tiered_quota_enforcement(tmp_path):
 
         # 1. At count = 219: ALL alerts allowed
         set_quota_count(219)
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE") is True
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN") is True
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS") is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE", dedupe=False) is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN", dedupe=False) is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS", dedupe=False) is True
 
         # 2. At count = 225: Routine blocked, Trade actions allowed, Stop loss allowed
         set_quota_count(225)
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN") is True
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE") is True
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS") is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN", dedupe=False) is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE", dedupe=False) is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS", dedupe=False) is True
 
         # 3. At count = 242: Routine blocked, Trade actions blocked, ONLY Stop loss allowed
         set_quota_count(242)
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS") is True
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS", dedupe=False) is True
 
         # 4. At count = 249: EVERYTHING blocked (Hard ceiling reached)
         set_quota_count(249)
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE") is False
-        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS") is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="ROUTINE", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_OPEN", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="TRADE_CLOSE", dedupe=False) is False
+        assert dispatcher._safe_post("https://ntfy.sh/test", "msg", {"Title": "T"}, alert_type="STOP_LOSS", dedupe=False) is False
 

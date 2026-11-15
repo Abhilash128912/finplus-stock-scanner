@@ -37,8 +37,8 @@ def test_ntfy_counter_persists_across_instances(tmp_path):
     # Simulate 5 successful dispatches
     with patch("requests.post") as mock_post:
         mock_post.return_value = MagicMock(status_code=200)
-        for _ in range(5):
-            success = dispatcher1._safe_post("https://ntfy.sh/test", "Test Message", {"Title": "Test"})
+        for i in range(5):
+            success = dispatcher1._safe_post("https://ntfy.sh/test", f"Test Message {i}", {"Title": "Test"})
             assert success is True
 
     assert dispatcher1.get_sent_count_today() == 5

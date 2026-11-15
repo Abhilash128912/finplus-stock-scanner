@@ -55,6 +55,8 @@ class NTFYDispatcher:
         self.last_pulse_timestamp = 0.0
         self.ledger = ledger or ScheduleLedger()
         self._hard_ceiling_warned_date: Optional[str] = None
+        self._recent_alert_cache: Dict[str, float] = {}
+        self.quota_exhausted_utc_date: Optional[str] = None
 
     def get_sent_count_today(self) -> int:
         """Returns persistent message count for today in IST."""
@@ -72,7 +74,8 @@ class NTFYDispatcher:
         message: str,
         headers: Dict[str, str],
         alert_type: str = "ROUTINE",
-        is_priority: bool = False
+        is_priority: bool = False,
+        dedupe: bool = True
     ) -> bool:
         """
         Dispatches NTFY notification with tiered daily safety quotas reset by IST date:
@@ -94,6 +97,25 @@ class NTFYDispatcher:
         alert_type_norm = alert_type.upper()
         if alert_type_norm == "ROUTINE" and is_priority:
             alert_type_norm = "TRADE_ACTION"
+
+        is_trade_priority = alert_type_norm in ("STOP_LOSS", "TRADE_ACTION", "TRADE_OPEN", "TRADE_CLOSE")
+        current_utc_date = get_utc_iso()[:10]
+
+        # Stop non-priority retries if HTTP 429 quota exhaustion occurred today in UTC
+        if self.quota_exhausted_utc_date == current_utc_date and not is_trade_priority:
+            logger.warning("NTFY push suppressed: quota exhausted (HTTP 429) today. Non-priority alerts halted until next UTC day.")
+            return False
+
+        # Dedupe identical alerts within 30 minutes (1800s)
+        now = time.time()
+        dedupe_key = f"{url}:{message}"
+        if dedupe:
+            self._recent_alert_cache = {k: ts for k, ts in self._recent_alert_cache.items() if (now - ts) < 1800.0}
+            if dedupe_key in self._recent_alert_cache:
+                last_ts = self._recent_alert_cache[dedupe_key]
+                if (now - last_ts) < 1800.0:
+                    logger.info(f"NTFY alert deduped (identical alert sent {int(now - last_ts)}s ago, suppressed).")
+                    return False
 
         # Tiered quota enforcement
         if used_today >= STOP_LOSS_CAP:
@@ -130,18 +152,24 @@ class NTFYDispatcher:
             resp = requests.post(url, data=message.encode('utf-8'), headers=out_headers, timeout=10)
             if resp.status_code == 200:
                 self.token_rejected = False
+                if dedupe:
+                    self._recent_alert_cache[dedupe_key] = now
                 new_count = self.ledger.increment_ntfy_sent_count(today)
                 logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Type={alert_type_norm})")
                 return True
+            elif resp.status_code == 429:
+                self.quota_exhausted_utc_date = current_utc_date
+                logger.warning(f"NTFY rate limit reached (HTTP 429): Quota exhausted for today ({current_utc_date}). Halting retries until next UTC day.")
+                return False
+            elif resp.status_code in (401, 403):
+                self.token_rejected = True
+                logger.error(f"NTFY push authorization failed (HTTP {resp.status_code}): Token was rejected by NTFY server. Notifications disabled.")
+                return False
             else:
-                if resp.status_code in (401, 403):
-                    self.token_rejected = True
-                    logger.error(f"NTFY push authorization failed (HTTP {resp.status_code}): Token was rejected by NTFY server. Notifications disabled.")
-                else:
-                    logger.error(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
+                logger.warning(f"Failed delivering push to '{url}': HTTP {resp.status_code} - {resp.text}")
                 return False
         except Exception as e:
-            logger.error(f"Failed delivering push to '{url}': {e}")
+            logger.warning(f"Failed delivering push to '{url}': {e}")
             return False
 
     def send_startup_bulletin(self, version_hash: str, firebase_status: str, history_coverage_pct: float) -> bool:
@@ -149,6 +177,7 @@ class NTFYDispatcher:
         Dispatches priority startup NTFY alert:
         "[STARTUP] version <hash> online | Firebase connected | history X% | token OK"
         Never logs or exposes the NTFY auth token.
+        Note: Disabled in server startup lifecycle per quota policy.
         """
         msg = f"[STARTUP] version {version_hash} online | Firebase {firebase_status} | history {history_coverage_pct:.1f}% | token OK"
         headers = {

@@ -228,7 +228,7 @@ def test_03_panel_http_basic_auth(monkeypatch):
       - 200 on authorized
       - /api/health, /api/health/deep, /api/preflight, /preflight, and HEAD requests remain public
     """
-    from src.api.server import app
+    from src.api.server import app, scheduler
     client = TestClient(app)
 
     # 1. Unset auth -> public access
@@ -239,11 +239,13 @@ def test_03_panel_http_basic_auth(monkeypatch):
     assert "safety_switches" in r_pub.json()
     assert r_pub.json()["safety_switches"]["panel_auth_configured"] is False
 
-    # Preflight check: unset auth -> safety switch is RED -> overall RED
+    # Preflight check: unset auth -> AMBER "open access (by choice)", not RED
     r_pf_unauth = client.get("/api/preflight")
     assert r_pf_unauth.status_code == 200
-    assert r_pf_unauth.json()["overall_status"] == "RED"
-    assert any("Administrative access protection unset" in line for line in r_pf_unauth.json()["lines"])
+    assert any("open access (by choice)" in line.lower() for line in r_pf_unauth.json()["lines"])
+    ver_line = [l for l in r_pf_unauth.json()["lines"] if l.startswith("Version:")][0]
+    commit_extracted = ver_line.split("Release commit ")[1].split(" on branch")[0]
+    assert len(commit_extracted) <= 7
 
     # 2. Configure auth
     monkeypatch.setenv("PANEL_USER", "admin")
@@ -262,6 +264,32 @@ def test_03_panel_http_basic_auth(monkeypatch):
         for sub in forbidden:
             assert sub.lower() not in l.lower()
 
+    # Preflight line: Alert quota: ok
+    assert any("Alert quota: ok" in line for line in pf_data["lines"])
+
+    # Preflight line: Yahoo fallback used today: no / yes
+    from src.gateway.yfinance_gateway import YFinanceGateway
+    stat_no_fb = {
+        "calls": 0, "symbols": 0, "strict_calls": 0, "strict_symbols": 0,
+        "legacy_scan_calls": 0, "legacy_scan_symbols": 0, "legacy_scan_hour_calls": 0,
+        "fallback_calls": 0, "blocked": 0, "total_calls": 0
+    }
+    with patch.object(YFinanceGateway, "get_today_stats", return_value=stat_no_fb):
+        r_fb_no = client.get("/api/preflight").json()
+        assert any("Yahoo fallback used today: no" in line for line in r_fb_no["lines"])
+
+    stat_with_fb = dict(stat_no_fb, fallback_calls=3)
+    with patch.object(YFinanceGateway, "get_today_stats", return_value=stat_with_fb):
+        r_fb_yes = client.get("/api/preflight").json()
+        assert any("Yahoo fallback used today: yes" in line for line in r_fb_yes["lines"])
+
+    # Preflight line: Alert quota limit reached today (AMBER)
+    today_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+    monkeypatch.setattr(scheduler.dispatcher, "quota_exhausted_utc_date", today_utc)
+    r_quota_ex = client.get("/api/preflight").json()
+    assert any("Alert quota: limit reached today" in line for line in r_quota_ex["lines"])
+    monkeypatch.setattr(scheduler.dispatcher, "quota_exhausted_utc_date", None)
+
     r_pf_html = client.get("/preflight")
     assert r_pf_html.status_code == 200
     for sub in forbidden:
@@ -269,7 +297,6 @@ def test_03_panel_http_basic_auth(monkeypatch):
     assert client.head("/").status_code in (200, 404, 405) # HEAD is public
 
     # Preflight check: Virtual capital <= 0 -> RED
-    from src.api.server import scheduler
     scheduler.paper_tracker.virtual_capital = 0.0
     r_vc_zero = client.get("/api/preflight").json()
     assert any("Simulation capital unallocated" in line for line in r_vc_zero["lines"])
@@ -378,4 +405,44 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
     dispatcher.alerts_enabled = False
     delivered = dispatcher._safe_post("https://ntfy.sh/test", "Test message", {}, alert_type="ROUTINE")
     assert not delivered  # Suppressed!
+
+    # 4. NTFY Quota Enhancements:
+    # a. No NTFY on startup/deploy
+    dispatcher.alerts_enabled = True
+    with patch.object(scheduler.dispatcher, "send_startup_bulletin") as mock_sb:
+        with TestClient(app):
+            pass
+        assert not mock_sb.called
+
+    # b. Dedupe identical alerts within 30 minutes
+    mock_resp_200 = MagicMock(status_code=200)
+    with patch("requests.post", return_value=mock_resp_200):
+        # First send succeeds
+        ok1 = dispatcher._safe_post("https://ntfy.sh/test", "Identical Alert Content", {}, alert_type="ROUTINE")
+        assert ok1
+        # Second send of identical content within 30 mins is deduped
+        ok2 = dispatcher._safe_post("https://ntfy.sh/test", "Identical Alert Content", {}, alert_type="ROUTINE")
+        assert not ok2  # Deduped!
+
+    # c. On HTTP 429: log warning (not error), stop retries for current UTC day, trade alert kept priority
+    mock_resp_429 = MagicMock(status_code=429, text="Rate limit exceeded")
+    dispatcher._recent_alert_cache.clear()
+    with patch("requests.post", return_value=mock_resp_429), patch("src.notifications.ntfy_dispatcher.logger.warning") as mock_warn:
+        ok_429 = dispatcher._safe_post("https://ntfy.sh/test", "New Alert Message", {}, alert_type="ROUTINE")
+        assert not ok_429
+        # Verified logged as warning
+        assert mock_warn.called
+        assert any("429" in str(c) for c in mock_warn.call_args_list)
+
+        # Non-priority routine alert immediately blocked without HTTP request
+        with patch("requests.post") as mock_post_blocked:
+            ok_halted = dispatcher._safe_post("https://ntfy.sh/test", "Another Routine", {}, alert_type="ROUTINE")
+            assert not ok_halted
+            assert not mock_post_blocked.called
+
+        # Trade priority alert is still attempted
+        with patch("requests.post", return_value=MagicMock(status_code=200)) as mock_post_priority:
+            ok_trade = dispatcher._safe_post("https://ntfy.sh/test", "Emergency Stop Hit", {}, alert_type="STOP_LOSS")
+            assert ok_trade
+            assert mock_post_priority.called
 
