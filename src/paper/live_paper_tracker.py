@@ -124,6 +124,9 @@ class LivePaperTracker:
                 return False, "Outside MCX market hours (09:00 - 23:30 IST)"
             return True, "MCX Open"
 
+        elif sector in ("CRYPTO", "CRYPTO_PERPETUALS"):
+            return True, "Crypto 24/7 Market Open"
+
         if not is_weekday:
             return False, "Weekend - Market Closed"
         return True, "Open"
@@ -735,9 +738,60 @@ class LivePaperTracker:
             except Exception:
                 continue
 
+    def ingest_crypto(self):
+        """Polls App #6 (Delta Crypto Radar) locally or in cloud and auto-ingests qualified crypto perpetual trades."""
+        endpoints = [
+            "http://127.0.0.1:8005/api/scan"
+        ]
+        for ep in endpoints:
+            try:
+                r = requests.get(ep, timeout=1.5)
+                if r.status_code == 200:
+                    data = r.json()
+                    pt = data.get("priority_trade")
+                    if pt and pt.get("confluence_score", 0) >= 80 and pt.get("action"):
+                        sym = pt.get("symbol")
+                        if sym in self.suspect_symbols:
+                            logger.warning(f"Blocking fresh crypto entry for {sym}: marked DATA_SUSPECT.")
+                            return
+                        ltp = float(pt.get("ltp", 0.0))
+                        action = pt.get("action", "")
+                        act = "SELL" if "SELL" in action or "SHORT" in action else "BUY"
+                        sl = float(pt.get("stop_loss") or (ltp * 1.015 if act == "SELL" else ltp * 0.985))
+                        tgt = float(pt.get("target_1") or (ltp * 0.975 if act == "SELL" else ltp * 1.025))
+                        qty = float(pt.get("default_lot", 1))
+
+                        self.open_position(
+                            source_app="APP_06_CRYPTO_DELTA",
+                            sector="CRYPTO",
+                            symbol=sym,
+                            action=act,
+                            entry_price=ltp,
+                            stop_loss=sl,
+                            target=tgt,
+                            quantity=qty,
+                            notes=f"Delta India 15m Squeeze: {pt.get('reason', '')}"
+                        )
+                    break
+            except Exception:
+                continue
+
     def _fetch_live_price(self, symbol: str, sector: str) -> Optional[float]:
         """Fetches live market price for trailing stop and P&L calculation."""
         clean_sym = symbol.split(" ")[0].upper()
+
+        # 0. Check App 6 Crypto Radar first if sector is CRYPTO
+        if sector in ("CRYPTO", "CRYPTO_PERPETUALS") or any(k in clean_sym for k in ["BTC", "ETH", "SOL", "XRP", "PAXG", "OILUSD"]):
+            try:
+                r = requests.get("http://127.0.0.1:8005/api/scan", timeout=1.5)
+                if r.status_code == 200:
+                    for inst in r.json().get("instruments", []):
+                        if inst.get("symbol") == clean_sym:
+                            val = float(inst.get("ltp", 0.0))
+                            if val > 0:
+                                return round(val, 4)
+            except Exception:
+                pass
 
         # 0. Primary: Direct 0-Delay Official Broker Quote from INDmoney API
         try:

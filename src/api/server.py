@@ -1150,6 +1150,7 @@ async def get_paper_status():
         if scheduler.latest_shortlist:
             scheduler.paper_tracker.ingest_shortlist(scheduler.latest_shortlist)
         scheduler.paper_tracker.ingest_commodities()
+        scheduler.paper_tracker.ingest_crypto()
         scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
 
@@ -1169,6 +1170,7 @@ async def sync_paper_positions():
     if scheduler.latest_shortlist:
         scheduler.paper_tracker.ingest_shortlist(scheduler.latest_shortlist)
     scheduler.paper_tracker.ingest_commodities()
+    scheduler.paper_tracker.ingest_crypto()
     scheduler.paper_tracker.update_and_trail_positions()
     return scheduler.paper_tracker.get_status_dict()
 
