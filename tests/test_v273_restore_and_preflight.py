@@ -99,20 +99,24 @@ def test_01_fake_firestore_restore_coverage(temp_env):
     now_epoch = int(datetime.datetime.now(datetime.timezone.utc).timestamp())
     with cs._get_connection() as conn:
         # 313 complete symbols
+        batch_rows = []
         for i in range(313):
             sym = all_785[i]
             for b in range(550):
-                conn.execute("""
-                    INSERT INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
-                    VALUES (?, '15m', ?, '2026-11-01T00:00:00Z', '2026-11-01 05:30:00', 100, 105, 95, 102, 1000)
-                """, (sym, now_epoch - (550 - b) * 900))
+                batch_rows.append((sym, '15m', now_epoch - (550 - b) * 900, '2026-11-01T00:00:00Z', '2026-11-01 05:30:00', 100, 105, 95, 102, 1000))
+        conn.executemany("""
+            INSERT INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, batch_rows)
         
         # Recent IPO: 300 bars starting 20 calendar days ago
+        ipo_rows = []
         for b in range(300):
-            conn.execute("""
-                INSERT INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
-                VALUES (?, '15m', ?, '2026-11-01T00:00:00Z', '2026-11-01 05:30:00', 100, 105, 95, 102, 1000)
-            """, (recent_ipo, (now_epoch - 20 * 86400) + b * 900))
+            ipo_rows.append((recent_ipo, '15m', (now_epoch - 20 * 86400) + b * 900, '2026-11-01T00:00:00Z', '2026-11-01 05:30:00', 100, 105, 95, 102, 1000))
+        conn.executemany("""
+            INSERT INTO candles (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, ipo_rows)
         conn.commit()
 
     # Pre-restore coverage check: 313 + 1 IPO = 314
@@ -239,11 +243,23 @@ def test_03_panel_http_basic_auth(monkeypatch):
     monkeypatch.setenv("PANEL_USER", "admin")
     monkeypatch.setenv("PANEL_PASSWORD", "secret123")
 
-    # Public endpoints must NOT require auth
+    # Public endpoints must NOT require auth & must be public-safe
     assert client.get("/api/health").status_code == 200
     assert client.get("/api/health/deep").status_code in (200, 503) # Never 401 Unauthorized
-    assert client.get("/api/preflight").status_code == 200
-    assert client.get("/preflight").status_code == 200
+    r_pf_api = client.get("/api/preflight")
+    assert r_pf_api.status_code == 200
+    pf_data = r_pf_api.json()
+    assert set(pf_data.keys()) == {"overall_status", "lines"}
+    assert pf_data["overall_status"] in ("GREEN", "AMBER", "RED")
+    forbidden = ["length", "len(", "Bearer", "client_id", "ntfy.sh", "https://"]
+    for l in pf_data["lines"]:
+        for sub in forbidden:
+            assert sub.lower() not in l.lower()
+
+    r_pf_html = client.get("/preflight")
+    assert r_pf_html.status_code == 200
+    for sub in forbidden:
+        assert sub.lower() not in r_pf_html.text.lower()
     assert client.head("/").status_code in (200, 404, 405) # HEAD is public
 
     # Protected endpoints require auth
@@ -261,22 +277,32 @@ def test_03_panel_http_basic_auth(monkeypatch):
 
 def test_04_admin_token_and_alerts_switch(monkeypatch):
     """
-    Test 0d & 3:
-    - ADMIN_TOKEN protection on /api/admin/restore-now
-    - ALERTS_ENABLED=false suppresses NTFY
+    Test 0d & 3 & prompt requirements:
+    - Check whether PanelBasicAuthMiddleware blocks POST /api/admin/restore-now,
+      given it needs a Bearer ADMIN_TOKEN in the same Authorization header.
+      Exempt that path from Basic Auth and keep the Bearer check.
+      Test: no token -> 401, wrong token -> 403, correct token -> 200, with PANEL_USER/PANEL_PASSWORD set.
+    - ALERTS_ENABLED=false suppresses NTFY.
     """
     from src.api.server import app, scheduler
     client = TestClient(app)
 
-    # 1. /api/admin/restore-now tests
+    # 1. /api/admin/restore-now tests WITH PANEL_USER and PANEL_PASSWORD SET
+    monkeypatch.setenv("PANEL_USER", "paneladmin")
+    monkeypatch.setenv("PANEL_PASSWORD", "panelpass123")
     monkeypatch.setenv("ADMIN_TOKEN", "super-secret-token")
     
-    # Missing auth
-    assert client.post("/api/admin/restore-now").status_code == 401
-    # Invalid token
-    assert client.post("/api/admin/restore-now", headers={"Authorization": "Bearer wrong"}).status_code == 403
+    # Missing auth -> 401 with Bearer details (NOT Basic Auth challenge)
+    r_no_token = client.post("/api/admin/restore-now")
+    assert r_no_token.status_code == 401
+    assert "Bearer" in r_no_token.json().get("detail", "")
+
+    # Invalid token -> 403 Forbidden
+    r_wrong = client.post("/api/admin/restore-now", headers={"Authorization": "Bearer wrong"})
+    assert r_wrong.status_code == 403
+    assert "Invalid ADMIN_TOKEN" in r_wrong.json().get("detail", "")
     
-    # Valid token with connected mock firestore
+    # Valid token with connected mock firestore -> 200 SUCCESS
     mock_client = MockFirestoreClient({"env/live/candles": {}})
     fb = FirestoreBackend(env_prefix="live")
     fb.client = mock_client
@@ -294,3 +320,4 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
     dispatcher.alerts_enabled = False
     delivered = dispatcher._safe_post("https://ntfy.sh/test", "Test message", {}, alert_type="ROUTINE")
     assert not delivered  # Suppressed!
+

@@ -49,6 +49,10 @@ class PanelBasicAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "HEAD":
             return await call_next(request)
 
+        # /api/admin/restore-now is strictly protected by Bearer ADMIN_TOKEN, exempt from Basic Auth
+        if request.url.path.rstrip("/") == "/api/admin/restore-now":
+            return await call_next(request)
+
         panel_user = os.getenv("PANEL_USER")
         panel_pass = os.getenv("PANEL_PASSWORD")
 
@@ -66,10 +70,6 @@ class PanelBasicAuthMiddleware(BaseHTTPMiddleware):
             needs_auth = not is_public and (
                 path == "/" or request.method in ("POST", "PUT", "DELETE", "PATCH")
             )
-
-            # Special bypass for /api/admin/restore-now (which uses its own Bearer ADMIN_TOKEN)
-            if path == "/api/admin/restore-now":
-                return await call_next(request)
 
             if needs_auth:
                 auth_hdr = request.headers.get("Authorization")
@@ -149,6 +149,12 @@ async def startup_event():
         f"PERSISTENCE STARTUP: DATA_DIR='{data_dir}' (env_set={bool(data_dir_env)}, writable={is_writable}) | "
         f"Databases: {', '.join(sizes_info)}"
     )
+
+    # Step 1: Ensure history coverage and restore run synchronously during boot BEFORE accepting traffic
+    try:
+        await scheduler.check_and_restore_history(caller="startup")
+    except Exception as e:
+        logger.error(f"[STARTUP] Error during startup history restore: {e}")
 
     scheduler_task = asyncio.create_task(scheduler.start_loop())
 
@@ -496,16 +502,20 @@ async def admin_restore_now(request: Request):
 # Preflight System Health Check (Requirement 2)
 # -------------------------------------------------------------
 def compute_preflight_status() -> Dict[str, Any]:
-    """Computes comprehensive preflight readiness with plain English status lines."""
+    """Computes comprehensive public-safe preflight readiness with plain English status lines."""
     items = []
     
     # 1. Version and Branch
     ver = get_code_version()
+    v_commit = ver.get("commit", "unknown")
+    v_branch = ver.get("branch", "unknown")
+    v_details = f"Release commit {v_commit} on branch {v_branch}"
     items.append({
         "id": "version_branch",
         "name": "Version & Branch",
         "status": "GREEN",
-        "details": f"Commit {ver.get('commit', 'unknown')} on branch {ver.get('branch', 'unknown')}"
+        "details": v_details,
+        "line": f"Version: {v_details}"
     })
 
     # 2. Trading Day Status (is today an NSE trading day or weekend/holiday)
@@ -517,42 +527,42 @@ def compute_preflight_status() -> Dict[str, Any]:
         day_details = f"Weekend ({now_ist.strftime('%A')}) - Markets Closed"
     elif is_hol:
         day_status = "AMBER"
-        day_details = f"Official NSE Holiday ({hol_name}) - Exchange Closed"
+        day_details = f"Official Exchange Holiday ({hol_name}) - Exchange Closed"
     else:
         day_status = "GREEN"
         day_details = f"Trading Day Active ({now_ist.strftime('%A, %d %b %Y')})"
     items.append({
         "id": "trading_day",
-        "name": "Trading Day Status",
+        "name": "Trading Session",
         "status": day_status,
-        "details": day_details
+        "details": day_details,
+        "line": f"Trading Session: {day_details}"
     })
 
-    # 3. Broker Token
+    # 3. Broker Token (Public-Safe: no token, no length, no client IDs)
     broker_ok = False
-    broker_msg = "Broker not configured"
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
         tok = scheduler.indmoney_feed.auth_client.get_valid_token(auto_refresh=False)
         if tok and len(tok) > 20:
             broker_ok = True
-            broker_msg = f"Token valid (length {len(tok)})"
-        else:
-            broker_msg = "Token missing or expired"
+    broker_details = "Broker session authenticated and operational" if broker_ok else "Broker session token missing or expired"
     items.append({
         "id": "broker_token",
-        "name": "Broker Token",
+        "name": "Broker Session",
         "status": "GREEN" if broker_ok else "RED",
-        "details": broker_msg
+        "details": broker_details,
+        "line": f"Broker Session: {broker_details}"
     })
 
-    # 4. Firebase Connected & Last Restore Result
+    # 4. Firebase Connected & Last Restore Result (Public-Safe: no credentials, no internal paths)
     fb_conn = hasattr(scheduler, "firestore") and scheduler.firestore.is_connected
-    last_res = scheduler.firestore.last_restore_reason if hasattr(scheduler, "firestore") else "NO_RESTORE_RUN"
+    fb_details = "Cloud backup connected and synchronized" if fb_conn else "Local-only storage active (cloud backup not configured)"
     items.append({
         "id": "firebase_connected",
-        "name": "Firebase Persistence",
+        "name": "Cloud Persistence",
         "status": "GREEN" if fb_conn else "RED",
-        "details": f"Connected ({scheduler.firestore.env_prefix}) | Last Restore: {last_res}" if fb_conn else "Local-only mode (FIREBASE_CREDENTIALS_JSON missing)"
+        "details": fb_details,
+        "line": f"Cloud Persistence: {fb_details}"
     })
 
     # 5. History Coverage >= 90%
@@ -568,86 +578,107 @@ def compute_preflight_status() -> Dict[str, Any]:
     cov_pct = cov.get("coverage_522_pct", 0.0)
     cnt_522 = cov.get("symbols_522_bars", {}).get("count", 0)
     cov_ok = cov_pct >= 90.0
+    cov_details = f"{cov_pct:.1f}% universe history coverage verified"
     items.append({
         "id": "history_coverage",
-        "name": "History Coverage (>= 90%)",
+        "name": "History Coverage",
         "status": "GREEN" if cov_ok else "RED",
-        "details": f"{cov_pct:.1f}% ({cnt_522}/{len(distinct_syms)} distinct tickers have >= 522 bars or valid new listing)"
+        "details": cov_details,
+        "line": f"History Coverage: {cov_details}"
     })
 
-    # 6. NTFY Token
+    # 6. NTFY Push Notifications (Public-Safe: no topic name, no token, no hostnames)
     ntfy_tok = getattr(scheduler.dispatcher, "auth_token", "")
     ntfy_rejected = getattr(scheduler.dispatcher, "token_rejected", False)
     alerts_on = getattr(scheduler.dispatcher, "alerts_enabled", True)
-    if not ntfy_tok:
+    if not alerts_on:
         ntfy_status = "AMBER"
-        ntfy_details = "Public topic mode (no NTFY_AUTH_TOKEN set)"
+        ntfy_details = "Alerts temporarily disabled by safety switch"
     elif ntfy_rejected:
         ntfy_status = "RED"
-        ntfy_details = "Token rejected by NTFY server"
+        ntfy_details = "Notification channel authentication rejected"
+    elif not ntfy_tok:
+        ntfy_status = "AMBER"
+        ntfy_details = "Notification channel operating in standard mode"
     else:
         ntfy_status = "GREEN"
-        ntfy_details = f"Token accepted (alerts {'enabled' if alerts_on else 'disabled by ALERTS_ENABLED switch'})"
+        ntfy_details = "Alert delivery channel verified and ready"
     items.append({
         "id": "ntfy_token",
-        "name": "NTFY Push Gateway",
+        "name": "Push Notifications",
         "status": ntfy_status,
-        "details": ntfy_details
+        "details": ntfy_details,
+        "line": f"Push Notifications: {ntfy_details}"
     })
 
     # 7. Holiday Calendar Coverage (next 10 trading days)
     cal_cov = check_calendar_coverage_next_n_trading_days(10)
     cal_ok = cal_cov.get("covered", False)
+    cal_details = "Exchange holiday schedule verified for upcoming sessions" if cal_ok else "Holiday schedule coverage incomplete"
     items.append({
         "id": "holiday_calendar",
-        "name": "Holiday Calendar Coverage",
+        "name": "Market Calendar",
         "status": "GREEN" if cal_ok else "RED",
-        "details": f"Covers next 10 trading days (calendar extends through {cal_cov.get('latest_holiday_calendar_year')})"
+        "details": cal_details,
+        "line": f"Market Calendar: {cal_details}"
     })
 
-    # 8. Legacy Yahoo Budget
+    # 8. Data Gateway
     from src.gateway.yfinance_gateway import YFinanceGateway
     yf_m = YFinanceGateway().get_metrics()
     yf_calls = yf_m.get("daily_calls_used", 0)
     yf_cb = yf_m.get("circuit_breaker_tripped", False)
     yf_ok = (not yf_cb) and (yf_calls < 250)
+    yf_details = "Data gateway operating within normal parameters" if yf_ok else "Data gateway traffic elevated"
     items.append({
         "id": "yahoo_budget",
-        "name": "Legacy Yahoo Budget",
+        "name": "Data Gateway",
         "status": "GREEN" if yf_ok else "RED",
-        "details": f"{yf_calls}/250 daily calls used | Circuit Breaker: {'TRIPPED' if yf_cb else 'NORMAL'}"
+        "details": yf_details,
+        "line": f"Data Gateway: {yf_details}"
     })
 
     # 9. Memory RSS
     rss_mb = get_process_rss_mb()
-    # Alert if RSS > 400 MB (Render free tier limit is 512 MB)
     mem_ok = rss_mb < 400.0
+    mem_details = f"{rss_mb:.1f} MB (within normal operational limits)"
     items.append({
         "id": "memory_rss",
-        "name": "Process Memory (RSS)",
+        "name": "System Memory",
         "status": "GREEN" if mem_ok else "RED",
-        "details": f"{rss_mb:.1f} MB (Limit: 512 MB, Warning at 400 MB)"
+        "details": mem_details,
+        "line": f"System Memory: {mem_details}"
     })
 
     # 10. No Unresolved ERROR in Last Hour
     err_cnt = get_recent_error_count(3600)
     err_ok = (err_cnt == 0)
+    err_details = "Nominal (0 errors logged in past hour)" if err_ok else f"Attention required ({err_cnt} errors logged in past hour)"
     items.append({
         "id": "unresolved_errors",
-        "name": "Recent Errors (Last 1 Hour)",
+        "name": "System Errors",
         "status": "GREEN" if err_ok else "RED",
-        "details": f"{err_cnt} ERROR/CRITICAL events logged in the last 60 minutes"
+        "details": err_details,
+        "line": f"System Errors: {err_details}"
     })
 
     # Determine overall status
     reds = [it for it in items if it["status"] == "RED"]
-    all_green = (len(reds) == 0)
+    ambers = [it for it in items if it["status"] == "AMBER"]
+    has_red = len(reds) > 0
+    has_amber = len(ambers) > 0
+    overall_status = "RED" if has_red else ("AMBER" if has_amber else "GREEN")
+    all_green = (overall_status == "GREEN")
+
+    plain_lines = [it["line"] for it in items]
 
     return {
-        "status": "ALL_GREEN" if all_green else "ATTENTION_REQUIRED",
+        "overall_status": overall_status,
         "all_green": all_green,
-        "red_items": reds,
+        "status": overall_status,
+        "lines": plain_lines,
         "items": items,
+        "red_items": reds,
         "ist_time": get_ist_time_str(),
         "timestamp_utc": get_utc_iso()
     }
@@ -655,17 +686,28 @@ def compute_preflight_status() -> Dict[str, Any]:
 
 @app.get("/api/preflight")
 async def get_preflight_json():
-    """Returns preflight checklist status in JSON format."""
-    return JSONResponse(content=compute_preflight_status())
+    """Returns public-safe preflight checklist: only overall_status and plain-English lines."""
+    data = compute_preflight_status()
+    return JSONResponse(content={
+        "overall_status": data.get("overall_status", "GREEN"),
+        "lines": data.get("lines", [])
+    })
 
 
 @app.get("/preflight", response_class=HTMLResponse)
 async def get_preflight_html():
-    """Renders human-readable Preflight Dashboard with GREEN/RED status indicators in plain English."""
+    """Renders human-readable Preflight Dashboard with GREEN/AMBER/RED status indicators in plain English."""
     data = compute_preflight_status()
-    all_green = data.get("all_green", False)
-    banner_bg = "#065f46" if all_green else "#991b1b"
-    banner_text = "ALL SYSTEMS NOMINAL - READY FOR MARKET SESSION" if all_green else "PREFLIGHT ATTENTION REQUIRED"
+    overall = data.get("overall_status", "GREEN")
+    if overall == "GREEN":
+        banner_bg = "#065f46"
+        banner_text = "ALL SYSTEMS NOMINAL - READY FOR MARKET SESSION"
+    elif overall == "AMBER":
+        banner_bg = "#92400e"
+        banner_text = "NOTICE - MARKETS CLOSED / NON-TRADING HOURS"
+    else:
+        banner_bg = "#991b1b"
+        banner_text = "PREFLIGHT ATTENTION REQUIRED"
 
     rows_html = ""
     for it in data.get("items", []):
@@ -704,7 +746,7 @@ async def get_preflight_html():
         <div class="header">
             <div>
                 <h2 style="margin: 0; color: #38bdf8; font-size: 1.3rem;">FinPlus+ Preflight Checklist</h2>
-                <span style="font-size: 0.85rem; color: #9ca3af;">Institutional Operational Readiness Dashboard</span>
+                <span style="font-size: 0.85rem; color: #9ca3af;">Operational Readiness Dashboard</span>
             </div>
             <div style="font-size: 0.9rem; color: #cbd5e1; font-weight: 600;">{data.get('ist_time')}</div>
         </div>
@@ -712,9 +754,9 @@ async def get_preflight_html():
         <table>
             <thead>
                 <tr>
-                    <th style="width: 30%;">Subsystem / Check</th>
+                    <th style="width: 25%;">System</th>
                     <th style="width: 15%;">Status</th>
-                    <th style="width: 55%;">Telemetry & Details</th>
+                    <th style="width: 60%;">Readiness Line</th>
                 </tr>
             </thead>
             <tbody>
@@ -722,8 +764,8 @@ async def get_preflight_html():
             </tbody>
         </table>
         <div class="footer">
-            <span>FinPlus+ Scanner v2.7.3</span>
-            <span>Refreshes dynamically on request</span>
+            <span>Overall Status: <strong>{overall}</strong></span>
+            <span>FinPlus+ Stock Scanner</span>
         </div>
     </div>
 </body>

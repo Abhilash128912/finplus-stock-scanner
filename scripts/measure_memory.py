@@ -67,8 +67,19 @@ def run_benchmark():
         df_sample["Close"] = df_sample["close"]
         df_sample["Volume"] = df_sample["volume"]
         df_sample["Datetime"] = pd.to_datetime(df_sample["time"], unit="s")
-        for s_idx in range(500):
-            temp_cs.save_dataframe_candles(f"SYM_{s_idx}", "15m", df_sample)
+        with temp_cs._get_connection() as conn:
+            for s_idx in range(500):
+                sym = f"SYM_{s_idx}"
+                rows = [
+                    (sym, "15m", int(r["time"]), "2026-11-01T00:00:00Z", "2026-11-01 05:30:00", float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]), int(r["volume"]))
+                    for r in records
+                ]
+                conn.executemany("""
+                    INSERT OR REPLACE INTO candles
+                    (symbol, timeframe, epoch, timestamp_utc, timestamp_ist, open, high, low, close, volume)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, rows)
+            conn.commit()
         t_dur = time.time() - t0
         rss_post_restore = get_process_rss_mb()
         print(f"Simulation Completed: 500,000 bars across 500 symbols in {t_dur:.2f}s")
@@ -81,17 +92,61 @@ def run_benchmark():
     except Exception:
         pass
 
-    # 2. Benchmark One Full Universe Scan Cycle
-    print("\n--- 2. Full Universe Scan Cycle Benchmark ---")
+    # 2. Benchmark One Full Universe Scan Cycle (Mocked 97 Instruments for Meaningful Off-Hours Telemetry)
+    print("\n--- 2. Full Universe Scan Cycle Benchmark (97 Mocked Instruments) ---")
     rss_pre_scan = get_process_rss_mb()
     scheduler = ScannerScheduler()
-    t0 = time.time()
-    scan_res = scheduler.scan_universe_now()
-    t_scan_dur = time.time() - t0
-    rss_post_scan = get_process_rss_mb()
     
+    # Generate 97 mock instruments with 550 bars of synthetic data
+    mock_universe_97 = []
+    sample_records = []
+    for b in range(550):
+        sample_records.append({
+            "time": 1700000000 + b * 900,
+            "open": 100.0 + (b % 10) * 0.5,
+            "high": 105.0 + (b % 10) * 0.5,
+            "low": 95.0 + (b % 10) * 0.5,
+            "close": 102.0 + (b % 10) * 0.5,
+            "volume": 1000 + b * 10
+        })
+    import pandas as pd
+    df_sample = pd.DataFrame(sample_records)
+    df_sample["Open"] = df_sample["open"]
+    df_sample["High"] = df_sample["high"]
+    df_sample["Low"] = df_sample["low"]
+    df_sample["Close"] = df_sample["close"]
+    df_sample["Volume"] = df_sample["volume"]
+    df_sample["Datetime"] = pd.to_datetime(df_sample["time"], unit="s")
+    df_sample.attrs["data_source"] = "MOCK_BENCHMARK"
+
+    from unittest.mock import patch, MagicMock
+
+    for i in range(97):
+        sym = f"FO_SYM_{i:02d}"
+        mock_universe_97.append({
+            "symbol": sym,
+            "yf_ticker": f"{sym}.NS",
+            "category": "STOCK" if i > 0 else "INDEX",
+            "lot_size": 250
+        })
+
+    # Mock market open so scanning executes fully even on weekends/off-hours
+    with patch("src.scheduler.scanner_scheduler.is_equity_market_open_ist", return_value=(True, "Market Open (Benchmark)")):
+        scheduler.feed.get_all_universe_items = MagicMock(return_value=mock_universe_97)
+        scheduler.feed.fetch_15m_candles = MagicMock(return_value=df_sample)
+        scheduler.feed.prefetch_batch_15m_candles = MagicMock()
+        if scheduler.indmoney_feed:
+            scheduler.indmoney_feed.fetch_batch_quotes = MagicMock(return_value={
+                u["symbol"]: {"ltp": 102.5, "day_high": 105.0, "day_low": 95.0} for u in mock_universe_97
+            })
+        
+        t0 = time.time()
+        scan_res = scheduler.scan_universe_now()
+        t_scan_dur = time.time() - t0
+        rss_post_scan = get_process_rss_mb()
+
     print(f"Universe Scan Completed in {t_scan_dur:.2f}s (Scanned: {len(scan_res)} items)")
-    print(f"[SCAN CYCLE] Pre-Scan RSS: {rss_pre_scan:.1f} MB | Post-Scan RSS: {rss_post_scan:.1f} MB | Delta: +{rss_post_scan - rss_pre_scan:.1f} MB")
+    print(f"[SCAN CYCLE (97 INSTRUMENTS)] Pre-Scan RSS: {rss_pre_scan:.1f} MB | Post-Scan RSS: {rss_post_scan:.1f} MB | Delta: +{rss_post_scan - rss_pre_scan:.1f} MB")
     
     # 3. Overall Peak
     rss_final = get_process_rss_mb()
