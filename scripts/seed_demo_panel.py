@@ -13,6 +13,10 @@ sys.path.insert(0, str(_ROOT))
 from src.paper.live_paper_tracker import LivePaperTracker
 
 def seed_demo_trades():
+    # Refuse to run in live environment
+    if os.getenv("FINPLUS_ENVIRONMENT", "").strip().lower() == "live":
+        raise RuntimeError("seed_demo_panel.py is strictly forbidden when FINPLUS_ENVIRONMENT=live.")
+
     db_path = str(_ROOT / "data" / "paper_trading.db")
     tracker = LivePaperTracker(db_path=db_path)
     

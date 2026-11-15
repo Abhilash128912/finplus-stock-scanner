@@ -23,6 +23,7 @@ import json
 import gzip
 import base64
 import datetime
+import tempfile
 import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -400,6 +401,21 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
     assert len(first_err["message"]) <= 200
     assert "super-secret-token" not in first_err["message"] # Secret redacted!
 
+    # 2b. /api/admin/firestore-paper-trades and /api/admin/clean-seeded-trades tests
+    from src.paper.live_paper_tracker import LivePaperTracker
+    temp_dir = tempfile.mkdtemp()
+    temp_tracker = LivePaperTracker(db_path=str(Path(temp_dir) / "test_pt.db"))
+    with patch.object(scheduler, "paper_tracker", temp_tracker):
+        r_pt_no_tok = client.get("/api/admin/firestore-paper-trades")
+        assert r_pt_no_tok.status_code == 401
+        r_pt_valid = client.get("/api/admin/firestore-paper-trades", headers={"Authorization": "Bearer super-secret-token"})
+        assert r_pt_valid.status_code == 200
+        assert r_pt_valid.json()["status"] == "SUCCESS"
+
+        r_clean_valid = client.post("/api/admin/clean-seeded-trades", headers={"Authorization": "Bearer super-secret-token"})
+        assert r_clean_valid.status_code == 200
+        assert r_clean_valid.json()["status"] == "SUCCESS"
+
     # 3. ALERTS_ENABLED safety switch test
     dispatcher = NTFYDispatcher()
     dispatcher.alerts_enabled = False
@@ -556,5 +572,20 @@ def test_06_broker_stale_no_tick_yet():
         msg_arg = mock_fb_alert.call_args[0][1]
         assert "Broker stale no tick yet" in msg_arg
         assert "17947" not in msg_arg
+
+
+def test_07_seed_demo_panel_refuses_live_environment(monkeypatch):
+    """
+    Verifies that scripts/seed_demo_panel.py refuses to run when FINPLUS_ENVIRONMENT=live,
+    raising a RuntimeError to prevent polluting the live database.
+    """
+    import pytest
+    from scripts.seed_demo_panel import seed_demo_trades
+
+    monkeypatch.setenv("FINPLUS_ENVIRONMENT", "live")
+    with pytest.raises(RuntimeError) as exc_info:
+        seed_demo_trades()
+    assert "strictly forbidden when FINPLUS_ENVIRONMENT=live" in str(exc_info.value)
+
 
 
