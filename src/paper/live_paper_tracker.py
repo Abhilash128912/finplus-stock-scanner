@@ -1418,9 +1418,9 @@ class LivePaperTracker:
             logger.info(f"NTFY trigger alert skipped: midday window (11:30-13:00 IST) paused to avoid exhaustion.")
             return
 
-        # Suppress local dispatches to prevent eating into cloud production quota unless forced
+        # Suppress local dispatches to prevent eating into cloud production quota (no bypass)
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
+        if not is_render:
             logger.info("Local development environment: alert suppressed (not on Render) [trade opened push].")
             if is_morning:
                 self.daily_morning_ntfy_count = getattr(self, "daily_morning_ntfy_count", 0) + 1
@@ -1454,13 +1454,15 @@ class LivePaperTracker:
 
     def _dispatch_ntfy_trade_closed(self, pos: Dict[str, Any], net_pnl: float, exit_price: float, exit_reason: str):
         """Dispatches instant NTFY push notification on trade closed."""
-        # Suppress local dispatches to prevent eating into cloud production quota
+        # Suppress local dispatches to prevent eating into cloud production quota (no bypass)
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
+        if not is_render:
             logger.info("Local development environment: alert suppressed (not on Render) [trade closed push].")
             return
 
         try:
+            from src.notifications.ntfy_dispatcher import NTFYDispatcher
+            dispatcher = NTFYDispatcher()
             topic = os.getenv("NTFY_TOPIC", "Finplus-Delta")
             auth_token = os.getenv("NTFY_AUTH_TOKEN", "")
             status_tag = "tada" if net_pnl >= 0 else "x"
@@ -1486,11 +1488,11 @@ class LivePaperTracker:
             }
             clean_hdrs = safe_headers(raw_headers, auth_token)
 
-            requests.post(
+            dispatcher._safe_post(
                 f"https://ntfy.sh/{topic}",
-                data=msg.encode("utf-8"),
-                headers=clean_hdrs,
-                timeout=5
+                msg,
+                clean_hdrs,
+                alert_type="TRADE_CLOSE"
             )
             logger.info(f"NTFY Trade Closed push sent for {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})")
         except Exception as e:

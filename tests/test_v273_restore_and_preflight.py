@@ -423,6 +423,7 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
     assert not delivered  # Suppressed!
 
     # 4. NTFY Quota Enhancements:
+    monkeypatch.setenv("RENDER", "true")
     # a. No NTFY on startup/deploy
     dispatcher.alerts_enabled = True
     with patch.object(scheduler.dispatcher, "send_startup_bulletin") as mock_sb:
@@ -586,6 +587,37 @@ def test_07_seed_demo_panel_refuses_live_environment(monkeypatch):
     with pytest.raises(RuntimeError) as exc_info:
         seed_demo_trades()
     assert "strictly forbidden when FINPLUS_ENVIRONMENT=live" in str(exc_info.value)
+
+
+def test_08_ntfy_suppressed_when_not_on_render(monkeypatch, caplog):
+    """
+    Verifies that all NTFY sends are strictly blocked unless running on Render Cloud.
+    - Local runs (RENDER and RENDER_SERVICE_ID unset) return False and make 0 network requests.
+    - Logs 'NTFY suppressed (not on Render)' at most once per hour.
+    """
+    import logging
+    monkeypatch.delenv("RENDER", raising=False)
+    monkeypatch.delenv("RENDER_SERVICE_ID", raising=False)
+    monkeypatch.delenv("FORCE_LOCAL_NTFY", raising=False)
+
+    from src.notifications.ntfy_dispatcher import NTFYDispatcher
+    dispatcher = NTFYDispatcher()
+    dispatcher.alerts_enabled = True
+
+    with patch("requests.post") as mock_post, caplog.at_level(logging.INFO):
+        # 1. First send: suppressed and logged
+        res1 = dispatcher._safe_post("https://ntfy.sh/test", "Test 1", {"Title": "T1"})
+        assert res1 is False
+        assert mock_post.call_count == 0
+        assert "NTFY suppressed (not on Render)" in caplog.text
+
+        # 2. Second send within 1 hour: suppressed but NOT logged again (rate limited to once/hr)
+        caplog.clear()
+        res2 = dispatcher._safe_post("https://ntfy.sh/test", "Test 2", {"Title": "T2"})
+        assert res2 is False
+        assert mock_post.call_count == 0
+        assert "NTFY suppressed (not on Render)" not in caplog.text
+
 
 
 

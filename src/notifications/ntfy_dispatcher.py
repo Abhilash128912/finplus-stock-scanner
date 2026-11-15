@@ -90,6 +90,15 @@ class NTFYDispatcher:
             logger.info("ALERTS_ENABLED is false: NTFY push suppressed.")
             return False
 
+        # Environment Gate: Block all NTFY sends unless running on Render Cloud
+        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+        if not is_render:
+            now = time.time()
+            if now - getattr(self, "_last_suppress_log_ts", 0.0) >= 3600.0:
+                self._last_suppress_log_ts = now
+                logger.info("NTFY suppressed (not on Render)")
+            return False
+
         today = get_ist_now().strftime("%Y-%m-%d")
         used_today = self.ledger.get_ntfy_sent_count(today)
 

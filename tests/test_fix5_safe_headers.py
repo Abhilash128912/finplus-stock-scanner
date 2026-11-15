@@ -43,8 +43,9 @@ def test_safe_headers_strips_emojis_from_headers():
     assert cleaned["Authorization"] == "Bearer test_token_123"
 
 
-def test_send_title_with_chart_emoji_delivered_no_latin1_error():
+def test_send_title_with_chart_emoji_delivered_no_latin1_error(monkeypatch):
     """Requirement 5b: Send title containing 📈 emoji -> delivered, no latin-1 error."""
+    monkeypatch.setenv("RENDER", "true")
     dispatcher = NTFYDispatcher()
 
     captured_headers = {}

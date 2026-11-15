@@ -23,7 +23,8 @@ from src.notifications.ntfy_dispatcher import NTFYDispatcher
 from src.utils.time_and_logger import get_ist_now
 
 
-def test_tiered_quota_enforcement(tmp_path):
+def test_tiered_quota_enforcement(tmp_path, monkeypatch):
+    monkeypatch.setenv("RENDER", "true")
     db_file = tmp_path / "test_tiered_quota.db"
     ledger = ScheduleLedger(db_path=str(db_file))
     dispatcher = NTFYDispatcher(ledger=ledger)

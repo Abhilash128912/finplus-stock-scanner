@@ -21,8 +21,9 @@ from src.storage.schedule_ledger import ScheduleLedger
 from src.notifications.ntfy_dispatcher import NTFYDispatcher, MAX_DAILY_NOTIFICATIONS
 
 
-def test_ntfy_counter_persists_across_instances(tmp_path):
+def test_ntfy_counter_persists_across_instances(tmp_path, monkeypatch):
     """Requirement 4a: Daily counter stored in SQLite survives restarts."""
+    monkeypatch.setenv("RENDER", "true")
     db_file = tmp_path / "test_ledger.db"
     from src.utils.time_and_logger import get_ist_now
     today = get_ist_now().strftime("%Y-%m-%d")
@@ -53,8 +54,9 @@ def test_ntfy_counter_persists_across_instances(tmp_path):
     assert dispatcher2.get_remaining_quota() == 215
 
 
-def test_priority_alerts_bypass_cap(tmp_path):
+def test_priority_alerts_bypass_cap(tmp_path, monkeypatch):
     """Requirement 4b: Stop-loss, exit, and trade-open alerts bypass the 220 cap."""
+    monkeypatch.setenv("RENDER", "true")
     db_file = tmp_path / "test_ledger_cap.db"
     from src.utils.time_and_logger import get_ist_now
     today = get_ist_now().strftime("%Y-%m-%d")
