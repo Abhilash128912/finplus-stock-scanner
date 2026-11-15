@@ -1421,7 +1421,7 @@ class LivePaperTracker:
         # Suppress local dispatches to prevent eating into cloud production quota unless forced
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
-            logger.debug("Local development environment: Suppressing live NTFY trade opened push.")
+            logger.info("Local development environment: alert suppressed (not on Render) [trade opened push].")
             if is_morning:
                 self.daily_morning_ntfy_count = getattr(self, "daily_morning_ntfy_count", 0) + 1
             elif is_afternoon:
@@ -1457,7 +1457,7 @@ class LivePaperTracker:
         # Suppress local dispatches to prevent eating into cloud production quota
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
-            logger.debug("Local development environment: Suppressing NTFY trade closed push.")
+            logger.info("Local development environment: alert suppressed (not on Render) [trade closed push].")
             return
 
         try:

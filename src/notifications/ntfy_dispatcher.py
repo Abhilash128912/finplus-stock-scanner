@@ -277,7 +277,7 @@ class NTFYDispatcher:
         import os
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         if not is_render and not force:
-            logger.info("Local environment detected: NTFY dispatching delegated to 24/7 Render Master to prevent dual-signal divergence.")
+            logger.info("Local environment detected: alert suppressed (not on Render). Delegated to 24/7 Render Master to prevent dual-signal divergence.")
             return False
         from datetime import datetime, timezone, timedelta, time as dt_time
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
