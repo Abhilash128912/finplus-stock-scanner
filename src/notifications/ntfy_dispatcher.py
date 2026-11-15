@@ -521,13 +521,9 @@ class NTFYDispatcher:
                 "X-Markdown": "yes",
                 "Click": RENDER_SCANNER_URL
             }
-            try:
-                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(f"Holiday notice delivered to '{topic}'")
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
+            if self._safe_post(url, message, headers, alert_type="ROUTINE"):
+                logger.info(f"Holiday notice delivered to '{topic}'")
+                success = True
         return success
 
     def send_morning_tactical_briefing(self, shortlist: Optional[Dict[str, Any]] = None, force: bool = False) -> bool:
@@ -641,13 +637,9 @@ class NTFYDispatcher:
                 "X-Markdown": "yes",
                 "Click": RENDER_SCANNER_URL
             }
-            try:
-                resp = requests.post(url, data=message.encode('utf-8'), headers=headers, timeout=10)
-                if resp.status_code == 200:
-                    logger.info(f"Holiday notice delivered to '{topic}'")
-                    success = True
-            except Exception as e:
-                logger.error(f"Failed delivering holiday notice to '{topic}': {e}")
+            if self._safe_post(url, message, headers, alert_type="ROUTINE"):
+                logger.info(f"Holiday notice delivered to '{topic}'")
+                success = True
         return success
 
     def send_fallback_guard_alert(self, event_type: str, details: str = "") -> bool:
