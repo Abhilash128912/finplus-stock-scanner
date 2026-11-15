@@ -708,7 +708,7 @@ class ScannerScheduler:
                         self.firestore.restore_all_from_firestore,
                         self.candle_store, self.paper_tracker, self.ledger
                     )
-                    restored_cnt = restore_res.get("candles_restored", 0)
+                    restored_cnt = restore_res.get("bars_restored", restore_res.get("candles_restored", 0))
                     restored_sym_cnt = restore_res.get("symbols_restored", 0)
                     fb_symbols = set(restore_res.get("firestore_symbols", []))
 

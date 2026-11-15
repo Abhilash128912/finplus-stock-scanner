@@ -98,17 +98,63 @@ class SafeRotatingFileHandler(RotatingFileHandler):
             pass
 
 RECENT_ERRORS: list = []
+RECENT_ERROR_EVENTS: list = []
 
 class ErrorTrackingFilter(logging.Filter):
     def filter(self, record):
         if record.levelno >= logging.ERROR:
-            RECENT_ERRORS.append((record.created, record.getMessage()))
+            msg = record.getMessage()
+            RECENT_ERRORS.append((record.created, msg))
             # Retain only last 500 error records
             if len(RECENT_ERRORS) > 500:
                 RECENT_ERRORS.pop(0)
+
+            dt = datetime.fromtimestamp(record.created, tz=timezone.utc)
+            ts_iso = dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+            RECENT_ERROR_EVENTS.append({
+                "timestamp": ts_iso,
+                "epoch": record.created,
+                "logger": record.name,
+                "level": record.levelname,
+                "message": msg
+            })
+            if len(RECENT_ERROR_EVENTS) > 100:
+                RECENT_ERROR_EVENTS.pop(0)
         return True
 
 _error_filter = ErrorTrackingFilter()
+
+def redact_secrets(text: str) -> str:
+    """Redacts tokens, API keys, and credentials from log messages."""
+    if not text:
+        return ""
+    import re
+    # Redact Bearer tokens
+    text = re.sub(r'(Bearer\s+)[A-Za-z0-9_\-\.]{8,}', r'\1[REDACTED]', text, flags=re.IGNORECASE)
+    # Redact JWT patterns
+    text = re.sub(r'eyJ[A-Za-z0-9_\-\.]+\.[A-Za-z0-9_\-\.]+', '[REDACTED_JWT]', text)
+    # Redact common env secret values if populated
+    for env_var in ["ADMIN_TOKEN", "INDMONEY_ACCESS_TOKEN", "INDMONEY_TOTP_SECRET", "INDMONEY_MPIN", "PANEL_PASSWORD", "NTFY_AUTH_TOKEN"]:
+        val = os.getenv(env_var)
+        if val and len(val) >= 4 and val in text:
+            text = text.replace(val, "[REDACTED]")
+    return text
+
+def get_last_error_events(limit: int = 20) -> list:
+    """Returns the last `limit` ERROR/CRITICAL events with max 200 chars and secrets redacted."""
+    events = RECENT_ERROR_EVENTS[-limit:]
+    out = []
+    for ev in reversed(events):
+        raw_msg = redact_secrets(ev["message"])
+        if len(raw_msg) > 200:
+            raw_msg = raw_msg[:197] + "..."
+        out.append({
+            "timestamp": ev["timestamp"],
+            "logger": ev["logger"],
+            "level": ev.get("level", "ERROR"),
+            "message": raw_msg
+        })
+    return out
 
 def get_recent_error_count(seconds: int = 3600) -> int:
     """Returns count of ERROR/CRITICAL log events recorded in the last `seconds` (default 1 hour)."""

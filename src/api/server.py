@@ -29,7 +29,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from src.scheduler.scanner_scheduler import ScannerScheduler
 from src.utils.time_and_logger import (
     setup_logger, get_utc_iso, get_ist_time_str, get_ist_now,
-    is_market_open_ist, get_recent_error_count, get_recent_errors
+    is_market_open_ist, get_recent_error_count, get_recent_errors,
+    get_last_error_events
 )
 from src.utils.indian_market_calendar import is_nse_holiday, check_calendar_coverage_next_n_trading_days
 from src.utils.memory_tracker import get_process_rss_mb
@@ -49,8 +50,9 @@ class PanelBasicAuthMiddleware(BaseHTTPMiddleware):
         if request.method == "HEAD":
             return await call_next(request)
 
-        # /api/admin/restore-now is strictly protected by Bearer ADMIN_TOKEN, exempt from Basic Auth
-        if request.url.path.rstrip("/") == "/api/admin/restore-now":
+        # /api/admin/* endpoints are strictly protected by Bearer ADMIN_TOKEN, exempt from Basic Auth
+        clean_path = request.url.path.rstrip("/")
+        if clean_path in ("/api/admin/restore-now", "/api/admin/errors") or clean_path.startswith("/api/admin/"):
             return await call_next(request)
 
         panel_user = os.getenv("PANEL_USER")
@@ -486,7 +488,7 @@ async def admin_restore_now(request: Request):
             "status": "SUCCESS",
             "message": "Immediate per-symbol restore completed from Firestore",
             "symbols_restored": res.get("symbols_restored", 0),
-            "bars_restored": res.get("candles_restored", 0),
+            "bars_restored": res.get("bars_restored", res.get("candles_restored", 0)),
             "trades_restored": res.get("trades_restored", 0),
             "reads_used": res.get("reads_used", 0),
             "yfinance_calls": 0,
@@ -496,6 +498,32 @@ async def admin_restore_now(request: Request):
     except Exception as e:
         logger.error(f"Error during admin restore-now: {e}")
         return JSONResponse(status_code=500, content={"status": "ERROR", "message": str(e)})
+
+
+@app.get("/api/admin/errors")
+async def get_admin_errors(request: Request):
+    """
+    Returns the last 20 ERROR/CRITICAL events with timestamp, logger name, and message (max 200 chars, secrets redacted).
+    Protected by Bearer ADMIN_TOKEN (401 missing, 403 wrong). Exempt from Basic Auth.
+    """
+    admin_token = os.getenv("ADMIN_TOKEN")
+    if not admin_token:
+        raise HTTPException(status_code=500, detail="ADMIN_TOKEN is not configured on the server")
+
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing Bearer token")
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if token != admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid ADMIN_TOKEN")
+
+    events = get_last_error_events(limit=20)
+    return JSONResponse(content={
+        "status": "SUCCESS",
+        "count": len(events),
+        "errors": events
+    })
 
 
 # -------------------------------------------------------------
@@ -660,6 +688,57 @@ def compute_preflight_status() -> Dict[str, Any]:
         "status": "GREEN" if err_ok else "RED",
         "details": err_details,
         "line": f"System Errors: {err_details}"
+    })
+
+    # 11. F&O Coverage (RED if fewer than 90 qualifying instruments)
+    fno_universe = scheduler.feed.get_fno_universe() if (scheduler.feed and hasattr(scheduler.feed, "get_fno_universe")) else []
+    fno_cnt = len(fno_universe)
+    fno_ok = fno_cnt >= 90
+    fno_status = "GREEN" if fno_ok else "RED"
+    fno_details = f"Derivatives universe configured ({fno_cnt} instruments monitored)" if fno_ok else f"Derivatives universe degraded ({fno_cnt}/90 instruments monitored)"
+    items.append({
+        "id": "fno_coverage",
+        "name": "Derivatives Universe",
+        "status": fno_status,
+        "details": fno_details,
+        "line": f"Derivatives Universe: {fno_details}"
+    })
+
+    # 12. Virtual Capital (RED if not above 0)
+    vc = getattr(scheduler.paper_tracker, "virtual_capital", 0.0) if hasattr(scheduler, "paper_tracker") else 0.0
+    vc_ok = vc > 0.0
+    vc_status = "GREEN" if vc_ok else "RED"
+    vc_details = "Simulation capital allocated and operational" if vc_ok else "Simulation capital unallocated (allocation must be greater than zero)"
+    items.append({
+        "id": "virtual_capital",
+        "name": "Simulation Capital",
+        "status": vc_status,
+        "details": vc_details,
+        "line": f"Simulation Capital: {vc_details}"
+    })
+
+    # 13. Safety Switches (RED if PANEL_USER or PANEL_PASSWORD is unset, AMBER if ALERTS_ENABLED is false)
+    p_user = os.getenv("PANEL_USER")
+    p_pass = os.getenv("PANEL_PASSWORD")
+    auth_set = bool(p_user and p_pass)
+    alerts_on = getattr(scheduler.dispatcher, "alerts_enabled", True) if hasattr(scheduler, "dispatcher") else True
+
+    if not auth_set:
+        sw_status = "RED"
+        sw_details = "Administrative access protection unset"
+    elif not alerts_on:
+        sw_status = "AMBER"
+        sw_details = "Alert notifications suppressed by safety switch"
+    else:
+        sw_status = "GREEN"
+        sw_details = "Administrative controls and notification delivery active"
+
+    items.append({
+        "id": "safety_switches",
+        "name": "Safety Switches",
+        "status": sw_status,
+        "details": sw_details,
+        "line": f"Safety Switches: {sw_details}"
     })
 
     # Determine overall status

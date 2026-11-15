@@ -635,6 +635,7 @@ class FirestoreBackend:
             "status": "SUCCESS",
             "symbols_restored": restored_symbols,
             "bars_restored": restored_candles_count,
+            "candles_restored": restored_candles_count,
             "trades_restored": restored_trades,
             "reads_used": reads_used,
             "duration_sec": round(dur, 2),

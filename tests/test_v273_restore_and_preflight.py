@@ -239,6 +239,12 @@ def test_03_panel_http_basic_auth(monkeypatch):
     assert "safety_switches" in r_pub.json()
     assert r_pub.json()["safety_switches"]["panel_auth_configured"] is False
 
+    # Preflight check: unset auth -> safety switch is RED -> overall RED
+    r_pf_unauth = client.get("/api/preflight")
+    assert r_pf_unauth.status_code == 200
+    assert r_pf_unauth.json()["overall_status"] == "RED"
+    assert any("Administrative access protection unset" in line for line in r_pf_unauth.json()["lines"])
+
     # 2. Configure auth
     monkeypatch.setenv("PANEL_USER", "admin")
     monkeypatch.setenv("PANEL_PASSWORD", "secret123")
@@ -261,6 +267,31 @@ def test_03_panel_http_basic_auth(monkeypatch):
     for sub in forbidden:
         assert sub.lower() not in r_pf_html.text.lower()
     assert client.head("/").status_code in (200, 404, 405) # HEAD is public
+
+    # Preflight check: Virtual capital <= 0 -> RED
+    from src.api.server import scheduler
+    scheduler.paper_tracker.virtual_capital = 0.0
+    r_vc_zero = client.get("/api/preflight").json()
+    assert any("Simulation capital unallocated" in line for line in r_vc_zero["lines"])
+    assert r_vc_zero["overall_status"] == "RED"
+
+    # Preflight check: F&O coverage < 90 -> RED
+    scheduler.paper_tracker.virtual_capital = 100000.0
+    mock_fno = MagicMock(return_value=[{"symbol": f"S_{i}"} for i in range(85)])
+    monkeypatch.setattr(scheduler.feed, "get_fno_universe", mock_fno)
+    r_fno_low = client.get("/api/preflight").json()
+    assert any("Derivatives universe degraded" in line for line in r_fno_low["lines"])
+    assert r_fno_low["overall_status"] == "RED"
+
+    # Preflight check: ALERTS_ENABLED=False -> AMBER on safety switches
+    mock_fno_ok = MagicMock(return_value=[{"symbol": f"S_{i}"} for i in range(97)])
+    monkeypatch.setattr(scheduler.feed, "get_fno_universe", mock_fno_ok)
+    monkeypatch.setattr(scheduler.dispatcher, "alerts_enabled", False)
+    r_alerts_off = client.get("/api/preflight").json()
+    assert any("Alert notifications suppressed by safety switch" in line for line in r_alerts_off["lines"])
+
+    # Reset alerts_enabled to True
+    monkeypatch.setattr(scheduler.dispatcher, "alerts_enabled", True)
 
     # Protected endpoints require auth
     from src.api.server import scheduler
@@ -315,7 +346,34 @@ def test_04_admin_token_and_alerts_switch(monkeypatch):
     assert data["status"] == "SUCCESS"
     assert data["yfinance_calls"] == 0
 
-    # 2. ALERTS_ENABLED safety switch test
+    # 2. GET /api/admin/errors tests (Bearer ADMIN_TOKEN, Basic Auth exempt, secrets redacted)
+    from src.utils.time_and_logger import setup_logger
+    test_logger = setup_logger("TestErrorLogger")
+    test_logger.error("Database connection failure with secret key ADMIN_TOKEN super-secret-token and " + "A" * 250)
+
+    # Missing auth -> 401
+    r_err_no_tok = client.get("/api/admin/errors")
+    assert r_err_no_tok.status_code == 401
+
+    # Invalid token -> 403
+    r_err_wrong = client.get("/api/admin/errors", headers={"Authorization": "Bearer wrong"})
+    assert r_err_wrong.status_code == 403
+
+    # Valid token -> 200
+    r_err_valid = client.get("/api/admin/errors", headers={"Authorization": "Bearer super-secret-token"})
+    assert r_err_valid.status_code == 200
+    err_data = r_err_valid.json()
+    assert err_data["status"] == "SUCCESS"
+    assert err_data["count"] >= 1
+    assert isinstance(err_data["errors"], list)
+    first_err = err_data["errors"][0]
+    assert "timestamp" in first_err
+    assert "logger" in first_err
+    assert "message" in first_err
+    assert len(first_err["message"]) <= 200
+    assert "super-secret-token" not in first_err["message"] # Secret redacted!
+
+    # 3. ALERTS_ENABLED safety switch test
     dispatcher = NTFYDispatcher()
     dispatcher.alerts_enabled = False
     delivered = dispatcher._safe_post("https://ntfy.sh/test", "Test message", {}, alert_type="ROUTINE")
