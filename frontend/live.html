@@ -588,7 +588,7 @@
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Locked Profit</span>
-              <span class="metric-val" style="color: var(--green);">+₹${lockedRs.toFixed(2)} (${lockedR:+.2f}R)</span>
+              <span class="metric-val" style="color: var(--green);">+₹${lockedRs.toFixed(2)} (${lockedR >= 0 ? '+' : ''}${lockedR.toFixed(2)}R)</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Quantity</span>
