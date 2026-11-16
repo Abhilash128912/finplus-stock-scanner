@@ -1139,17 +1139,12 @@ async def trigger_briefing_test():
         diag["direct_http_error"] = str(e)
 
     # Telemetry before dispatch
-    today = get_current_ist_datetime().strftime("%Y-%m-%d")
-    diag["is_render_check"] = bool(
-        os.getenv("RENDER")
-        or os.getenv("RENDER_SERVICE_ID")
-        or os.getenv("RENDER_GIT_COMMIT")
-        or os.getenv("RENDER_INSTANCE_ID")
-        or os.getenv("FINPLUS_ENVIRONMENT") == "production"
-    )
-    diag["alerts_enabled"] = scheduler.dispatcher.alerts_enabled
-    diag["quota_exhausted"] = scheduler.dispatcher.quota_exhausted_utc_date
-    diag["sent_today"] = scheduler.ledger.get_ntfy_sent_count(today)
+    try:
+        from src.utils.indian_market_calendar import get_current_ist_datetime
+        today = get_current_ist_datetime().strftime("%Y-%m-%d")
+        diag["sent_today"] = scheduler.ledger.get_ntfy_sent_count(today)
+    except Exception as e:
+        diag["ledger_sent_error"] = str(e)
 
     delivered = scheduler.dispatcher.send_morning_tactical_briefing(force=True)
     return {
