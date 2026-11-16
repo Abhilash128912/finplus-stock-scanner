@@ -191,14 +191,14 @@ async def serve_index():
 async def serve_cockpit():
     cockpit_file = os.path.join(FRONTEND_DIR, "cockpit.html")
     if os.path.exists(cockpit_file):
-        return FileResponse(cockpit_file)
+        return FileResponse(cockpit_file, headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
     return HTMLResponse("<h1>FinPlus+ Cockpit Not Found</h1>")
 
 @app.api_route("/live", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def serve_live():
     live_file = os.path.join(FRONTEND_DIR, "live.html")
     if os.path.exists(live_file):
-        return FileResponse(live_file)
+        return FileResponse(live_file, headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
     return HTMLResponse("<h1>FinPlus+ Live Positions Cockpit Not Found</h1>")
 
 @app.api_route("/health", methods=["GET", "HEAD"])

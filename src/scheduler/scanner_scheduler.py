@@ -222,6 +222,7 @@ class ScannerScheduler:
             "ntfy_triggers_sent": 0
         }
         candidate_triggers: List[Dict[str, Any]] = []
+        variant_evals_buffer: List[Dict[str, Any]] = []
 
         for item in universe:
             ticker = item.get("yf_ticker")
@@ -306,8 +307,8 @@ class ScannerScheduler:
                     if lat_block:
                         logger.info(f"[SHADOW_LATENESS_GATE] {var_name} on {sym}: lateness {lat_pct}% exceeds {self.MAX_CHASE_PCT}%. (LOG ONLY - NOT BLOCKED)")
 
-                    # Record to range_variants table
-                    self.ledger.record_range_variant_eval({
+                    # Buffer shadow variant evaluations for high-speed batch recording
+                    variant_evals_buffer.append({
                         "date_str": today_ist_str,
                         "symbol": sym,
                         "variant_name": var_name,
@@ -434,9 +435,17 @@ class ScannerScheduler:
                         self.paper_tracker.ingest_shortlist(self.latest_shortlist)
                     except Exception:
                         pass
+                    if variant_evals_buffer:
+                        self.ledger.record_range_variant_evals_batch(variant_evals_buffer)
+                        variant_evals_buffer.clear()
                 
             except Exception as e:
                 logger.error(f"Error evaluating {sym} ({ticker}): {e}")
+
+        # Flush any remaining shadow variant evaluations
+        if variant_evals_buffer:
+            self.ledger.record_range_variant_evals_batch(variant_evals_buffer)
+            variant_evals_buffer.clear()
                 
         # Default Sort: Score & Breakdown (Highest Confluence Score First)
         results.sort(key=lambda x: (x.get("confluence_score", 0), abs(x.get("pct_change_pdc", 0.0))), reverse=True)
@@ -770,8 +779,19 @@ class ScannerScheduler:
                 asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing))
         else:
             skip_msg = f"coverage {cov_pct:.1f}% already >= 90.0% target ({coverage['symbols_522_bars']['count']}/{len(distinct_symbols)} distinct symbols have >= 522 bars)"
-            logger.info(f"[{now_ist_str}] restore skipped because {skip_msg}")
+            logger.info(f"[{now_ist_str}] candle restore skipped because {skip_msg}")
             logger.info(f"[{now_ist_str}] backfill skipped (0 symbols needed)")
+            if fb_connected:
+                try:
+                    logger.info(f"[{now_ist_str}] Restoring paper trades and schedule ledger from Firestore...")
+                    await asyncio.to_thread(
+                        self.firestore.restore_all_from_firestore,
+                        self.candle_store, self.paper_tracker, self.ledger,
+                        symbols_filter={"__NONE__"}
+                    )
+                    logger.info(f"[{get_ist_time_str()}] Restored paper trades and ledger milestones from Firestore.")
+                except Exception as restore_err:
+                    logger.warning(f"Notice restoring paper trades/ledger: {restore_err}")
             if hasattr(self, "firestore"):
                 self.firestore.last_restore_reason = f"Skipped: {skip_msg}"
 

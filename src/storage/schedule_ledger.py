@@ -390,6 +390,47 @@ class ScheduleLedger:
             """, (date_str, symbol)).fetchone()
             return row is not None
 
+    def record_range_variant_evals_batch(self, batch: List[Dict[str, Any]]):
+        """High-speed batch insert for shadow variant evaluations (cuts 4,200 fsyncs down to 1 bulk insert)."""
+        if not batch:
+            return
+        now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        records = []
+        for eval_data in batch:
+            records.append((
+                now_utc,
+                eval_data.get("date_str", ""),
+                eval_data.get("symbol", ""),
+                eval_data.get("variant_name", ""),
+                eval_data.get("timeframe", "15m"),
+                eval_data.get("atr_len_configured", 0),
+                eval_data.get("atr_len_effective", 0),
+                eval_data.get("range_len", 0),
+                eval_data.get("break_window_bars", 0),
+                eval_data.get("range_top"),
+                eval_data.get("range_bottom"),
+                eval_data.get("range_mid"),
+                eval_data.get("live_price"),
+                eval_data.get("signal_direction", 0),
+                eval_data.get("lateness_pct", 0.0),
+                1 if eval_data.get("lateness_would_block") else 0,
+                eval_data.get("confluence_score", 0),
+                eval_data.get("status", "EVALUATED")
+            ))
+        try:
+            with self._get_connection() as conn:
+                conn.executemany("""
+                    INSERT INTO range_variants (
+                        scan_time_utc, date_str, symbol, variant_name, timeframe,
+                        atr_len_configured, atr_len_effective, range_len, break_window_bars,
+                        range_top, range_bottom, range_mid, live_price, signal_direction,
+                        lateness_pct, lateness_would_block, confluence_score, status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, records)
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Error recording batch range variants: {e}")
+
     def record_range_variant_eval(self, eval_data: Dict[str, Any]):
         """Records shadow variant evaluation for performance comparison in range_variants table."""
         now_utc = datetime.datetime.now(datetime.timezone.utc).isoformat()
