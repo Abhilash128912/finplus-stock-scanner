@@ -147,11 +147,12 @@ def test_03_weekends_and_holidays_skipped_in_ledger(temp_db_dir):
     assert len(due_hol) == 0
 
 
-def test_04_startup_bulletin_and_token_rejection(temp_db_dir):
+def test_04_startup_bulletin_and_token_rejection(temp_db_dir, monkeypatch):
     """
     Verifies that send_startup_bulletin formats message correctly,
     and if NTFY returns 401/403, token_rejected is set without leaking token in logs.
     """
+    monkeypatch.setenv("RENDER", "true")
     ledger = ScheduleLedger(db_path=str(temp_db_dir / "ledger.db"))
     dispatcher = NTFYDispatcher(ledger=ledger)
     dispatcher.auth_token = "secret_token_123"

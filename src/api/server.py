@@ -367,15 +367,14 @@ async def deep_health_check():
         "last_restore_reason": last_restore_reason
     }
 
-    # Off-hours rule: Return 200 outside market hours
-    # If is_equity_market_open_ist() returns False (which handles weekends, holidays, and off-hours), return 200.
+    # Diagnostic endpoint status code policy:
+    # Always return HTTP 200 so monitoring probes (BetterStack, Pingdom) do not trigger false service-down incidents.
+    # Subsystem degradation or issues are reported within the JSON payload ("status": "HEALTHY" | "DEGRADED").
+    http_status = 200
     if not market_open:
-        http_status = 200
         overall_status = "HEALTHY_OFF_HOURS"
     else:
-        is_healthy = (len(issues) == 0)
-        http_status = 200 if is_healthy else 503
-        overall_status = "HEALTHY" if is_healthy else "DEGRADED"
+        overall_status = "HEALTHY" if len(issues) == 0 else "DEGRADED"
 
     from src.gateway.yfinance_gateway import YFinanceGateway
     yf_metrics = YFinanceGateway().get_metrics()
