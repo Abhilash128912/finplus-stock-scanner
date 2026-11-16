@@ -37,7 +37,7 @@ def test_tracker(tmp_path, mock_trading_hours):
 def test_15_triggers_capped_at_12_ntfy_alerts(test_tracker):
     """15 valid triggers occur in a day: up to 15 appear on panel; NTFY capped at max 6 before 11:30 and max 6 from 13:00 (12 total)."""
     with patch.object(NTFYDispatcher, "send_trade_trigger_alert", return_value=True) as mock_ntfy, \
-         patch.dict(os.environ, {"FORCE_LOCAL_NTFY": "1"}):
+         patch.dict(os.environ, {"FORCE_LOCAL_NTFY": "1", "MAX_MORNING_NTFY": "6", "MAX_AFTERNOON_NTFY": "6", "MAX_DAILY_TRIGGERS": "12"}):
         
         opened_positions = []
         # Morning window: 8 triggers before 11:30 IST -> only 6 NTFY alerts dispatched

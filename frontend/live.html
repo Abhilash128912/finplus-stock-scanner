@@ -359,12 +359,34 @@
     async function fetchLivePositions() {
       try {
         const res = await fetch('/api/paper/status');
-        if (!res.ok) return;
+        if (!res.ok) {
+          const container = document.getElementById('positionsContainer');
+          if (container && !rawData) {
+            container.innerHTML = `
+              <div class="empty-state">
+                <div class="empty-icon">⚠️</div>
+                <h3>HTTP ${res.status} Error Loading Live Feed</h3>
+                <p style="font-size: 12px; margin-top: 4px;">Server responded with status ${res.status}. Retrying automatically every 2s...</p>
+              </div>
+            `;
+          }
+          return;
+        }
         rawData = await res.json();
         updateSummaryHeader();
         renderPositions();
       } catch (e) {
         console.error("Failed fetching live positions:", e);
+        const container = document.getElementById('positionsContainer');
+        if (container && !rawData) {
+          container.innerHTML = `
+            <div class="empty-state">
+              <div class="empty-icon">⚠️</div>
+              <h3>Cannot Connect to Live Scanner API</h3>
+              <p style="font-size: 12px; margin-top: 4px;">${e.message}. If viewing locally, ensure server is running on port 8001 or visit https://finplus-stock-scanner.onrender.com/live</p>
+            </div>
+          `;
+        }
       }
     }
 

@@ -1441,7 +1441,7 @@ class LivePaperTracker:
         }
 
     def _dispatch_ntfy_trade_opened(self, pos: Dict[str, Any]):
-        """Dispatches instant NTFY push notification on trade trigger (Phase 5h & 6c: capped at 12 triggers/day, max 6 before 11:30 IST and max 6 from 13:00 IST)."""
+        """Dispatches instant NTFY push notification on trade trigger."""
         now_ist = self._get_now_ist()
         today_ist = now_ist.strftime("%Y-%m-%d")
         if getattr(self, "last_ntfy_trigger_date", "") != today_ist:
@@ -1450,9 +1450,12 @@ class LivePaperTracker:
             self.daily_afternoon_ntfy_count = 0
             self.daily_ntfy_triggers_count = 0
 
-        # Overall day cap: 12 triggers
-        if self.daily_ntfy_triggers_count >= 12:
-            logger.info(f"NTFY trigger alert capped: daily limit of 12 triggers reached today ({today_ist}).")
+        max_morning = int(os.getenv("MAX_MORNING_NTFY", "30"))
+        max_afternoon = int(os.getenv("MAX_AFTERNOON_NTFY", "30"))
+        max_daily = int(os.getenv("MAX_DAILY_TRIGGERS", "60"))
+
+        if max_daily > 0 and self.daily_ntfy_triggers_count >= max_daily:
+            logger.info(f"NTFY trigger alert capped: daily limit of {max_daily} triggers reached today ({today_ist}).")
             return
 
         t = now_ist.time()
@@ -1460,21 +1463,17 @@ class LivePaperTracker:
         is_afternoon = (t.hour >= 13)
 
         if is_morning:
-            if getattr(self, "daily_morning_ntfy_count", 0) >= 6:
-                logger.info(f"NTFY trigger alert capped: morning window limit of 6 reached before 11:30 IST ({self.daily_morning_ntfy_count}/6).")
+            if max_morning > 0 and getattr(self, "daily_morning_ntfy_count", 0) >= max_morning:
+                logger.info(f"NTFY trigger alert capped: morning window limit reached ({self.daily_morning_ntfy_count}/{max_morning}).")
                 return
         elif is_afternoon:
-            if getattr(self, "daily_afternoon_ntfy_count", 0) >= 6:
-                logger.info(f"NTFY trigger alert capped: afternoon window limit of 6 reached from 13:00 IST ({self.daily_afternoon_ntfy_count}/6).")
+            if max_afternoon > 0 and getattr(self, "daily_afternoon_ntfy_count", 0) >= max_afternoon:
+                logger.info(f"NTFY trigger alert capped: afternoon window limit reached ({self.daily_afternoon_ntfy_count}/{max_afternoon}).")
                 return
-        else:
-            # 11:30 to 13:00 IST midday pause to avoid morning exhaustion
-            logger.info(f"NTFY trigger alert skipped: midday window (11:30-13:00 IST) paused to avoid exhaustion.")
-            return
 
-        # Suppress local dispatches to prevent eating into cloud production quota (no bypass)
+        # Suppress local dispatches to prevent eating into cloud production quota unless forced
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        if not is_render:
+        if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
             logger.info("Local development environment: alert suppressed (not on Render) [trade opened push].")
             if is_morning:
                 self.daily_morning_ntfy_count = getattr(self, "daily_morning_ntfy_count", 0) + 1
@@ -1493,7 +1492,7 @@ class LivePaperTracker:
                 elif is_afternoon:
                     self.daily_afternoon_ntfy_count = getattr(self, "daily_afternoon_ntfy_count", 0) + 1
                 self.daily_ntfy_triggers_count += 1
-                logger.info(f"NTFY Trade Trigger push sent for {pos['symbol']} ({self.daily_ntfy_triggers_count}/12 today - Morning: {getattr(self, 'daily_morning_ntfy_count', 0)}, Afternoon: {getattr(self, 'daily_afternoon_ntfy_count', 0)})")
+                logger.info(f"NTFY Trade Trigger push sent for {pos['symbol']} (Total today: {self.daily_ntfy_triggers_count})")
                 
                 # Mirror quota count to Firestore if connected
                 try:
@@ -1503,6 +1502,8 @@ class LivePaperTracker:
                         fb.mirror_ntfy_quota(today_ist, self.daily_ntfy_triggers_count)
                 except Exception:
                     pass
+        except Exception as e:
+            logger.warning(f"Failed sending trade opened alert to NTFY: {e}")
         except Exception as e:
             logger.warning(f"Failed sending trade opened alert to NTFY: {e}")
 
