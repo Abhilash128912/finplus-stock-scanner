@@ -154,12 +154,6 @@ async def startup_event():
         f"Databases: {', '.join(sizes_info)}"
     )
 
-    # Step 1: Ensure history coverage and restore run synchronously during boot BEFORE accepting traffic
-    try:
-        await scheduler.check_and_restore_history(caller="startup")
-    except Exception as e:
-        logger.error(f"[STARTUP] Error during startup history restore: {e}")
-
     scheduler_task = asyncio.create_task(scheduler.start_loop())
 
     # Warm up broker authentication in background thread
