@@ -520,11 +520,11 @@
 
         const sl = isOpt ? (pos.opt_trailing_sl || pos.opt_initial_sl || (avgLtp * 0.70)) : (pos.trailing_sl || pos.initial_sl);
         const initSl = isOpt ? (pos.opt_initial_sl || (avgLtp * 0.70)) : pos.initial_sl;
-        const highPrice = pos.highest_price || currLtp;
-        const lockedRs = pos.profit_locked_rupees || 0.0;
-        const lockedR = pos.profit_locked_r || 0.0;
-        const stopDistPct = pos.stop_dist_pct || (avgLtp > 0 ? (Math.abs(avgLtp - sl) / avgLtp * 100).toFixed(2) : 0.0);
-        const rupeesAtRisk = pos.rupees_at_risk || (Math.abs(avgLtp - sl) * (pos.quantity || 1)).toFixed(2);
+        const highPrice = (isOpt && pos.highest_price > avgLtp * 5) ? currLtp : (pos.highest_price || currLtp);
+        const lockedRs = pos.profit_locked_rupees !== undefined ? pos.profit_locked_rupees : 0.0;
+        const lockedR = pos.profit_locked_r !== undefined ? pos.profit_locked_r : 0.0;
+        const stopDistPct = pos.stop_dist_pct !== undefined ? pos.stop_dist_pct : (currLtp > 0 ? (Math.abs(currLtp - sl) / currLtp * 100).toFixed(2) : 0.0);
+        const rupeesAtRisk = pos.rupees_at_risk !== undefined ? pos.rupees_at_risk : (Math.abs(avgLtp - sl) * (pos.quantity || 1)).toFixed(2);
         const grade = pos.grade || 'B';
         const isTaken = Boolean(pos.taken);
         const tags = (pos.tags || '').split(',').filter(Boolean);

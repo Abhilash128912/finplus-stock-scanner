@@ -504,7 +504,7 @@ class LivePaperTracker:
             "unrealized_pnl": 0.0,
             "pnl_pct": 0.0,
             "notes": notes,
-            "highest_price": actual_entry_price,
+            "highest_price": opt_entry if is_option else actual_entry_price,
             "tags": tags_str,
             "setup_key": s_key,
             "grade": grade,
@@ -1154,6 +1154,7 @@ class LivePaperTracker:
                     max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
                     opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
                     pos["opt_current_premium"] = opt_curr
+                    pos["highest_price"] = max(float(pos.get("highest_price") or pos["opt_entry_premium"]), opt_curr)
 
                     # Unrealized P&L capped at 100% loss of premium paid
                     unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
@@ -1815,20 +1816,39 @@ class LivePaperTracker:
         enriched_active = []
         for p in active_list:
             item = dict(p)
-            entry = float(item.get("entry_price", 0.0))
-            trailing_sl = float(item.get("trailing_sl", 0.0))
+            is_opt = bool(item.get("is_option"))
             qty = int(item.get("quantity", 1))
-            risk_r = float(item.get("risk_r", 1.0))
-            is_buy = (item.get("action") == "BUY")
 
-            if is_buy:
+            if is_opt:
+                entry = float(item.get("opt_entry_premium") or item.get("entry_price", 0.0))
+                curr_p = float(item.get("opt_current_premium") or item.get("current_price", 0.0))
+                trailing_sl = float(item.get("opt_trailing_sl") or item.get("opt_initial_sl") or (entry * 0.70))
+                init_sl = float(item.get("opt_initial_sl") or (entry * 0.70))
+                
+                # For long option buyers, profit is locked when trailing_sl moves above entry
                 profit_locked_rupees = round(max(0.0, (trailing_sl - entry) * qty), 2)
+                init_risk = max(0.1, (entry - init_sl) * qty)
+                profit_locked_r = round(profit_locked_rupees / init_risk, 2)
+                stop_dist_pct = round(abs(curr_p - trailing_sl) / curr_p * 100.0, 2) if curr_p > 0 else 0.0
+                rupees_at_risk = round(abs(curr_p - trailing_sl) * qty if trailing_sl < curr_p else 0.0, 2)
+                
+                # Ensure highest_price reflects option premium
+                if float(item.get("highest_price", 0.0)) > entry * 10.0:
+                    item["highest_price"] = curr_p
             else:
-                profit_locked_rupees = round(max(0.0, (entry - trailing_sl) * qty), 2)
+                entry = float(item.get("entry_price", 0.0))
+                trailing_sl = float(item.get("trailing_sl", 0.0))
+                risk_r = float(item.get("risk_r", 1.0))
+                is_buy = (item.get("action") == "BUY")
 
-            profit_locked_r = round(profit_locked_rupees / (risk_r * qty), 2) if (risk_r > 0 and qty > 0) else 0.0
-            stop_dist_pct = round(abs(entry - trailing_sl) / entry * 100.0, 2) if entry > 0 else 0.0
-            rupees_at_risk = round(abs(entry - trailing_sl) * qty, 2)
+                if is_buy:
+                    profit_locked_rupees = round(max(0.0, (trailing_sl - entry) * qty), 2)
+                else:
+                    profit_locked_rupees = round(max(0.0, (entry - trailing_sl) * qty), 2)
+
+                profit_locked_r = round(profit_locked_rupees / (risk_r * qty), 2) if (risk_r > 0 and qty > 0) else 0.0
+                stop_dist_pct = round(abs(entry - trailing_sl) / entry * 100.0, 2) if entry > 0 else 0.0
+                rupees_at_risk = round(abs(entry - trailing_sl) * qty, 2)
 
             item["profit_locked_rupees"] = profit_locked_rupees
             item["profit_locked_r"] = profit_locked_r
