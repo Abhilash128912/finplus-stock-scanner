@@ -1125,11 +1125,38 @@ async def trigger_test_alert():
 
 @app.post("/api/briefing/test")
 async def trigger_briefing_test():
+    import requests
+    from src.notifications.ntfy_dispatcher import safe_headers
+    diag = {}
+    try:
+        url = f"https://ntfy.sh/{scheduler.dispatcher.topics[0]}"
+        headers = {"Title": "FinPlus Desk | Briefing Test", "Priority": "4"}
+        out_headers = safe_headers(headers)
+        resp = requests.post(url, data=b"FinPlus Desk Briefing Test Direct", headers=out_headers, timeout=10)
+        diag["direct_http_status"] = resp.status_code
+        diag["direct_http_text"] = resp.text[:200]
+    except Exception as e:
+        diag["direct_http_error"] = str(e)
+
+    # Telemetry before dispatch
+    today = get_current_ist_datetime().strftime("%Y-%m-%d")
+    diag["is_render_check"] = bool(
+        os.getenv("RENDER")
+        or os.getenv("RENDER_SERVICE_ID")
+        or os.getenv("RENDER_GIT_COMMIT")
+        or os.getenv("RENDER_INSTANCE_ID")
+        or os.getenv("FINPLUS_ENVIRONMENT") == "production"
+    )
+    diag["alerts_enabled"] = scheduler.dispatcher.alerts_enabled
+    diag["quota_exhausted"] = scheduler.dispatcher.quota_exhausted_utc_date
+    diag["sent_today"] = scheduler.ledger.get_ntfy_sent_count(today)
+
     delivered = scheduler.dispatcher.send_morning_tactical_briefing(force=True)
     return {
         "status": "SUCCESS" if delivered else "FAILED",
         "message": "09:00 AM Tactical Morning Briefing dispatched.",
         "topics": scheduler.dispatcher.topics,
+        "diagnostics": diag,
         "timestamp_utc": get_utc_iso()
     }
 
