@@ -1472,7 +1472,13 @@ class LivePaperTracker:
                 return
 
         # Suppress local dispatches to prevent eating into cloud production quota unless forced
-        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+        is_render = bool(
+            os.getenv("RENDER")
+            or os.getenv("RENDER_SERVICE_ID")
+            or os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("RENDER_INSTANCE_ID")
+            or os.getenv("FINPLUS_ENVIRONMENT") == "production"
+        )
         if not is_render and not os.getenv("FORCE_LOCAL_NTFY"):
             logger.info("Local development environment: alert suppressed (not on Render) [trade opened push].")
             if is_morning:
@@ -1510,7 +1516,13 @@ class LivePaperTracker:
     def _dispatch_ntfy_trade_closed(self, pos: Dict[str, Any], net_pnl: float, exit_price: float, exit_reason: str):
         """Dispatches instant NTFY push notification on trade closed."""
         # Suppress local dispatches to prevent eating into cloud production quota (no bypass)
-        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+        is_render = bool(
+            os.getenv("RENDER")
+            or os.getenv("RENDER_SERVICE_ID")
+            or os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("RENDER_INSTANCE_ID")
+            or os.getenv("FINPLUS_ENVIRONMENT") == "production"
+        )
         if not is_render:
             logger.info("Local development environment: alert suppressed (not on Render) [trade closed push].")
             return

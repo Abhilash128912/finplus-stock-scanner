@@ -75,7 +75,8 @@ class NTFYDispatcher:
         headers: Dict[str, str],
         alert_type: str = "ROUTINE",
         is_priority: bool = False,
-        dedupe: bool = True
+        dedupe: bool = True,
+        force: bool = False
     ) -> bool:
         """
         Dispatches NTFY notification with tiered daily safety quotas reset by IST date:
@@ -90,9 +91,15 @@ class NTFYDispatcher:
             logger.info("ALERTS_ENABLED is false: NTFY push suppressed.")
             return False
 
-        # Environment Gate: Block all NTFY sends unless running on Render Cloud
-        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        if not is_render:
+        # Environment Gate: Block all NTFY sends unless running on Render Cloud or forced
+        is_render = bool(
+            os.getenv("RENDER")
+            or os.getenv("RENDER_SERVICE_ID")
+            or os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("RENDER_INSTANCE_ID")
+            or os.getenv("FINPLUS_ENVIRONMENT") == "production"
+        )
+        if not is_render and not force and not os.getenv("FORCE_LOCAL_NTFY"):
             now = time.time()
             if now - getattr(self, "_last_suppress_log_ts", 0.0) >= 3600.0:
                 self._last_suppress_log_ts = now
@@ -230,7 +237,7 @@ class NTFYDispatcher:
         res = False
         for topic in self.topics:
             url = f"https://ntfy.sh/{topic}"
-            delivered = self._safe_post(url, msg, headers, alert_type="PREFLIGHT", is_priority=True)
+            delivered = self._safe_post(url, msg, headers, alert_type="PREFLIGHT", is_priority=True, force=True)
             if delivered:
                 res = True
         return res
@@ -284,8 +291,14 @@ class NTFYDispatcher:
         unless force=True, preventing dual-signal divergence between laptop and phone.
         """
         import os
-        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        if not is_render and not force:
+        is_render = bool(
+            os.getenv("RENDER")
+            or os.getenv("RENDER_SERVICE_ID")
+            or os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("RENDER_INSTANCE_ID")
+            or os.getenv("FINPLUS_ENVIRONMENT") == "production"
+        )
+        if not is_render and not force and not os.getenv("FORCE_LOCAL_NTFY"):
             logger.info("Local environment detected: alert suppressed (not on Render). Delegated to 24/7 Render Master to prevent dual-signal divergence.")
             return False
         from datetime import datetime, timezone, timedelta, time as dt_time
@@ -491,7 +504,7 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
-            if self._safe_post(url, message, headers):
+            if self._safe_post(url, message, headers, force=force):
                 success = True
                 
         return success
@@ -607,7 +620,7 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
-            if self._safe_post(url, message, headers):
+            if self._safe_post(url, message, headers, force=force):
                 success = True
                 
         return success
@@ -762,7 +775,7 @@ class NTFYDispatcher:
                 "X-Markdown": "yes",
                 "Click": f"{RENDER_SCANNER_URL}/api/health/deep"
             }
-            if self._safe_post(url, message, headers):
+            if self._safe_post(url, message, headers, force=force):
                 success = True
         return success
 
@@ -848,7 +861,7 @@ class NTFYDispatcher:
                 "Click": f"{RENDER_SCANNER_URL}/live",
                 "Actions": f"view, Live Positions, {RENDER_SCANNER_URL}/live; view, Scanner Cockpit, {cockpit_url}"
             }
-            if self._safe_post(url, message, headers):
+            if self._safe_post(url, message, headers, force=force):
                 success = True
                 
         return success

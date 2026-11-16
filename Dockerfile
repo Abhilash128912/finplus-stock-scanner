@@ -3,7 +3,9 @@ FROM python:3.11-slim
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    RENDER=true \
+    FINPLUS_ENVIRONMENT=production
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
