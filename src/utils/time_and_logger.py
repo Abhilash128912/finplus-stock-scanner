@@ -31,6 +31,10 @@ def get_utc_iso() -> str:
     """Returns ISO-8601 UTC formatted string (e.g. 2026-11-08T07:45:00.123456Z)."""
     return get_utc_now().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+def get_ist_iso() -> str:
+    """Returns ISO-8601 IST formatted string."""
+    return get_ist_now().isoformat()
+
 def get_ist_now() -> datetime:
     """Returns current timezone-aware IST datetime, with optional FAKED_SYSTEM_IST override strictly under pytest."""
     if "pytest" in sys.modules or os.getenv("PYTEST_CURRENT_TEST"):

@@ -1,0 +1,156 @@
+{
+  "exchange": "Delta Exchange India",
+  "base_url": "https://api.india.delta.exchange",
+  "tracked_instruments": [
+    {
+      "symbol": "BTCUSD",
+      "display_name": "Bitcoin Perpetual",
+      "category": "CRYPTO",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.001,
+      "tick_size": 0.5,
+      "default_lot": 10,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "ETHUSD",
+      "display_name": "Ethereum Perpetual",
+      "category": "CRYPTO",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.05,
+      "default_lot": 10,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "SOLUSD",
+      "display_name": "Solana Perpetual",
+      "category": "CRYPTO",
+      "contract_type": "perpetual_futures",
+      "contract_value": 1.0,
+      "tick_size": 0.005,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "XRPUSD",
+      "display_name": "XRP Perpetual",
+      "category": "CRYPTO",
+      "contract_type": "perpetual_futures",
+      "contract_value": 1.0,
+      "tick_size": 0.0001,
+      "default_lot": 50,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "PAXGUSD",
+      "display_name": "PAX Gold Perpetual",
+      "category": "COMMODITY_CRYPTO",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.001,
+      "tick_size": 0.01,
+      "default_lot": 10,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "OILUSD",
+      "display_name": "US Crude Oil Fund ONDO",
+      "category": "COMMODITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.1,
+      "tick_size": 0.01,
+      "default_lot": 10,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "COINXUSD",
+      "display_name": "Coinbase xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "TSLAXUSD",
+      "display_name": "Tesla xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "AAPLXUSD",
+      "display_name": "Apple xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "AMZNXUSD",
+      "display_name": "Amazon xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "QQQXUSD",
+      "display_name": "Nasdaq 100 xStock Token",
+      "category": "INDEX_ETF",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "SPYXUSD",
+      "display_name": "S&P 500 xStock Token",
+      "category": "INDEX_ETF",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "NVDAXUSD",
+      "display_name": "NVIDIA xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "GOOGLXUSD",
+      "display_name": "Google xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    },
+    {
+      "symbol": "METAXUSD",
+      "display_name": "Meta xStock Token",
+      "category": "US_EQUITY",
+      "contract_type": "perpetual_futures",
+      "contract_value": 0.01,
+      "tick_size": 0.01,
+      "default_lot": 5,
+      "quote_currency": "USD"
+    }
+  ]
+}

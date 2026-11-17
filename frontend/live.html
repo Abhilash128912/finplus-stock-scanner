@@ -276,6 +276,7 @@
       <button class="nav-tab active" onclick="setSegment('ALL', this)">All Open (<span id="cntAll">0</span>)</button>
       <button class="nav-tab" onclick="setSegment('STOCK_OPTIONS', this)">Options (<span id="cntOpt">0</span>)</button>
       <button class="nav-tab" onclick="setSegment('COMMODITIES', this)">Commodities (<span id="cntComm">0</span>)</button>
+      <button class="nav-tab" onclick="setSegment('CRYPTO', this)">Crypto (<span id="cntCrypto">0</span>)</button>
       <button class="nav-tab" onclick="setSegment('INTRADAY_CASH', this)">Cash (<span id="cntCash">0</span>)</button>
       <button class="nav-tab" onclick="setSegment('CLOSED', this)">Closed (<span id="cntClosed">0</span>)</button>
     </div>
@@ -422,6 +423,7 @@
       document.getElementById('cntAll').innerText = active.length;
       document.getElementById('cntOpt').innerText = active.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC')).length;
       document.getElementById('cntComm').innerText = active.filter(p => (p.sector || '') === 'COMMODITIES').length;
+      document.getElementById('cntCrypto').innerText = active.filter(p => (p.sector || '').includes('CRYPTO')).length;
       document.getElementById('cntCash').innerText = active.filter(p => (p.sector || '') === 'INTRADAY_CASH').length;
       document.getElementById('cntClosed').innerText = (rawData.recent_closed_trades || []).length;
     }
@@ -445,6 +447,8 @@
         list = list.filter(p => (p.sector || '').includes('OPTION') || (p.sector || '').includes('ASYMMETRIC'));
       } else if (activeSegment === 'COMMODITIES') {
         list = list.filter(p => (p.sector || '') === 'COMMODITIES');
+      } else if (activeSegment === 'CRYPTO') {
+        list = list.filter(p => (p.sector || '').includes('CRYPTO'));
       } else if (activeSegment === 'INTRADAY_CASH') {
         list = list.filter(p => (p.sector || '') === 'INTRADAY_CASH');
       }
@@ -512,6 +516,8 @@
       container.innerHTML = '';
       list.forEach(pos => {
         const isOpt = Boolean(pos.is_option);
+        const isCrypto = Boolean(pos.is_crypto || (pos.sector === 'CRYPTO'));
+        const currSym = isCrypto ? '$' : '₹';
         const avgLtp = isOpt ? (pos.opt_entry_premium || pos.entry_price) : pos.entry_price;
         const currLtp = isOpt ? (pos.opt_current_premium || pos.current_price) : pos.current_price;
         const pnl = pos.unrealized_pnl || 0.0;
@@ -560,23 +566,23 @@
           <div class="metrics-grid">
             <div class="metric-cell">
               <span class="metric-lbl">Entry Price</span>
-              <span class="metric-val">₹${avgLtp.toFixed(2)}</span>
+              <span class="metric-val">${currSym}${avgLtp.toFixed(2)}</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Current LTP</span>
-              <span class="metric-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">₹${currLtp.toFixed(2)}</span>
+              <span class="metric-val" style="color: ${isPos ? 'var(--green)' : 'var(--red)'};">${currSym}${currLtp.toFixed(2)}</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Highest Hit</span>
-              <span class="metric-val" style="color: var(--cyan);">₹${highPrice.toFixed(2)}</span>
+              <span class="metric-val" style="color: var(--cyan);">${currSym}${highPrice.toFixed(2)}</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Initial SL</span>
-              <span class="metric-val">₹${initSl.toFixed(2)}</span>
+              <span class="metric-val">${currSym}${initSl.toFixed(2)}</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Trailing SL</span>
-              <span class="metric-val" style="color: var(--amber);">₹${sl.toFixed(2)}</span>
+              <span class="metric-val" style="color: var(--amber);">${currSym}${sl.toFixed(2)}</span>
             </div>
             <div class="metric-cell">
               <span class="metric-lbl">Stop Distance</span>

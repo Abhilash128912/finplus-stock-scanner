@@ -598,6 +598,9 @@ def test_08_ntfy_suppressed_when_not_on_render(monkeypatch, caplog):
     import logging
     monkeypatch.delenv("RENDER", raising=False)
     monkeypatch.delenv("RENDER_SERVICE_ID", raising=False)
+    monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+    monkeypatch.delenv("RENDER_INSTANCE_ID", raising=False)
+    monkeypatch.delenv("FINPLUS_ENVIRONMENT", raising=False)
     monkeypatch.delenv("FORCE_LOCAL_NTFY", raising=False)
 
     from src.notifications.ntfy_dispatcher import NTFYDispatcher

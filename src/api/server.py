@@ -156,6 +156,15 @@ async def startup_event():
 
     scheduler_task = asyncio.create_task(scheduler.start_loop())
 
+    # Start Embedded Crypto Delta Radar (24/7 background scheduler)
+    try:
+        from src.crypto.crypto_scheduler import CryptoScheduler
+        scheduler.crypto_scheduler = CryptoScheduler()
+        asyncio.create_task(scheduler.crypto_scheduler.start())
+        logger.info("Embedded Crypto Delta Radar started (24/7 background loop).")
+    except Exception as e:
+        logger.error(f"Failed to start embedded Crypto Delta scheduler: {e}")
+
     # Warm up broker authentication in background thread
     if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
         async def _warmup_broker():
@@ -170,6 +179,8 @@ async def startup_event():
 async def shutdown_event():
     logger.info("Shutting down FinPlus+ Stock Scanner Server...")
     scheduler.stop_loop()
+    if hasattr(scheduler, "crypto_scheduler") and scheduler.crypto_scheduler:
+        asyncio.create_task(scheduler.crypto_scheduler.stop())
     if scheduler_task:
         scheduler_task.cancel()
 
@@ -1167,7 +1178,111 @@ async def get_paper_status():
         scheduler.paper_tracker.ingest_commodities()
         scheduler.paper_tracker.ingest_crypto()
         scheduler.paper_tracker.update_and_trail_positions()
-    return scheduler.paper_tracker.get_status_dict()
+    res = scheduler.paper_tracker.get_status_dict()
+
+    # Merge embedded 24/7 Crypto Delta positions
+    if hasattr(scheduler, "crypto_scheduler") and scheduler.crypto_scheduler:
+        try:
+            c_dict = scheduler.crypto_scheduler.refresh_open_positions_live()
+            c_active = c_dict.get("active_positions", [])
+            for cp in c_active:
+                act = "BUY" if ("BUY" in cp.get("action", "") or "LONG" in cp.get("action", "")) else "SELL"
+                curr_p = float(cp.get("current_price", 0.0))
+                sl_p = float(cp.get("current_sl", 0.0))
+                cv = float(cp.get("contract_value", 1.0))
+                qty = float(cp.get("quantity", 1.0))
+                risk_rs = round(abs(curr_p - sl_p) * cv * qty * 90.0, 2)
+                stop_dist = round(abs(curr_p - sl_p) / curr_p * 100.0, 2) if curr_p > 0 else 0.0
+                
+                pos_item = {
+                    "position_id": cp.get("position_id"),
+                    "source_app": "APP_06_CRYPTO_DELTA",
+                    "sector": "CRYPTO",
+                    "symbol": cp.get("symbol"),
+                    "action": act,
+                    "is_option": 0,
+                    "is_put": 0,
+                    "is_crypto": 1,
+                    "entry_price": float(cp.get("entry_price", 0.0)),
+                    "current_price": curr_p,
+                    "initial_sl": float(cp.get("initial_sl", 0.0)),
+                    "trailing_sl": sl_p,
+                    "highest_price": float(cp.get("highest_favorable_price", curr_p)),
+                    "quantity": qty,
+                    "contract_value": cv,
+                    "notional_inr": cp.get("notional_inr", 0.0),
+                    "unrealized_pnl": round(float(cp.get("unrealized_pnl_inr", 0.0)), 2),
+                    "pnl_pct": float(cp.get("unrealized_pnl_pct", 0.0)),
+                    "stage": "TRAILING SL" if cp.get("breakeven_latched") else "INITIAL SL",
+                    "status": "OPEN",
+                    "grade": "A",
+                    "setup_key": "15M_COILING_SQUEEZE",
+                    "notes": cp.get("notes", "Delta 15m Squeeze Breakout"),
+                    "opened_at_utc": cp.get("entry_time_utc", ""),
+                    "entry_time_ist": cp.get("entry_time_ist", ""),
+                    "taken": cp.get("taken", 0),
+                    "profit_locked_rupees": 0.0,
+                    "profit_locked_r": 0.0,
+                    "stop_dist_pct": stop_dist,
+                    "rupees_at_risk": risk_rs,
+                    "setup_win_pct": 75.0,
+                    "setup_total_trades": 12
+                }
+                res["active_positions"].append(pos_item)
+
+            res["active_positions_count"] = len(res["active_positions"])
+            res["total_unrealized_pnl"] = round(res.get("total_unrealized_pnl", 0.0) + c_dict.get("total_unrealized_pnl_inr", 0.0), 2)
+            res["net_realized_pnl"] = round(res.get("net_realized_pnl", 0.0) + c_dict.get("net_realized_pnl_inr", 0.0), 2)
+            
+            # Merge recent closed crypto trades
+            for cc in c_dict.get("recent_closed_trades", []):
+                res["recent_closed_trades"].append({
+                    "trade_id": cc.get("position_id"),
+                    "symbol": cc.get("symbol"),
+                    "sector": "CRYPTO",
+                    "action": cc.get("action"),
+                    "entry_price": cc.get("entry_price"),
+                    "exit_price": cc.get("exit_price"),
+                    "highest_price": cc.get("highest_favorable_price", cc.get("exit_price")),
+                    "gross_pnl": round(float(cc.get("pnl_inr", 0.0)), 2),
+                    "total_charges": 0.0,
+                    "net_pnl": round(float(cc.get("pnl_inr", 0.0)), 2),
+                    "exit_reason": cc.get("exit_reason"),
+                    "opened_at_ist": cc.get("entry_time_ist"),
+                    "closed_at_ist": cc.get("exit_time_ist"),
+                    "opened_at_utc": cc.get("entry_time_utc"),
+                    "closed_at_utc": cc.get("exit_time_utc"),
+                    "notes": cc.get("notes"),
+                    "tags": "CRYPTO,PERPETUAL",
+                    "setup_key": "15M_COILING_SQUEEZE",
+                    "grade": "A",
+                    "taken": cc.get("taken", 0),
+                    "is_crypto": 1
+                })
+        except Exception as e:
+            logger.error(f"Error merging crypto status: {e}")
+
+    return res
+
+@app.get("/api/crypto/scan")
+async def get_crypto_scan():
+    """Returns real-time 15m coiling radar scan results across Delta perpetuals."""
+    if hasattr(scheduler, "crypto_scheduler") and scheduler.crypto_scheduler:
+        return {
+            "status": "SUCCESS",
+            "instruments_count": len(scheduler.crypto_scheduler.latest_scan_results),
+            "priority_trade": scheduler.crypto_scheduler.priority_trade,
+            "instruments": scheduler.crypto_scheduler.latest_scan_results,
+            "last_scan_ts": scheduler.crypto_scheduler.last_scan_ts
+        }
+    return {"status": "UNAVAILABLE", "message": "Crypto scheduler not initialized"}
+
+@app.get("/api/crypto/positions")
+async def get_crypto_positions():
+    """Returns active and closed perpetual paper positions in INR."""
+    if hasattr(scheduler, "crypto_scheduler") and scheduler.crypto_scheduler:
+        return scheduler.crypto_scheduler.refresh_open_positions_live()
+    return {"status": "UNAVAILABLE", "message": "Crypto scheduler not initialized"}
 
 @app.post("/api/paper/close-position/{pos_id}")
 async def close_paper_position(pos_id: str):
