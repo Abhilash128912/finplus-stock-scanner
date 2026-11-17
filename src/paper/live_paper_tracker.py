@@ -410,6 +410,13 @@ class LivePaperTracker:
             logger.info(f"Cooldown Active: {clean_base} closed {int(time.time() - last_closed)}s ago (20m cooldown required).")
             return None
 
+        # Strict Maximum 30 Active Trades Ceiling
+        MAX_TOTAL_ACTIVE_POSITIONS = int(os.getenv("MAX_ACTIVE_POSITIONS", "30"))
+        open_count = sum(1 for p in self.active_positions.values() if p.get("status") == "OPEN")
+        if open_count >= MAX_TOTAL_ACTIVE_POSITIONS:
+            logger.info(f"Entry Blocked for {symbol}: Active positions limit reached ({open_count}/{MAX_TOTAL_ACTIVE_POSITIONS} Max).")
+            return None
+
         pos_id = f"{clean_base}_{action}_{sector}_{now_ist.strftime('%Y%m%d_%H%M%S')}"
         is_option = sector in ("STOCK_OPTIONS", "INDEX_OPTIONS", "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC")
         

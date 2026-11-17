@@ -24,12 +24,14 @@ def safe_headers(headers: Dict[str, Any]) -> Dict[str, str]:
 
 class CryptoNTFYDispatcher:
     _last_suppress_log_ts: float = 0.0
+    _recent_alert_cache: Dict[str, float] = {}
 
     @classmethod
     def _safe_post(cls, url: str, message: str, headers: Dict[str, str]) -> bool:
         """
         Shared central send method.
         Dispatches to NTFY if ENABLE_DELTA_NTFY is True or if running in Render cloud.
+        Applies a 30-minute deduplication window to prevent alert flooding.
         """
         is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         allowed = ENABLE_DELTA_NTFY or is_render
@@ -40,6 +42,16 @@ class CryptoNTFYDispatcher:
                 cls._last_suppress_log_ts = now_ts
                 logger.info("NTFY suppressed (ENABLE_DELTA_NTFY is false and not on Render)")
             return False
+
+        # 30-minute content deduplication
+        import hashlib
+        alert_hash = hashlib.sha256(f"{headers.get('Title', '')}_{message[:150]}".encode("utf-8")).hexdigest()
+        now_ts = time.time()
+        last_sent = cls._recent_alert_cache.get(alert_hash, 0.0)
+        if (now_ts - last_sent) < 1800.0:
+            logger.info(f"NTFY alert deduped (sent {int(now_ts - last_sent)}s ago): {headers.get('Title')}")
+            return False
+        cls._recent_alert_cache[alert_hash] = now_ts
 
         clean_hdrs = safe_headers(headers)
         try:

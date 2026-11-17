@@ -317,7 +317,7 @@
           <option value="time">Time (Latest)</option>
         </select>
       </div>
-      <button id="toggleShowAllBtn" class="nav-tab active" onclick="toggleShowAll()" style="margin-left: auto;">Top 12 Ranked</button>
+      <button id="toggleShowAllBtn" class="nav-tab active" onclick="toggleShowAll()" style="margin-left: auto;">All Active Trades (30 Max)</button>
     </div>
   </div>
 
@@ -343,7 +343,7 @@
   <script>
     let activeSegment = 'ALL';
     let rawData = null;
-    let showAllTrades = false;
+    let showAllTrades = true;
 
     function toggleShowAll() {
       showAllTrades = !showAllTrades;
@@ -489,11 +489,11 @@
       const totalMatches = list.length;
       const toggleBtn = document.getElementById('toggleShowAllBtn');
       if (toggleBtn) {
-        if (!showAllTrades) {
-          toggleBtn.innerText = `Top 12 Ranked (Show All ${totalMatches})`;
+        if (showAllTrades) {
+          toggleBtn.innerText = `All Active (${totalMatches} / 30 Max)`;
           toggleBtn.classList.add('active');
         } else {
-          toggleBtn.innerText = `All Trades (${totalMatches}) (Show Top 12)`;
+          toggleBtn.innerText = `Top 12 Ranked (Show All ${totalMatches})`;
           toggleBtn.classList.remove('active');
         }
       }

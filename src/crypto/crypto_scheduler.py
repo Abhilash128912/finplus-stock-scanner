@@ -132,7 +132,8 @@ class CryptoScheduler:
         for ct in closed_trades:
             self.ntfy.send_trade_closed_alert(ct)
         for tt in trailed_trades:
-            if tt.get("breakeven_latched") == 1:
+            if tt.get("breakeven_latched") == 1 and not tt.get("breakeven_alert_sent"):
+                tt["breakeven_alert_sent"] = 1
                 self.ntfy.send_breakeven_trailed_alert(tt)
 
         # Sort results by confluence score descending
@@ -166,7 +167,8 @@ class CryptoScheduler:
             for ct in closed_trades:
                 self.ntfy.send_trade_closed_alert(ct)
             for tt in trailed_trades:
-                if tt.get("breakeven_latched") == 1:
+                if tt.get("breakeven_latched") == 1 and not tt.get("breakeven_alert_sent"):
+                    tt["breakeven_alert_sent"] = 1
                     self.ntfy.send_breakeven_trailed_alert(tt)
 
         return self.paper.get_status_dict()
