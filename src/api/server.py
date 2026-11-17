@@ -681,11 +681,29 @@ def compute_preflight_status() -> Dict[str, Any]:
 
     # 4. Firebase Connected & Last Restore Result (Public-Safe: no credentials, no internal paths)
     fb_conn = hasattr(scheduler, "firestore") and scheduler.firestore.is_connected
-    fb_details = "Cloud backup connected and synchronized" if fb_conn else "Local-only storage active (cloud backup not configured)"
+    if not fb_conn and hasattr(scheduler, "firestore") and getattr(scheduler.firestore, "credentials_json_str", None):
+        # Grace warm-up check in case connection was initializing during boot
+        try:
+            scheduler.firestore._init_client()
+            fb_conn = scheduler.firestore.is_connected
+        except Exception:
+            pass
+
+    has_cred = bool(hasattr(scheduler, "firestore") and getattr(scheduler.firestore, "credentials_json_str", None))
+    if fb_conn:
+        fb_status = "GREEN"
+        fb_details = "Cloud backup connected and synchronized"
+    elif has_cred:
+        fb_status = "AMBER"
+        fb_details = "Cloud backup connecting in background"
+    else:
+        fb_status = "AMBER"
+        fb_details = "Local-only storage active (cloud backup optional)"
+
     items.append({
         "id": "firebase_connected",
         "name": "Cloud Persistence",
-        "status": "GREEN" if fb_conn else "RED",
+        "status": fb_status,
         "details": fb_details,
         "line": f"Cloud Persistence: {fb_details}"
     })
