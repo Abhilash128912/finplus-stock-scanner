@@ -33,14 +33,23 @@ class CryptoNTFYDispatcher:
         Dispatches to NTFY if ENABLE_DELTA_NTFY is True or if running in Render cloud.
         Applies a 30-minute deduplication window to prevent alert flooding.
         """
-        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
-        allowed = ENABLE_DELTA_NTFY or is_render
+        # Strict Environment Gate: Block all NTFY sends unless running on Render Cloud or explicitly forced
+        is_render = bool(
+            os.getenv("RENDER")
+            or os.getenv("RENDER_SERVICE_ID")
+            or os.getenv("RENDER_GIT_COMMIT")
+            or os.getenv("RENDER_INSTANCE_ID")
+        )
+        force_local = os.getenv("FORCE_LOCAL_NTFY", "").lower() in ("true", "1", "yes")
 
-        if not allowed:
+        if not is_render and not force_local:
             now_ts = time.time()
             if (now_ts - cls._last_suppress_log_ts) >= 3600:
                 cls._last_suppress_log_ts = now_ts
-                logger.info("NTFY suppressed (ENABLE_DELTA_NTFY is false and not on Render)")
+                logger.info("Local environment detected: crypto NTFY suppressed (not on Render). Delegated to 24/7 Render Master.")
+            return False
+
+        if not ENABLE_DELTA_NTFY:
             return False
 
         # 30-minute content deduplication

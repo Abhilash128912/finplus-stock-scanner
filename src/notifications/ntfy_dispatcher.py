@@ -91,19 +91,18 @@ class NTFYDispatcher:
             logger.info("ALERTS_ENABLED is false: NTFY push suppressed.")
             return False
 
-        # Environment Gate: Block all NTFY sends unless running on Render Cloud or forced
+        # Environment Gate: Block all NTFY sends unless running on Render Cloud or explicitly forced
         is_render = bool(
             os.getenv("RENDER")
             or os.getenv("RENDER_SERVICE_ID")
             or os.getenv("RENDER_GIT_COMMIT")
             or os.getenv("RENDER_INSTANCE_ID")
-            or os.getenv("FINPLUS_ENVIRONMENT") == "production"
         )
         if not is_render and not force and not os.getenv("FORCE_LOCAL_NTFY"):
             now = time.time()
             if now - getattr(self, "_last_suppress_log_ts", 0.0) >= 3600.0:
                 self._last_suppress_log_ts = now
-                logger.info("NTFY suppressed (not on Render)")
+                logger.info("Local environment detected: NTFY suppressed (not on Render). Delegated to 24/7 Render Master.")
             return False
 
         today = get_ist_now().strftime("%Y-%m-%d")
