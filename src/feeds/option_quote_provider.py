@@ -92,6 +92,7 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
     _shared_instruments_cache: Dict[Tuple[str, str, float, str], Dict[str, Any]] = {}
     _shared_instruments_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
     _shared_cache_date: str = ""
+    _shared_lock: threading.Lock = threading.Lock()
 
     def __init__(self, cache_dir: Optional[str] = None):
         self.cache_dir = Path(cache_dir or os.path.join(os.path.dirname(__file__), "..", "..", "data", "cache"))
@@ -111,9 +112,6 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
         self._is_ws_connected = False
         self._active_ws = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
-
-        # Load daily instruments asynchronously in background thread so server boot is non-blocking
-        threading.Thread(target=self._ensure_instruments_loaded, daemon=True).start()
 
     def _get_auth_token(self, force_refresh: bool = False) -> str:
         """
@@ -168,15 +166,37 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
             self._cache_date = today_str
             return
 
-        cache_file = self.cache_dir / f"instruments_fno_{today_str}.csv"
-        if not cache_file.exists():
-            self._download_instruments(cache_file)
+        with IndstocksQuoteProvider._shared_lock:
+            # Re-check inside lock
+            if IndstocksQuoteProvider._shared_cache_date == today_str and IndstocksQuoteProvider._shared_instruments_cache:
+                self._instruments_cache = IndstocksQuoteProvider._shared_instruments_cache
+                self._instruments_by_symbol = IndstocksQuoteProvider._shared_instruments_by_symbol
+                self._cache_date = today_str
+                return
 
-        self._parse_instruments_csv(cache_file)
-        IndstocksQuoteProvider._shared_instruments_cache = self._instruments_cache
-        IndstocksQuoteProvider._shared_instruments_by_symbol = self._instruments_by_symbol
-        IndstocksQuoteProvider._shared_cache_date = today_str
-        self._cache_date = today_str
+            cache_file = self.cache_dir / f"instruments_fno_{today_str}.csv"
+            if not cache_file.exists():
+                # Check for bundled seed archive
+                seed_gz = Path(__file__).resolve().parent.parent.parent / "config" / "instruments_fno_seed.csv.gz"
+                if seed_gz.exists():
+                    logger.info(f"Extracting bundled FNO seed instruments from {seed_gz}...")
+                    try:
+                        import gzip, shutil
+                        with gzip.open(seed_gz, "rb") as f_in, open(cache_file, "wb") as f_out:
+                            shutil.copyfileobj(f_in, f_out)
+                        logger.info(f"Seeded {cache_file} from bundled seed ({cache_file.stat().st_size:,} bytes).")
+                    except Exception as seed_err:
+                        logger.warning(f"Could not extract seed file: {seed_err}")
+
+            if not cache_file.exists():
+                self._download_instruments(cache_file)
+
+            if cache_file.exists():
+                self._parse_instruments_csv(cache_file)
+                IndstocksQuoteProvider._shared_instruments_cache = self._instruments_cache
+                IndstocksQuoteProvider._shared_instruments_by_symbol = self._instruments_by_symbol
+                IndstocksQuoteProvider._shared_cache_date = today_str
+                self._cache_date = today_str
 
     def _download_instruments(self, target_path: Path) -> None:
         logger.info(f"Downloading FNO instruments master from {self.BASE_URL}/market/instruments?source=fno...")
