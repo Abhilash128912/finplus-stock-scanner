@@ -48,7 +48,7 @@ class ScannerScheduler:
             "ATR_100_W2": RangeDetectorEngine(length=20, mult=1.0, atr_len=100, break_window_bars=2),
         }
         self.live_hold_buffer: Dict[str, Tuple[float, float, int]] = {} # symbol -> (price, trigger_ts, direction)
-        self.MAX_CHASE_PCT = 0.70 # Lateness threshold (log only)
+        self.MAX_CHASE_PCT = 0.80 # Lateness threshold (log only)
         self.interceptor = App1RegimeInterceptor(timeout_secs=2.0)
         self.shortlist_engine = ShortlistEngine()
         self.multi_setup_engine = MultiSetupEngine()

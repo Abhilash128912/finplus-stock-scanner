@@ -22,7 +22,7 @@ from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_now
 
 logger = setup_logger("MultiSetupEngine")
 
-MAX_CHASE_PCT = 0.50 # Skip if price has already moved > 0.50% past the trigger boundary
+MAX_CHASE_PCT = 0.80 # Skip if price has already moved > 0.80% past the trigger boundary
 TRIGGER_BUFFER_PCT = 0.0015 # +0.15% boundary confirmation buffer
 
 class MultiSetupEngine:
