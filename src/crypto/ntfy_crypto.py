@@ -12,7 +12,7 @@ from src.crypto.crypto_config import NTFY_URL, NTFY_TOPIC, ENABLE_DELTA_NTFY
 
 logger = setup_logger("CryptoNTFYDispatcher")
 
-def safe_headers(headers: Dict[str, Any]) -> Dict[str, str]:
+def safe_headers(headers: Dict[str, Any], auth_token: str = "") -> Dict[str, str]:
     """Forces ASCII on all HTTP header values. Non-ASCII chars (emojis) are stripped."""
     clean = {}
     for k, v in headers.items():
@@ -20,6 +20,8 @@ def safe_headers(headers: Dict[str, Any]) -> Dict[str, str]:
             clean[k] = v.encode("ascii", "ignore").decode("ascii").strip()
         else:
             clean[k] = str(v)
+    if auth_token:
+        clean["Authorization"] = f"Bearer {auth_token}"
     return clean
 
 class CryptoNTFYDispatcher:
@@ -62,7 +64,8 @@ class CryptoNTFYDispatcher:
             return False
         cls._recent_alert_cache[alert_hash] = now_ts
 
-        clean_hdrs = safe_headers(headers)
+        auth_token = os.getenv("NTFY_AUTH_TOKEN", "")
+        clean_hdrs = safe_headers(headers, auth_token)
         try:
             resp = requests.post(url, data=message.encode("utf-8"), headers=clean_hdrs, timeout=10)
             if resp.status_code == 200:
