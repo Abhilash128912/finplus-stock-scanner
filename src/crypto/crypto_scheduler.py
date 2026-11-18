@@ -59,6 +59,9 @@ class CryptoScheduler:
 
         for c in self.contracts:
             sym = c["symbol"]
+            # Strict Permanent Blacklist: BTC trading permanently disabled per directive
+            if "BTC" in sym.upper():
+                continue
             ticker = tickers.get(sym, {})
             ltp = float(ticker.get("close", 0.0))
             if ltp <= 0:

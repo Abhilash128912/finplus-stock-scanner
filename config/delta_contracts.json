@@ -3,16 +3,6 @@
   "base_url": "https://api.india.delta.exchange",
   "tracked_instruments": [
     {
-      "symbol": "BTCUSD",
-      "display_name": "Bitcoin Perpetual",
-      "category": "CRYPTO",
-      "contract_type": "perpetual_futures",
-      "contract_value": 0.001,
-      "tick_size": 0.5,
-      "default_lot": 10,
-      "quote_currency": "USD"
-    },
-    {
       "symbol": "ETHUSD",
       "display_name": "Ethereum Perpetual",
       "category": "CRYPTO",

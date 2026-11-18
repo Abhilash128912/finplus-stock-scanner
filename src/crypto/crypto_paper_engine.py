@@ -128,6 +128,11 @@ class CryptoPaperEngine:
         notes: str = ""
     ) -> Optional[Dict[str, Any]]:
         """Opens a new simulated perpetual position with dynamic trailing SL."""
+        # Strict Permanent Blacklist: BTC trading permanently blocked
+        if "BTC" in symbol.upper():
+            logger.info(f"Position rejected: {symbol} is permanently blacklisted.")
+            return None
+
         pos_id = f"POS_{symbol}_{action}_{int(time.time())}"
         if pos_id in self.active_positions:
             return None
