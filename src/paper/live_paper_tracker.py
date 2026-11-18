@@ -367,15 +367,71 @@ class LivePaperTracker:
         except Exception as e:
             logger.error(f"Error loading open positions: {e}")
 
-    def get_setup_grade(self, setup_key: str) -> str:
-        """Computes setup grade from rolling last 30 trades (Phase 6a)."""
-        if not setup_key:
+    def get_setup_grade(
+        self,
+        setup_key: str,
+        confluence_score: Optional[float] = None,
+        regime: Optional[str] = None,
+        rvol: Optional[float] = None,
+        is_wide_sl: bool = False
+    ) -> str:
+        """
+        Dynamically computes setup grade (A, B, C) using a multi-factor hybrid model:
+        1. Evaluates real-time technical setup confluence, volume expansion, and macro regime.
+        2. Blends with empirical track record from setup_stats when trade history exists.
+        Never hardcodes static placeholders.
+        """
+        stat_grade = None
+        stat_trades = 0
+        stat_win_pct = 0.0
+        stat_expectancy = 0.0
+        if setup_key:
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT grade, total_trades, win_pct, expectancy FROM setup_stats WHERE setup_key = ?",
+                    (setup_key,)
+                ).fetchone()
+                if row:
+                    stat_grade = row["grade"]
+                    stat_trades = int(row["total_trades"])
+                    stat_win_pct = float(row["win_pct"])
+                    stat_expectancy = float(row["expectancy"])
+
+        # Empirical Performance Rule (when setup has accumulated >= 15 closed trades)
+        if stat_trades >= 15:
+            if stat_win_pct >= 60.0 and stat_expectancy > 0:
+                if is_wide_sl or (regime and "VETOED" in regime.upper()) or (confluence_score is not None and confluence_score < 65):
+                    return "B"
+                return "A"
+            elif stat_win_pct < 60.0 or stat_expectancy <= 0:
+                return "C"
+            else:
+                if confluence_score is not None and confluence_score >= 85 and (regime and "APPROVED" in regime.upper()) and not is_wide_sl:
+                    return "A"
+                if is_wide_sl or (confluence_score is not None and confluence_score < 65) or (regime and "VETOED" in regime.upper()):
+                    return "C"
+                return "B"
+
+        # Technical / Confluence Evaluation (When trades < 15 or live trade evaluation)
+        if confluence_score is not None:
+            c_score = float(confluence_score)
+            regime_str = (regime or "").upper()
+            vol = float(rvol) if rvol is not None else 1.0
+
+            # Grade C: Poor technicals, vetoed macro environment, wide stop loss, or stalling volume
+            if c_score < 65 or "VETOED" in regime_str or is_wide_sl or vol < 0.8:
+                return "C"
+
+            # Grade A: Prime institutional breakout: Score >= 80, APPROVED regime (or non-vetoed), volume surge >= 1.2x, tight SL
+            if c_score >= 80 and ("APPROVED" in regime_str or not regime_str) and vol >= 1.2 and not is_wide_sl:
+                if stat_trades >= 5 and stat_win_pct < 35.0:
+                    return "B"
+                return "A"
+
+            # Grade B: Standard setup in the 65-79 range
             return "B"
-        with self._get_connection() as conn:
-            row = conn.execute("SELECT grade FROM setup_stats WHERE setup_key = ?", (setup_key,)).fetchone()
-            if row:
-                return row["grade"]
-        return "B" # Default grade B (LEARNING)
+
+        return stat_grade or "B"
 
     def get_setup_stats_dict(self, setup_key: str) -> Dict[str, Any]:
         """Returns win %, trade count and grade for a setup."""
@@ -403,7 +459,11 @@ class LivePaperTracker:
         quantity: Optional[int] = None,
         notes: str = "",
         setup_key: Optional[str] = None,
-        atr_val: Optional[float] = None
+        atr_val: Optional[float] = None,
+        confluence_score: Optional[float] = None,
+        regime: Optional[str] = None,
+        rvol: Optional[float] = None,
+        grade: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Opens a new paper trade with automatic sizing, structural stop, and trailing exit (Phase 5).
@@ -578,7 +638,15 @@ class LivePaperTracker:
                 tag_list.append("WIDE_SL")
 
         s_key = setup_key or f"RANGE_BREAK_{action.upper()}_{sector}"
-        grade = self.get_setup_grade(s_key)
+        is_wide_sl = "WIDE_SL" in tag_list
+        if not grade:
+            grade = self.get_setup_grade(
+                setup_key=s_key,
+                confluence_score=confluence_score,
+                regime=regime,
+                rvol=rvol,
+                is_wide_sl=is_wide_sl
+            )
         if grade == "B":
             tag_list.append("LEARNING")
         elif grade == "C":
@@ -720,7 +788,11 @@ class LivePaperTracker:
                     stop_loss=sl,
                     target=tgt,
                     quantity=qty,
-                    notes=f"Cash Short Breakdown: {cash.get('reason', '')}" if act == "SELL" else f"Cash Breakout: {cash.get('reason', '')}"
+                    notes=f"Cash Short Breakdown: {cash.get('reason', '')}" if act == "SELL" else f"Cash Breakout: {cash.get('reason', '')}",
+                    confluence_score=cash.get("confluence_score"),
+                    regime=cash.get("regime_confluence"),
+                    rvol=rvol,
+                    setup_key=f"CASH_{act}_{sym}"
                 )
 
         # 2. Stock Option
@@ -749,7 +821,11 @@ class LivePaperTracker:
                     stop_loss=u_sl,
                     target=u_tgt,
                     quantity=lot_size,
-                    notes=f"Stock Option: {stk_opt.get('reason', '')}"
+                    notes=f"Stock Option: {stk_opt.get('reason', '')}",
+                    confluence_score=stk_opt.get("confluence_score"),
+                    regime=stk_opt.get("regime_confluence"),
+                    rvol=opt_rvol,
+                    setup_key=f"STOCK_OPT_{clean_sym}"
                 )
 
         # 3. Sensex Radar
@@ -769,7 +845,10 @@ class LivePaperTracker:
                 stop_loss=sx_ltp * 0.99,
                 target=sx_ltp * 1.02,
                 quantity=lot,
-                notes="Sensex Radar Ticket"
+                notes="Sensex Radar Ticket",
+                confluence_score=sx.get("confluence_score", 85),
+                regime=sx.get("regime_confluence", "APPROVED"),
+                setup_key="SENSEX_ASYMMETRIC"
             )
 
         # 4. Nifty Radar
@@ -787,7 +866,10 @@ class LivePaperTracker:
                 stop_loss=nf_ltp * 0.99,
                 target=nf_ltp * 1.02,
                 quantity=lot,
-                notes="Nifty Radar Ticket"
+                notes="Nifty Radar Ticket",
+                confluence_score=nf.get("confluence_score", 85),
+                regime=nf.get("regime_confluence", "APPROVED"),
+                setup_key="NIFTY_ASYMMETRIC"
             )
 
         # 5. Midcap Nifty Radar
@@ -805,7 +887,10 @@ class LivePaperTracker:
                 stop_loss=mid_ltp * 0.99,
                 target=mid_ltp * 1.02,
                 quantity=lot,
-                notes="Midcap Nifty Radar Ticket"
+                notes="Midcap Nifty Radar Ticket",
+                confluence_score=mid.get("confluence_score", 85),
+                regime=mid.get("regime_confluence", "APPROVED"),
+                setup_key="MIDCAP_ASYMMETRIC"
             )
 
     def ingest_commodities(self):
@@ -856,7 +941,10 @@ class LivePaperTracker:
                             stop_loss=sl,
                             target=tgt,
                             quantity=qty,
-                            notes=f"MCX Priority Setup: {pt.get('reason', '')}"
+                            notes=f"MCX Priority Setup: {pt.get('reason', '')}",
+                            confluence_score=pt.get("confluence_score", 80),
+                            regime="APPROVED",
+                            setup_key=f"MCX_{sym}"
                         )
                     break
             except Exception:
@@ -894,7 +982,10 @@ class LivePaperTracker:
                             stop_loss=sl,
                             target=tgt,
                             quantity=qty,
-                            notes=f"Delta India 15m Squeeze: {pt.get('reason', '')}"
+                            notes=f"Delta India 15m Squeeze: {pt.get('reason', '')}",
+                            confluence_score=pt.get("confluence_score", 80),
+                            rvol=float(pt.get("vol_ratio", 1.2)),
+                            setup_key="15M_COILING_SQUEEZE"
                         )
                     break
             except Exception:
@@ -1837,15 +1928,33 @@ class LivePaperTracker:
             avg_r = round(sum(r["r_val"] for r in rows) / total_trades, 2) if len(rows) > 0 else (r_result if total_trades == 1 else 0.0)
             expectancy = round(sum(r["net_pnl"] for r in rows) / total_trades, 2) if len(rows) > 0 else (net_pnl if total_trades == 1 else 0.0)
 
-            # Grade: A = win % >= 60 and positive expectancy over last 30;
-            # B = fewer than 30 trades (LEARNING);
-            # C = below 60 or negative expectancy (LOW CONFIDENCE)
-            if total_trades < 30:
-                grade = "B"
-            elif win_pct >= 60.0 and (expectancy > 0 or avg_r > 0):
-                grade = "A"
+            # Dynamic Grade:
+            # Over sample (>= 15 trades):
+            # A = win % >= 60.0 and (expectancy > 0 or avg_r > 0)
+            # C = win % < 60.0 or (expectancy <= 0 and avg_r <= 0)
+            # B = balanced middle tier
+            # Over early sample (3 to 14 trades):
+            # A = win % >= 66.7 and (expectancy > 0 or avg_r > 0)
+            # C = win % <= 33.3 and (expectancy <= 0 or avg_r <= 0)
+            # B = balanced middle
+            # When total_trades < 3:
+            # Baseline B
+            if total_trades >= 15:
+                if win_pct >= 60.0 and (expectancy > 0 or avg_r > 0):
+                    grade = "A"
+                elif win_pct < 60.0 or (expectancy <= 0 and avg_r <= 0):
+                    grade = "C"
+                else:
+                    grade = "B"
+            elif total_trades >= 3:
+                if win_pct >= 66.7 and (expectancy > 0 or avg_r > 0):
+                    grade = "A"
+                elif win_pct <= 33.3 and (expectancy <= 0 or avg_r <= 0):
+                    grade = "C"
+                else:
+                    grade = "B"
             else:
-                grade = "C"
+                grade = "B"
 
             conn.execute("""
                 INSERT OR REPLACE INTO setup_stats (

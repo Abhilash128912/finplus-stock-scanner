@@ -58,7 +58,10 @@ class CryptoPaperEngine:
                     breakeven_latched INTEGER DEFAULT 0,
                     entry_time_ist TEXT NOT NULL,
                     entry_time_utc TEXT NOT NULL,
-                    notes TEXT
+                    notes TEXT,
+                    grade TEXT DEFAULT 'B',
+                    confluence_score REAL DEFAULT 0.0,
+                    setup_key TEXT DEFAULT '15M_COILING_SQUEEZE'
                 )
             """)
             cur.execute("""
@@ -80,7 +83,10 @@ class CryptoPaperEngine:
                     entry_time_ist TEXT NOT NULL,
                     exit_time_ist TEXT NOT NULL,
                     exit_time_utc TEXT NOT NULL,
-                    notes TEXT
+                    notes TEXT,
+                    grade TEXT DEFAULT 'B',
+                    confluence_score REAL DEFAULT 0.0,
+                    setup_key TEXT DEFAULT '15M_COILING_SQUEEZE'
                 )
             """)
 
@@ -93,6 +99,12 @@ class CryptoPaperEngine:
                 cur.execute("ALTER TABLE crypto_active_positions ADD COLUMN unrealized_pnl_inr REAL DEFAULT 0.0")
             if "notional_inr" not in existing_active_cols:
                 cur.execute("ALTER TABLE crypto_active_positions ADD COLUMN notional_inr REAL DEFAULT 0.0")
+            if "grade" not in existing_active_cols:
+                cur.execute("ALTER TABLE crypto_active_positions ADD COLUMN grade TEXT DEFAULT 'B'")
+            if "confluence_score" not in existing_active_cols:
+                cur.execute("ALTER TABLE crypto_active_positions ADD COLUMN confluence_score REAL DEFAULT 0.0")
+            if "setup_key" not in existing_active_cols:
+                cur.execute("ALTER TABLE crypto_active_positions ADD COLUMN setup_key TEXT DEFAULT '15M_COILING_SQUEEZE'")
 
             cur.execute("PRAGMA table_info(crypto_closed_trades)")
             existing_closed_cols = {r["name"] for r in cur.fetchall()}
@@ -100,6 +112,12 @@ class CryptoPaperEngine:
                 cur.execute("ALTER TABLE crypto_closed_trades ADD COLUMN notional_inr REAL DEFAULT 0.0")
             if "pnl_inr" not in existing_closed_cols:
                 cur.execute("ALTER TABLE crypto_closed_trades ADD COLUMN pnl_inr REAL DEFAULT 0.0")
+            if "grade" not in existing_closed_cols:
+                cur.execute("ALTER TABLE crypto_closed_trades ADD COLUMN grade TEXT DEFAULT 'B'")
+            if "confluence_score" not in existing_closed_cols:
+                cur.execute("ALTER TABLE crypto_closed_trades ADD COLUMN confluence_score REAL DEFAULT 0.0")
+            if "setup_key" not in existing_closed_cols:
+                cur.execute("ALTER TABLE crypto_closed_trades ADD COLUMN setup_key TEXT DEFAULT '15M_COILING_SQUEEZE'")
 
             conn.commit()
 
@@ -127,7 +145,10 @@ class CryptoPaperEngine:
         target_2: Optional[float] = None,
         contract_value: float = 1.0,
         default_qty: float = 1.0,
-        notes: str = ""
+        notes: str = "",
+        grade: Optional[str] = "B",
+        confluence_score: Optional[float] = 0.0,
+        setup_key: Optional[str] = "15M_COILING_SQUEEZE"
     ) -> Optional[Dict[str, Any]]:
         """Opens a new simulated perpetual position with dynamic trailing SL."""
         # Strict Permanent Blacklist: BTC trading permanently blocked
@@ -178,7 +199,10 @@ class CryptoPaperEngine:
             "breakeven_latched": 0,
             "entry_time_ist": get_ist_iso(),
             "entry_time_utc": get_utc_iso(),
-            "notes": notes
+            "notes": notes,
+            "grade": grade or "B",
+            "confluence_score": float(confluence_score or 0.0),
+            "setup_key": setup_key or "15M_COILING_SQUEEZE"
         }
 
         with self._get_connection() as conn:
@@ -189,15 +213,16 @@ class CryptoPaperEngine:
                     quantity, contract_value, notional_usd, notional_inr,
                     initial_sl, current_sl, unrealized_pnl_usd, unrealized_pnl_inr,
                     unrealized_pnl_pct, highest_favorable_price, breakeven_latched,
-                    entry_time_ist, entry_time_utc, notes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    entry_time_ist, entry_time_utc, notes, grade, confluence_score, setup_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_record["position_id"], pos_record["symbol"], pos_record["action"],
                 pos_record["entry_price"], pos_record["current_price"], pos_record["quantity"],
                 pos_record["contract_value"], pos_record["notional_usd"], pos_record["notional_inr"],
                 pos_record["initial_sl"], pos_record["current_sl"], 0.0, 0.0, 0.0,
                 pos_record["highest_favorable_price"], pos_record["breakeven_latched"],
-                pos_record["entry_time_ist"], pos_record["entry_time_utc"], pos_record["notes"]
+                pos_record["entry_time_ist"], pos_record["entry_time_utc"], pos_record["notes"],
+                pos_record["grade"], pos_record["confluence_score"], pos_record["setup_key"]
             ))
             conn.commit()
 
@@ -372,7 +397,10 @@ class CryptoPaperEngine:
             "entry_time_ist": pos["entry_time_ist"],
             "exit_time_ist": get_ist_iso(),
             "exit_time_utc": get_utc_iso(),
-            "notes": pos.get("notes", "")
+            "notes": pos.get("notes", ""),
+            "grade": pos.get("grade", "B"),
+            "confluence_score": pos.get("confluence_score", 0.0),
+            "setup_key": pos.get("setup_key", "15M_COILING_SQUEEZE")
         }
 
         try:
@@ -384,15 +412,16 @@ class CryptoPaperEngine:
                         trade_id, position_id, symbol, action, entry_price,
                         exit_price, quantity, contract_value, notional_usd, notional_inr,
                         pnl_usd, pnl_inr, pnl_pct, exit_reason, entry_time_ist,
-                        exit_time_ist, exit_time_utc, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        exit_time_ist, exit_time_utc, notes, grade, confluence_score, setup_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     closed_record["trade_id"], closed_record["position_id"], closed_record["symbol"],
                     closed_record["action"], closed_record["entry_price"], closed_record["exit_price"],
                     closed_record["quantity"], closed_record["contract_value"], closed_record["notional_usd"],
                     closed_record["notional_inr"], closed_record["pnl_usd"], closed_record["pnl_inr"],
                     closed_record["pnl_pct"], closed_record["exit_reason"], closed_record["entry_time_ist"],
-                    closed_record["exit_time_ist"], closed_record["exit_time_utc"], closed_record["notes"]
+                    closed_record["exit_time_ist"], closed_record["exit_time_utc"], closed_record["notes"],
+                    closed_record["grade"], closed_record["confluence_score"], closed_record["setup_key"]
                 ))
                 conn.commit()
             logger.info(f"Closed {pos['symbol']} paper position {pos_id} @ ${exit_price:,.2f} ({exit_reason}). PnL: Rs {pnl_inr:+,.2f} (${pnl_usd:+,.2f}) [{pnl_pct:+.2f}%]")

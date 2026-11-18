@@ -95,6 +95,25 @@ class CryptoScheduler:
             results.append(analysis)
 
             score = analysis.get("confluence_score", 0)
+            vol_ratio = float(analysis.get("vol_ratio", 1.0))
+            entry = analysis.get("entry_price")
+            sl = analysis.get("stop_loss")
+            sl_pct = (abs(entry - sl) / entry * 100.0) if entry and sl and entry > 0 else 0.0
+            is_wide_sl = sl_pct > 3.0
+            mtf_aligned = bool(analysis.get("five_min_aligned", False))
+
+            # Dynamic Grade computation for Crypto:
+            # Grade A: Exceptional confluence (>=85), volume surge (>=1.2x), 5m MTF alignment, tight SL
+            # Grade C: Sub-optimal score (<70), wide SL (>3.0%), or weak breakout volume (<0.9x)
+            # Grade B: Standard valid coiling squeeze (70-84 pts)
+            if score >= 85 and vol_ratio >= 1.2 and mtf_aligned and not is_wide_sl:
+                dyn_grade = "A"
+            elif score < 70 or is_wide_sl or vol_ratio < 0.9:
+                dyn_grade = "C"
+            else:
+                dyn_grade = "B"
+            analysis["grade"] = dyn_grade
+
             if score > max_score:
                 max_score = score
                 top_trade = analysis
@@ -102,12 +121,10 @@ class CryptoScheduler:
             # Automated Paper Trade Ingestion & NTFY Alerting
             if score >= CONFLUENCE_TRIGGER_THRESHOLD and analysis.get("action"):
                 action = analysis["action"]
-                entry = analysis.get("entry_price")
-                sl = analysis.get("stop_loss")
                 t1 = analysis.get("target_1")
                 t2 = analysis.get("target_2")
 
-                # Open paper position
+                # Open paper position with dynamic grade
                 opened = self.paper.open_position(
                     symbol=sym,
                     action=action,
@@ -117,18 +134,25 @@ class CryptoScheduler:
                     target_2=t2,
                     contract_value=c.get("contract_value", 1.0),
                     default_qty=c.get("default_lot", 1),
-                    notes=f"Confluence {score} pts | {analysis.get('reason', '')}"
+                    notes=f"Confluence {score} pts | {analysis.get('reason', '')}",
+                    grade=dyn_grade,
+                    confluence_score=score,
+                    setup_key="15M_COILING_SQUEEZE"
                 )
 
-                # Send NTFY alert for Delta trade opened
+                # Send NTFY alert for Delta trade opened (Suppress if Grade C)
                 now_ts = time.time()
                 last_alert = self.notified_triggers.get(sym, 0.0)
                 if opened:
-                    self.ntfy.send_order_opened_alert(opened)
+                    if dyn_grade != "C":
+                        self.ntfy.send_order_opened_alert(opened)
+                    else:
+                        logger.info(f"Crypto alert suppressed for {sym} due to Grade C")
                     self.notified_triggers[sym] = now_ts
                 elif (now_ts - last_alert) >= 1800:
+                    if dyn_grade != "C":
+                        self.ntfy.send_breakout_alert(analysis)
                     self.notified_triggers[sym] = now_ts
-                    self.ntfy.send_breakout_alert(analysis)
 
         # Update paper trailing stop losses and check SL hits (No target cap)
         closed_trades, trailed_trades = self.paper.update_positions(live_prices)

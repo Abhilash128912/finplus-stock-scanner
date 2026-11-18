@@ -1237,8 +1237,8 @@ async def get_paper_status():
                     "pnl_pct": float(cp.get("unrealized_pnl_pct", 0.0)),
                     "stage": "TRAILING SL" if cp.get("breakeven_latched") else "INITIAL SL",
                     "status": "OPEN",
-                    "grade": "A",
-                    "setup_key": "15M_COILING_SQUEEZE",
+                    "grade": cp.get("grade") or "B",
+                    "setup_key": cp.get("setup_key", "15M_COILING_SQUEEZE"),
                     "notes": cp.get("notes", "Delta 15m Squeeze Breakout"),
                     "opened_at_utc": cp.get("entry_time_utc", ""),
                     "entry_time_ist": cp.get("entry_time_ist", ""),
@@ -1247,8 +1247,8 @@ async def get_paper_status():
                     "profit_locked_r": 0.0,
                     "stop_dist_pct": stop_dist,
                     "rupees_at_risk": risk_rs,
-                    "setup_win_pct": 75.0,
-                    "setup_total_trades": 12
+                    "setup_win_pct": c_dict.get("win_rate_pct", 0.0),
+                    "setup_total_trades": c_dict.get("total_trades_count", 0)
                 }
                 res["active_positions"].append(pos_item)
 
@@ -1276,8 +1276,8 @@ async def get_paper_status():
                     "closed_at_utc": cc.get("exit_time_utc"),
                     "notes": cc.get("notes"),
                     "tags": "CRYPTO,PERPETUAL",
-                    "setup_key": "15M_COILING_SQUEEZE",
-                    "grade": "A",
+                    "setup_key": cc.get("setup_key", "15M_COILING_SQUEEZE"),
+                    "grade": cc.get("grade") or "B",
                     "taken": cc.get("taken", 0),
                     "is_crypto": 1
                 })

@@ -12,7 +12,7 @@ def test_contracts_loaded():
     contracts = load_contracts()
     assert len(contracts) >= 5
     symbols = [c["symbol"] for c in contracts]
-    assert "BTCUSD" in symbols
+    assert "ETHUSD" in symbols
     assert "SOLUSD" in symbols
     assert "OILUSD" in symbols
 
@@ -29,7 +29,7 @@ def test_stop_loss_widened_to_safe_distance():
     candles_15m[-1]["volume"] = 500.0
 
     res = engine.analyze_symbol(
-        symbol="BTCUSD",
+        symbol="ETHUSD",
         candles_15m=candles_15m,
         candles_5m=candles_15m[-20:],
         ltp_override=64500.0
@@ -46,28 +46,28 @@ def test_stop_loss_widened_to_safe_distance():
 def test_paper_engine_breakeven_and_trailing():
     paper = CryptoPaperEngine(db_path=":memory:")
     pos = paper.open_position(
-        symbol="BTCUSD",
+        symbol="ETHUSD",
         action="BUY_LONG",
-        entry_price=60000.0,
-        stop_loss=58920.0, # 1.8% SL
-        contract_value=0.001,
+        entry_price=3000.0,
+        stop_loss=2946.0, # 1.8% SL
+        contract_value=0.01,
         default_qty=10
     )
     assert pos is not None
-    assert pos["current_sl"] == 58920.0
+    assert pos["current_sl"] == 2946.0
     assert pos["breakeven_latched"] == 0
 
     # +0.80% gain: Should NOT prematurely latch breakeven (previously did at +0.50%)
-    closed, trailed = paper.update_positions({"BTCUSD": 60480.0})
+    closed, trailed = paper.update_positions({"ETHUSD": 3024.0})
     assert paper.active_positions[pos["position_id"]]["breakeven_latched"] == 0
-    assert paper.active_positions[pos["position_id"]]["current_sl"] == 58920.0
+    assert paper.active_positions[pos["position_id"]]["current_sl"] == 2946.0
 
     # +1.60% gain: Should now latch breakeven
-    closed, trailed = paper.update_positions({"BTCUSD": 60960.0})
+    closed, trailed = paper.update_positions({"ETHUSD": 3048.0})
     assert paper.active_positions[pos["position_id"]]["breakeven_latched"] == 1
-    assert paper.active_positions[pos["position_id"]]["current_sl"] == 60000.0
+    assert paper.active_positions[pos["position_id"]]["current_sl"] == 3000.0
 
     # +3.00% gain: High-water trailing should advance to 2.0% behind peak
-    closed, trailed = paper.update_positions({"BTCUSD": 61800.0})
-    expected_trail = round(61800.0 * 0.980, 4)
+    closed, trailed = paper.update_positions({"ETHUSD": 3090.0})
+    expected_trail = round(3090.0 * 0.980, 4)
     assert paper.active_positions[pos["position_id"]]["current_sl"] == expected_trail
