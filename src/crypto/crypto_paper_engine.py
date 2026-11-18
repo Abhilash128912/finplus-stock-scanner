@@ -4,6 +4,7 @@ Currency: Indian Rupee (₹ INR)
 Exit Strategy: Pure Dynamic Trailing Stop-Loss (No Arbitrary Target Caps)
 """
 
+import os
 import sqlite3
 import time
 from typing import Dict, Any, List, Optional, Tuple
@@ -19,6 +20,7 @@ class CryptoPaperEngine:
         self.usd_inr_rate = float(usd_inr_rate)
         self.virtual_capital_inr = float(VIRTUAL_STARTING_EQUITY_INR)
         self.active_positions: Dict[str, Dict[str, Any]] = {}
+        self.main_paper_tracker = None
         self._init_db()
         self._load_active_positions()
 
@@ -131,6 +133,16 @@ class CryptoPaperEngine:
         # Strict Permanent Blacklist: BTC trading permanently blocked
         if "BTC" in symbol.upper():
             logger.info(f"Position rejected: {symbol} is permanently blacklisted.")
+            return None
+
+        # Strict Maximum 30 Active Trades Ceiling
+        MAX_TOTAL_ACTIVE_POSITIONS = int(os.getenv("MAX_ACTIVE_POSITIONS", "30"))
+        main_open = 0
+        if hasattr(self, "main_paper_tracker") and self.main_paper_tracker:
+            main_open = sum(1 for p in self.main_paper_tracker.active_positions.values() if p.get("status") == "OPEN")
+        total_open = len(self.active_positions) + main_open
+        if total_open >= MAX_TOTAL_ACTIVE_POSITIONS:
+            logger.info(f"Crypto Entry Blocked for {symbol}: Active positions limit reached ({total_open}/{MAX_TOTAL_ACTIVE_POSITIONS} Max).")
             return None
 
         pos_id = f"POS_{symbol}_{action}_{int(time.time())}"

@@ -327,28 +327,56 @@ class ShortlistEngine:
         - If market is in Bearish Breakdown + Downtrend: Suggests ONLY the Put Strike.
         - If Inside Range or Choppy/Vetoed: Suggests ZERO strikes with HOLD CASH.
         """
+        regime_ctx = regime or {}
+        last_price = 0.0
+        if default_sym == "NIFTY":
+            last_price = float(regime_ctx.get("metrics", {}).get("nifty_spot") or (item.get("last_price", 0.0) if item else 0.0))
+        elif default_sym == "SENSEX":
+            sx_spot = float(regime_ctx.get("metrics", {}).get("sensex_spot") or 0.0)
+            if sx_spot > 50000 and abs(sx_spot - 82300.0) > 0.01:
+                last_price = sx_spot
+            else:
+                from src.utils.sensex_feed import get_live_sensex_spot
+                live_sx, _ = get_live_sensex_spot()
+                last_price = live_sx if live_sx > 50000 else (item.get("last_price", 0.0) if item else 0.0)
+        elif default_sym in ("MIDCPNIFTY", "MIDCAP"):
+            mid_spot = float(regime_ctx.get("metrics", {}).get("midcap_spot") or 0.0)
+            if mid_spot > 5000:
+                last_price = mid_spot
+            else:
+                last_price = item.get("last_price", 0.0) if item else 0.0
+                if last_price <= 0.0:
+                    try:
+                        import requests
+                        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/NIFTY_MID_SELECT.NS?interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=2.0)
+                        if r.status_code == 200:
+                            m_p = float(r.json()["chart"]["result"][0]["meta"]["regularMarketPrice"] or 0.0)
+                            if m_p > 5000:
+                                last_price = round(m_p, 2)
+                    except Exception:
+                        pass
+        else:
+            last_price = item.get("last_price", 0.0) if item else 0.0
+
         if not item:
+            strike_step = default_step
+            atm_strike = int(round(last_price / strike_step) * strike_step) if last_price > 0 else 0
             return {
                 "symbol": default_sym,
                 "name": default_sym,
                 "lot_size": default_lot,
-                "last_price": 0.0,
+                "last_price": last_price,
                 "pct_change_pdc": 0.0,
-                "status": "INITIALIZING",
+                "status": "MONITORING" if last_price > 0 else "INITIALIZING",
                 "recommended_strike": None,
                 "call_strike": None,
                 "put_strike": None,
                 "trade_side": "NONE_HOLD_CASH",
                 "action_badge": "HOLD CASH / STANDBY",
-                "directive": "Downloading 15m candle history...",
+                "directive": f"Tracking live spot (₹{last_price:,.2f}). No breakout confirmed. Zero options recommended." if last_price > 0 else "Downloading 15m candle history...",
                 "is_actionable": False
             }
             
-        regime_ctx = regime or {}
-        if default_sym == "NIFTY" and regime_ctx.get("metrics", {}).get("nifty_spot"):
-            last_price = float(regime_ctx.get("metrics", {}).get("nifty_spot"))
-        else:
-            last_price = item.get("last_price", 0.0)
         strike_step = item.get("strike_step", default_step)
         atm_strike = int(round(last_price / strike_step) * strike_step) if last_price > 0 else 0
         

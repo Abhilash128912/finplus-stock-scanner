@@ -174,6 +174,21 @@ class CryptoScheduler:
                     tt["breakeven_alert_sent"] = 1
                     self.ntfy.send_breakeven_trailed_alert(tt)
 
+        # Enforce hard 30-position ceiling across both crypto and equities
+        max_allowed = int(os.getenv("MAX_ACTIVE_POSITIONS", "30"))
+        main_open = 0
+        if hasattr(self.paper, "main_paper_tracker") and self.paper.main_paper_tracker:
+            main_open = sum(1 for p in self.paper.main_paper_tracker.active_positions.values() if p.get("status") == "OPEN")
+        tot = len(self.paper.active_positions) + main_open
+        if tot > max_allowed and len(self.paper.active_positions) > 0:
+            excess = tot - max_allowed
+            open_sorted = sorted(self.paper.active_positions.values(), key=lambda x: x.get("entry_time_ist", ""))
+            for p in open_sorted[:excess]:
+                curr_p = live_prices.get(p["symbol"], p.get("current_price", p["entry_price"]))
+                closed = self.paper.close_position(p["position_id"], curr_p, "MAX_CONCURRENT_LIMIT_SQUAREOFF")
+                if closed:
+                    self.ntfy.send_trade_closed_alert(closed)
+
         return self.paper.get_status_dict()
 
     async def _scan_loop(self):

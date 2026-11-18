@@ -79,8 +79,16 @@ class LivePaperTracker:
             logger.warning(f"Failed to initialize IndstocksQuoteProvider: {q_init_err}")
             self.option_quote_provider = None
         self._last_tick_log_time: Dict[str, float] = {}
+        self.crypto_engine = None
         self._init_db()
         self._load_open_positions()
+
+    def get_total_open_count(self) -> int:
+        main_open = sum(1 for p in self.active_positions.values() if p.get("status") == "OPEN")
+        crypto_open = 0
+        if hasattr(self, "crypto_engine") and self.crypto_engine:
+            crypto_open = len(getattr(self.crypto_engine, "active_positions", {}))
+        return main_open + crypto_open
 
     def is_market_open_for_sector(self, sector: str, now_ist: Optional[datetime.datetime] = None) -> Tuple[bool, str]:
         """
@@ -442,7 +450,7 @@ class LivePaperTracker:
 
         # Strict Maximum 30 Active Trades Ceiling
         MAX_TOTAL_ACTIVE_POSITIONS = int(os.getenv("MAX_ACTIVE_POSITIONS", "30"))
-        open_count = sum(1 for p in self.active_positions.values() if p.get("status") == "OPEN")
+        open_count = self.get_total_open_count()
         if open_count >= MAX_TOTAL_ACTIVE_POSITIONS:
             logger.info(f"Entry Blocked for {symbol}: Active positions limit reached ({open_count}/{MAX_TOTAL_ACTIVE_POSITIONS} Max).")
             return None
@@ -748,7 +756,9 @@ class LivePaperTracker:
         sx = shortlist.get("sensex_radar", {})
         if sx.get("is_actionable") and sx.get("recommended_strike"):
             sx_strike = sx["recommended_strike"]
-            sx_ltp = float(sx.get("last_price", 82300.0))
+            from src.utils.sensex_feed import get_live_sensex_spot
+            live_sx, _ = get_live_sensex_spot()
+            sx_ltp = float(sx.get("last_price") or live_sx or 82200.0)
             lot = int(sx.get("lot_size", 20))
             self.open_position(
                 source_app="APP_02_STOCK_SCANNER",
@@ -767,7 +777,7 @@ class LivePaperTracker:
         if nf.get("is_actionable") and nf.get("recommended_strike"):
             nf_strike = nf["recommended_strike"]
             nf_ltp = float(nf.get("last_price", 25380.0))
-            lot = int(nf.get("lot_size", 25))
+            lot = int(nf.get("lot_size", 65))
             self.open_position(
                 source_app="APP_02_STOCK_SCANNER",
                 sector="NIFTY_ASYMMETRIC",
@@ -784,8 +794,8 @@ class LivePaperTracker:
         mid = shortlist.get("midcap_radar", {})
         if mid.get("is_actionable") and mid.get("recommended_strike"):
             mid_strike = mid["recommended_strike"]
-            mid_ltp = float(mid.get("last_price", 12500.0))
-            lot = int(mid.get("lot_size", 50))
+            mid_ltp = float(mid.get("last_price", 14125.0))
+            lot = int(mid.get("lot_size", 120))
             self.open_position(
                 source_app="APP_02_STOCK_SCANNER",
                 sector="MIDCAP_ASYMMETRIC",
@@ -1025,6 +1035,26 @@ class LivePaperTracker:
         # Equity cutoff 15:00 IST; MCX cutoff configurable (default 23:15 IST)
         mcx_cutoff_hour = int(os.getenv("MCX_CUTOFF_HOUR", "23"))
         mcx_cutoff_minute = int(os.getenv("MCX_CUTOFF_MINUTE", "15"))
+
+        # Enforce hard 30-position ceiling: If total active positions exceed 30, square off excess
+        max_allowed = int(os.getenv("MAX_ACTIVE_POSITIONS", "30"))
+        tot_cnt = self.get_total_open_count()
+        if tot_cnt > max_allowed:
+            excess = tot_cnt - max_allowed
+            logger.warning(f"Exceeded max active positions ({tot_cnt}/{max_allowed}). Pruning {excess} oldest positions...")
+            with self._lock:
+                open_sorted = sorted(
+                    [p for p in self.active_positions.values() if p.get("status") == "OPEN"],
+                    key=lambda x: x.get("entry_time_ist", "")
+                )
+                for p in open_sorted[:excess]:
+                    curr_p = p.get("current_price") or p.get("entry_price", 0.0)
+                    self.close_position(
+                        pos_id=p["position_id"],
+                        exit_price=curr_p,
+                        exit_reason="MAX_CONCURRENT_LIMIT_SQUAREOFF",
+                        notes="Automatic pruning to strictly enforce MAX 30 open trades ceiling"
+                    )
 
         equity_sectors = (
             "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",

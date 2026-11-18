@@ -344,20 +344,15 @@ class NTFYDispatcher:
         # Real-time Sensex resolution directly from metrics or live feed
         sx_spot = float(metrics.get("sensex_spot") or sx.get("last_price") or 0.0)
         sx_chg = float(metrics.get("sensex_change_pct", 0.0))
-        if sx_spot < 81500.0:
-            if sx.get("last_price") and float(sx.get("last_price")) > 81500.0:
-                sx_spot = float(sx.get("last_price"))
-                sx_chg = float(sx.get("pct_change_pdc", 0.0))
-            else:
-                try:
-                    from src.gateway.yfinance_gateway import YFinanceGateway
-                    fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
-                    if fp and fp > 80000:
-                        sx_spot = float(fp)
-                except Exception:
-                    pass
-        if sx_spot == 0.0:
-            sx_spot = 82300.0
+        if sx_spot <= 0.0 or abs(sx_spot - 82300.0) < 0.01:
+            try:
+                from src.utils.sensex_feed import get_live_sensex_spot
+                live_sx, live_chg = get_live_sensex_spot()
+                if live_sx > 50000:
+                    sx_spot = live_sx
+                    sx_chg = live_chg
+            except Exception:
+                pass
         
         reg_lbl = trend_info.get("label", "DOWNTREND (BEAR DISTRIBUTION)")
         adr_val = metrics.get('broad_adr', '0.49')
@@ -798,8 +793,17 @@ class NTFYDispatcher:
         
         nf_spot = float(metrics.get("nifty_spot", 25380.0))
         nf_chg = float(metrics.get("nifty_change_pct", 0.0))
-        sx_spot = float(metrics.get("sensex_spot") or 82300.0)
+        sx_spot = float(metrics.get("sensex_spot") or 0.0)
         sx_chg = float(metrics.get("sensex_change_pct", 0.0))
+        if sx_spot <= 0.0 or abs(sx_spot - 82300.0) < 0.01:
+            try:
+                from src.utils.sensex_feed import get_live_sensex_spot
+                live_sx, live_chg = get_live_sensex_spot()
+                if live_sx > 50000:
+                    sx_spot = live_sx
+                    sx_chg = live_chg
+            except Exception:
+                pass
         reg_lbl = trend_info.get("label", "CHOPPY / RANGEBOUND")
         adr_val = metrics.get("broad_adr", "0.77")
 

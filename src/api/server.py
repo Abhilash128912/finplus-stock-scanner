@@ -160,6 +160,9 @@ async def startup_event():
     try:
         from src.crypto.crypto_scheduler import CryptoScheduler
         scheduler.crypto_scheduler = CryptoScheduler()
+        if hasattr(scheduler, "paper_tracker") and scheduler.paper_tracker:
+            scheduler.paper_tracker.crypto_engine = scheduler.crypto_scheduler.paper
+            scheduler.crypto_scheduler.paper.main_paper_tracker = scheduler.paper_tracker
         asyncio.create_task(scheduler.crypto_scheduler.start())
         logger.info("Embedded Crypto Delta Radar started (24/7 background loop).")
     except Exception as e:
@@ -1057,16 +1060,17 @@ async def get_live_indices():
                 nf = d.get("nifty", {})
                 sx = d.get("sensex", {})
                 sx_spot_val = float(bm.get("sensex_spot") or sx.get("spot_price") or 0.0)
-                if sx_spot_val < 81500.0:
+                sx_chg_val = float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0))
+                # Intercept stale/hardcoded 82300 or invalid spot
+                if sx_spot_val <= 0.0 or abs(sx_spot_val - 82300.0) < 0.01:
                     try:
-                        from src.gateway.yfinance_gateway import YFinanceGateway
-                        fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
-                        if fp and fp > 80000:
-                            sx_spot_val = float(fp)
+                        from src.utils.sensex_feed import get_live_sensex_spot
+                        live_sx, live_chg = get_live_sensex_spot()
+                        if live_sx > 50000:
+                            sx_spot_val = live_sx
+                            sx_chg_val = live_chg
                     except Exception:
                         pass
-                if sx_spot_val == 0.0:
-                    sx_spot_val = 82300.0
 
                 return {
                     "status": "LIVE_SYNCED",
@@ -1075,7 +1079,7 @@ async def get_live_indices():
                     "nifty_spot": float(bm.get("nifty_spot") or nf.get("spot_price") or 25380.0),
                     "nifty_change_pct": float(bm.get("nifty_change_pct", 0.0) if bm.get("nifty_change_pct") is not None else nf.get("change_pct", 0.0)),
                     "sensex_spot": sx_spot_val,
-                    "sensex_change_pct": float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0)),
+                    "sensex_change_pct": sx_chg_val,
                     "market_regime": d.get("market_regime", {})
                 }
         except Exception:
@@ -1084,23 +1088,23 @@ async def get_live_indices():
     nf_item = scheduler.latest_shortlist.get("nifty_radar", {})
     sx_item = scheduler.latest_shortlist.get("sensex_radar", {})
     cached_sx = float(sx_item.get("last_price", 0.0))
-    if cached_sx < 81500.0:
+    cached_sx_chg = float(sx_item.get("pct_change_pdc", 0.0))
+    if cached_sx <= 0.0 or abs(cached_sx - 82300.0) < 0.01:
         try:
-            from src.gateway.yfinance_gateway import YFinanceGateway
-            fp = YFinanceGateway().get_fast_price("^BSESN", reason="FALLBACK_GUARD")
-            if fp and fp > 80000:
-                cached_sx = float(fp)
+            from src.utils.sensex_feed import get_live_sensex_spot
+            live_sx, live_chg = get_live_sensex_spot()
+            if live_sx > 50000:
+                cached_sx = live_sx
+                cached_sx_chg = live_chg
         except Exception:
             pass
-    if cached_sx == 0.0:
-        cached_sx = 82300.0
 
     return {
         "status": "CACHED_FALLBACK",
         "nifty_spot": float(nf_item.get("last_price", 25380.0)),
         "nifty_change_pct": float(nf_item.get("pct_change_pdc", 0.0)),
         "sensex_spot": cached_sx,
-        "sensex_change_pct": float(sx_item.get("pct_change_pdc", 0.0)),
+        "sensex_change_pct": cached_sx_chg,
     }
 
 @app.get("/api/shortlist")
