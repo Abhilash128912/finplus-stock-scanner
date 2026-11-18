@@ -112,8 +112,8 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
         self._active_ws = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
 
-        # Load daily instruments
-        self._ensure_instruments_loaded()
+        # Load daily instruments asynchronously in background thread so server boot is non-blocking
+        threading.Thread(target=self._ensure_instruments_loaded, daemon=True).start()
 
     def _get_auth_token(self, force_refresh: bool = False) -> str:
         """
