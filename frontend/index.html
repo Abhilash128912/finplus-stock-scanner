@@ -544,11 +544,14 @@
 
       // 1. SENSEX RADAR (SINGLE DIRECTION OR HOLD CASH)
       if (sx) {
-        document.getElementById('sensex-spot-val').textContent = '₹' + (sx.last_price ? sx.last_price.toLocaleString('en-IN') : '--');
-        const sxSign = sx.pct_change_pdc >= 0 ? '+' : '';
-        const sxColor = sx.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
-        document.getElementById('sensex-move-val').className = `text-xs mono font-bold ${sxColor}`;
-        document.getElementById('sensex-move-val').textContent = `${sxSign}${sx.pct_change_pdc}%`;
+        const currSx = document.getElementById('sensex-spot-val').textContent;
+        if (!currSx || currSx === 'Loading...' || currSx === '₹--') {
+          document.getElementById('sensex-spot-val').textContent = '₹' + (sx.last_price ? sx.last_price.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '--');
+          const sxSign = sx.pct_change_pdc >= 0 ? '+' : '';
+          const sxColor = sx.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
+          document.getElementById('sensex-move-val').className = `text-xs mono font-bold ${sxColor}`;
+          document.getElementById('sensex-move-val').textContent = `${sxSign}${sx.pct_change_pdc}%`;
+        }
         
         document.getElementById('sensex-rtop').textContent = `₹${sx.range_top || '--'}`;
         document.getElementById('sensex-rbot').textContent = `₹${sx.range_bottom || '--'}`;
@@ -579,11 +582,14 @@
 
       // 2. NIFTY RADAR (SINGLE DIRECTION OR HOLD CASH)
       if (nf) {
-        document.getElementById('nifty-spot-val').textContent = '₹' + (nf.last_price ? nf.last_price.toLocaleString('en-IN') : '--');
-        const nfSign = nf.pct_change_pdc >= 0 ? '+' : '';
-        const nfColor = nf.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
-        document.getElementById('nifty-move-val').className = `text-xs mono font-bold ${nfColor}`;
-        document.getElementById('nifty-move-val').textContent = `${nfSign}${nf.pct_change_pdc}%`;
+        const currNf = document.getElementById('nifty-spot-val').textContent;
+        if (!currNf || currNf === 'Loading...' || currNf === '₹--') {
+          document.getElementById('nifty-spot-val').textContent = '₹' + (nf.last_price ? nf.last_price.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '--');
+          const nfSign = nf.pct_change_pdc >= 0 ? '+' : '';
+          const nfColor = nf.pct_change_pdc >= 0 ? 'text-emerald-400' : 'text-rose-400';
+          document.getElementById('nifty-move-val').className = `text-xs mono font-bold ${nfColor}`;
+          document.getElementById('nifty-move-val').textContent = `${nfSign}${nf.pct_change_pdc}%`;
+        }
         
         document.getElementById('nifty-rtop').textContent = `₹${nf.range_top || '--'}`;
         document.getElementById('nifty-rbot').textContent = `₹${nf.range_bottom || '--'}`;
