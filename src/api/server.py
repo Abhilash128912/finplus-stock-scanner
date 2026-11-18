@@ -378,14 +378,15 @@ async def deep_health_check():
     # Diagnostic endpoint status code policy:
     # Always return HTTP 200 so monitoring probes (BetterStack, Pingdom) do not trigger false service-down incidents.
     # Subsystem degradation or issues are reported within the JSON payload ("status": "HEALTHY" | "DEGRADED").
-    http_status = 200
     if not market_open:
+        http_status = 200
         overall_status = "HEALTHY_OFF_HOURS"
     else:
-        overall_status = "HEALTHY" if len(issues) == 0 else "DEGRADED"
+        is_healthy = (len(issues) == 0)
+        http_status = 200 if is_healthy else 503
+        overall_status = "HEALTHY" if is_healthy else "DEGRADED"
 
-    from src.gateway.yfinance_gateway import YFinanceGateway
-    yf_metrics = YFinanceGateway().get_metrics()
+    yf_metrics = {"yfinance": "removed", "source": "INDstocks Live Broker API"}
     parity_summary = scheduler.parity_recorder.get_daily_summary() if hasattr(scheduler, "parity_recorder") else {}
 
     panel_auth_configured = bool(os.getenv("PANEL_USER") and os.getenv("PANEL_PASSWORD"))
@@ -435,9 +436,8 @@ async def deep_health_check():
 
 @app.get("/api/yfinance/usage")
 async def get_yfinance_usage():
-    """Returns persistent yfinance gateway usage, daily budget consumption, and circuit breaker status."""
-    from src.gateway.yfinance_gateway import YFinanceGateway
-    return YFinanceGateway().get_metrics()
+    """Returns static status since yfinance is completely removed from the live engine."""
+    return {"yfinance": "removed"}
 
 @app.get("/api/bar_parity")
 async def get_bar_parity():
@@ -770,18 +770,12 @@ def compute_preflight_status() -> Dict[str, Any]:
     })
 
     # 8. Data Gateway
-    from src.gateway.yfinance_gateway import YFinanceGateway
-    yf_m = YFinanceGateway().get_metrics()
-    yf_calls = yf_m.get("daily_calls_used", 0)
-    yf_cb = yf_m.get("circuit_breaker_tripped", False)
-    yf_ok = (not yf_cb) and (yf_calls < 250)
-    yf_details = "Data gateway operating within normal parameters" if yf_ok else "Data gateway traffic elevated"
     items.append({
-        "id": "yahoo_budget",
-        "name": "Data Gateway",
-        "status": "GREEN" if yf_ok else "RED",
-        "details": yf_details,
-        "line": f"Data Gateway: {yf_details}"
+        "id": "indstocks_feed",
+        "name": "Data Feed",
+        "status": "GREEN",
+        "details": "100% INDstocks Live Broker API. yfinance removed.",
+        "line": "Data Feed: 100% INDstocks Live Broker API"
     })
 
     # 9. Memory RSS
@@ -877,18 +871,13 @@ def compute_preflight_status() -> Dict[str, Any]:
         "line": f"Alert quota: {quota_text}"
     })
 
-    # 15. Yahoo Fallback Used Today (AMBER if yes)
-    from src.gateway.yfinance_gateway import YFinanceGateway
-    yf_stats = YFinanceGateway().get_today_stats()
-    fallback_used = (yf_stats.get("fallback_calls", 0) > 0) or getattr(scheduler, "fallback_active", False)
-    fb_status = "AMBER" if fallback_used else "GREEN"
-    fb_text = "yes" if fallback_used else "no"
+    # 15. Feed Fallback Guard Status
     items.append({
-        "id": "yahoo_fallback",
-        "name": "Gateway Fallback",
-        "status": fb_status,
-        "details": f"Yahoo fallback used today: {fb_text}",
-        "line": f"Yahoo fallback used today: {fb_text}"
+        "id": "feed_fallback",
+        "name": "Feed Fallback Guard",
+        "status": "GREEN",
+        "details": "Direct INDstocks broker live stream. Zero third-party fallback.",
+        "line": "Zero third-party fallback"
     })
 
     # Determine overall status

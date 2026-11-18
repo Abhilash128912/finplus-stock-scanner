@@ -1,0 +1,2 @@
+# Requirements for backtesting and historical data collection utilities
+yfinance>=0.2.36

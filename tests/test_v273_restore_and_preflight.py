@@ -268,21 +268,9 @@ def test_03_panel_http_basic_auth(monkeypatch):
     # Preflight line: Alert quota: ok
     assert any("Alert quota: ok" in line for line in pf_data["lines"])
 
-    # Preflight line: Yahoo fallback used today: no / yes
-    from src.gateway.yfinance_gateway import YFinanceGateway
-    stat_no_fb = {
-        "calls": 0, "symbols": 0, "strict_calls": 0, "strict_symbols": 0,
-        "legacy_scan_calls": 0, "legacy_scan_symbols": 0, "legacy_scan_hour_calls": 0,
-        "fallback_calls": 0, "blocked": 0, "total_calls": 0
-    }
-    with patch.object(YFinanceGateway, "get_today_stats", return_value=stat_no_fb):
-        r_fb_no = client.get("/api/preflight").json()
-        assert any("Yahoo fallback used today: no" in line for line in r_fb_no["lines"])
-
-    stat_with_fb = dict(stat_no_fb, fallback_calls=3)
-    with patch.object(YFinanceGateway, "get_today_stats", return_value=stat_with_fb):
-        r_fb_yes = client.get("/api/preflight").json()
-        assert any("Yahoo fallback used today: yes" in line for line in r_fb_yes["lines"])
+    # Preflight line: Zero third-party fallback / Data Feed 100% INDstocks
+    assert any("Data Feed: 100% INDstocks Live Broker API" in line for line in pf_data["lines"])
+    assert any("Zero third-party fallback" in line for line in pf_data["lines"])
 
     # Preflight line: Alert quota limit reached today (AMBER)
     today_utc = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")

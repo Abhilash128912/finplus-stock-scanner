@@ -1,8 +1,8 @@
 """
 FinPlus+ v2.5.4 End-to-End Acceptance Test Suite:
 1. 10 simulated scan cycles with healthy broker -> exactly 0 yfinance calls.
-2. Broker stale 4 minutes with an open position -> exactly one fallback call, tagged YF_FALLBACK, no new entry signal.
-3. Over budget -> blocked, scan continues on cache.
+2. Broker stale -> blocks directional entry signals.
+3. Backtest gateway tests (tools/backtest_only/yfinance_gateway.py).
 """
 
 import time
@@ -10,15 +10,15 @@ import pandas as pd
 from unittest.mock import patch, MagicMock
 from src.scheduler.scanner_scheduler import ScannerScheduler
 from src.feeds.market_data_feed import MarketDataFeed
-from src.gateway.yfinance_gateway import YFinanceGateway
+from tools.backtest_only.yfinance_gateway import YFinanceGateway
 from src.paper.live_paper_tracker import LivePaperTracker
 
 def test_10_scan_cycles_healthy_broker_zero_yfinance_calls(tmp_path):
     """TEST: 10 scan cycles with healthy broker -> 0 yfinance calls."""
     scheduler = ScannerScheduler()
     scheduler.paper_tracker = LivePaperTracker(db_path=str(tmp_path / "paper.db"))
-    scheduler.feed.legacy_yahoo_scan_path_enabled = False
-    # Mock market as open
+    
+    # Mock broker feed
     scheduler.indmoney_feed = MagicMock()
     scheduler.indmoney_feed.is_stale.return_value = False
     scheduler.indmoney_feed._last_fetch_time = time.time()
@@ -34,100 +34,49 @@ def test_10_scan_cycles_healthy_broker_zero_yfinance_calls(tmp_path):
         if t:
             scheduler.feed._cache[t] = {"df": dummy_df, "ts": time.time()}
 
-    yf_calls = 0
-    def mock_gw_download(*args, **kwargs):
-        nonlocal yf_calls
-        yf_calls += 1
-        return dummy_df
-
     sample_universe = scheduler.feed.get_all_universe_items()[:10]
     with patch.object(scheduler.feed, "get_all_universe_items", return_value=sample_universe):
-        with patch.object(scheduler.feed.gateway, "download", side_effect=mock_gw_download):
-            with patch("src.scheduler.scanner_scheduler.is_market_open_ist", return_value=True):
-                with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=True):
-                    # Run 10 scan cycles
-                    for cycle in range(10):
-                        scheduler.scan_universe_now()
+        with patch("src.scheduler.scanner_scheduler.is_market_open_ist", return_value=True):
+            with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=True):
+                # Run 10 scan cycles
+                for cycle in range(10):
+                    scheduler.scan_universe_now()
 
-    assert yf_calls == 0, f"Expected 0 yfinance calls across 10 healthy scan cycles, but got {yf_calls}!"
+    # Confirms live path runs without gateway and never calls yfinance
+    assert not hasattr(scheduler.feed, "gateway"), "MarketDataFeed must not have gateway attribute!"
 
-def test_broker_stale_with_open_position_triggers_fallback_and_blocks_new_entry(tmp_path):
-    """TEST: Broker stale 4 minutes with open position -> fallback call, tagged YF_FALLBACK, no new entry signal."""
+def test_broker_stale_with_open_position_blocks_new_entry(tmp_path):
+    """TEST: Broker stale -> blocks new entry signals."""
     scheduler = ScannerScheduler()
     scheduler.indmoney_feed = MagicMock()
-    # 4 minutes stale = 240 seconds
     scheduler.indmoney_feed._last_fetch_time = time.time() - 240.0
     scheduler.is_stale_feed = True
-
-    # Register open position for RELIANCE
-    scheduler.paper_tracker.active_positions["pos_rel"] = {
-        "position_id": "pos_rel",
-        "symbol": "RELIANCE",
-        "sector": "INTRADAY_CASH",
-        "action": "BUY",
-        "is_option": False,
-        "entry_price": 2500.0,
-        "current_price": 2500.0,
-        "quantity": 10,
-        "risk_r": 10.0,
-        "initial_sl": 2480.0,
-        "trailing_sl": 2480.0,
-        "target": 2600.0,
-        "entry_time_ist": "10:00:00 AM IST",
-        "opened_at_utc": "2026-11-13T04:30:00Z",
-        "status": "OPEN",
-        "stage": "INITIAL (FIXED SL)",
-        "unrealized_pnl": 0.0,
-    }
 
     dummy_df = pd.DataFrame({
         "Open": [2500.0] * 150, "High": [2520.0] * 150, "Low": [2490.0] * 150, "Close": [2510.0] * 150, "Volume": [5000] * 150
     }, index=pd.date_range("2026-11-01 09:15", periods=150, freq="15min", tz="Asia/Kolkata"))
 
-    download_reasons = []
-    def mock_gw_download(*args, **kwargs):
-        reason = kwargs.get("reason", args[1] if len(args) > 1 else "UNKNOWN")
-        download_reasons.append(reason)
-        return dummy_df
-
-    scheduler.feed._cache.clear()
-
-    # Clear CandleStore for RELIANCE so fallback guard executes
-    with patch.object(scheduler.feed.candle_store, "get_candles_as_dataframe", return_value=pd.DataFrame()):
-        with patch.object(scheduler.feed.gateway, "download", side_effect=mock_gw_download):
-            df = scheduler.feed.fetch_15m_candles(
-                "RELIANCE.NS",
-                allow_fallback_guard=True,
-                broker_stale_seconds=240.0,
-                is_priority_symbol=True
-            )
-
-    assert "FALLBACK_GUARD" in download_reasons, f"Expected FALLBACK_GUARD call, got {download_reasons}"
-    assert df.attrs.get("data_source") == "YF_FALLBACK"
-
-    # Evaluate instrument on this YF_FALLBACK df
+    # Evaluate instrument when feed is stale
     item = {"symbol": "RELIANCE", "yf_ticker": "RELIANCE.NS", "category": "INTRADAY_CASH"}
-    eval_res = scheduler.detector.evaluate_instrument(df, item)
+    eval_res = scheduler.detector.evaluate_instrument(dummy_df, item)
 
-    # Check detector output blocking
-    if df.attrs.get("data_source") == "YF_FALLBACK":
-        eval_res["feed_status"] = "YF_FALLBACK"
+    if scheduler.is_stale_feed:
+        eval_res["feed_status"] = "STALE_FEED"
         eval_res["signal_direction"] = 0
-        eval_res["regime_confluence"] = "VETOED (YF_FALLBACK)"
+        eval_res["regime_confluence"] = "VETOED (STALE_FEED)"
 
-    assert eval_res["signal_direction"] == 0, "YF_FALLBACK data must not produce directional entry signal!"
-    assert eval_res["feed_status"] == "YF_FALLBACK"
+    assert eval_res["signal_direction"] == 0, "STALE_FEED data must not produce directional entry signal!"
+    assert eval_res["feed_status"] == "STALE_FEED"
     assert "VETOED" in eval_res["regime_confluence"]
 
-def test_over_budget_blocked_and_scan_continues_on_cache(tmp_path):
-    """TEST: Over budget -> blocked, scan continues on cache."""
+def test_backtest_gateway_budget_limit(tmp_path):
+    """TEST: Backtest tool gateway respects daily limits."""
     db_file = tmp_path / "test_gw_budget.db"
     gw = YFinanceGateway(db_path=str(db_file), max_calls_per_day=2)
     gw.max_calls_per_day = 2
 
-    # Simulate 2 calls
     dummy_df = pd.DataFrame({"Close": [100.0, 101.0]})
-    with patch("yfinance.download", return_value=dummy_df):
+    with patch("tools.backtest_only.yfinance_gateway.yf.download", return_value=dummy_df):
         res1 = gw.download("RELIANCE.NS", reason="HISTORY_BACKFILL")
         res2 = gw.download("TCS.NS", reason="HISTORY_BACKFILL")
         assert not res1.empty
@@ -140,38 +89,3 @@ def test_over_budget_blocked_and_scan_continues_on_cache(tmp_path):
     stats = gw.get_today_stats()
     assert stats["calls"] == 3
     assert stats["blocked"] == 1
-
-def test_legacy_scan_separate_budget_does_not_exhaust_strict_budget(tmp_path):
-    """TEST: LEGACY_SCAN calls use their own ceiling and never consume strict budget."""
-    db_file = tmp_path / "test_gw_legacy_budget.db"
-    gw = YFinanceGateway(db_path=str(db_file), max_calls_per_day=2, max_legacy_scan_calls_per_day=5)
-    gw.max_calls_per_day = 2
-    gw.max_legacy_scan_calls_per_day = 5
-
-    dummy_df = pd.DataFrame({"Close": [100.0, 101.0]})
-    with patch("yfinance.download", return_value=dummy_df):
-        # 3 LEGACY_SCAN calls (would have blown strict budget of 2)
-        res_l1 = gw.download("RELIANCE.NS", reason="LEGACY_SCAN")
-        res_l2 = gw.download("TCS.NS", reason="LEGACY_SCAN")
-        res_l3 = gw.download("INFY.NS", reason="LEGACY_SCAN")
-        assert not res_l1.empty
-        assert not res_l2.empty
-        assert not res_l3.empty
-
-        stats_mid = gw.get_today_stats()
-        assert stats_mid["legacy_scan_calls"] == 3
-        assert stats_mid["strict_calls"] == 0, "LEGACY_SCAN must not consume strict budget!"
-
-        # Strict budget should still have its full 2 calls available
-        res_s1 = gw.download("HDFCBANK.NS", reason="HISTORY_BACKFILL")
-        res_s2 = gw.download("ICICIBANK.NS", reason="HISTORY_BACKFILL")
-        assert not res_s1.empty
-        assert not res_s2.empty
-
-        # 3rd strict call should be blocked (strict budget = 2)
-        res_s3 = gw.download("SBIN.NS", reason="HISTORY_BACKFILL")
-        assert res_s3.empty, "3rd strict call should be blocked"
-
-        # But 4th LEGACY_SCAN call can still succeed (4 <= 5)
-        res_l4 = gw.download("WIPRO.NS", reason="LEGACY_SCAN")
-        assert not res_l4.empty, "Legacy scan must continue to function!"

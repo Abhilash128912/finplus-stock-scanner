@@ -291,17 +291,17 @@ class FirestoreBackend:
         except Exception as e:
             logger.warning(f"Firestore mirror watch pacing error: {e}")
 
-    def mirror_yfinance_usage(self, date_str: str, usage_data: Dict[str, Any]):
-        """Mirrors yfinance daily gateway usage counters."""
+    def mirror_feed_usage(self, date_str: str, usage_data: Dict[str, Any]):
+        """Mirrors daily feed usage counters."""
         if not self.can_write(is_critical=True):
             return
         try:
             col = self.get_collection_path("state")
-            doc_ref = self.client.document(f"{col}/yfinance_usage_{date_str}")
+            doc_ref = self.client.document(f"{col}/feed_usage_{date_str}")
             doc_ref.set(usage_data, merge=True)
             self.record_usage(writes=1)
         except Exception as e:
-            logger.warning(f"Firestore mirror yfinance usage error: {e}")
+            logger.warning(f"Firestore mirror feed usage error: {e}")
 
     # -------------------------------------------------------------
     # 2. CANDLE HISTORY: One Compact Gzipped Document Per Symbol

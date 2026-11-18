@@ -694,28 +694,18 @@ class NTFYDispatcher:
         Bar Parity evaluation (INDmoney vs Yahoo), and Firebase mirror status.
         """
         from datetime import datetime, timezone, timedelta
-        from src.gateway.yfinance_gateway import YFinanceGateway
         ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
         date_str = ist_now.strftime("%d-%b-%Y")
         
         if not force and ist_now.weekday() >= 5:
             return False
 
-        yf_metrics = YFinanceGateway().get_metrics()
-        strict_calls = yf_metrics.get("strict_calls_today", 0)
-        strict_budget = yf_metrics.get("max_calls_per_day", 250)
-        legacy_calls = yf_metrics.get("legacy_scan_calls_today", 0)
-        legacy_budget = yf_metrics.get("max_legacy_scan_calls_per_day", 3000)
-        legacy_active = "ACTIVE" if yf_metrics.get("legacy_scan_active") else "OFF"
-
         lines = [
             f"FinPlus Self-Report | {date_str} 15:45 IST",
             "System Status: Post-Market Wrap & Telemetry",
             f"Price Sanity Rejections Today: {rejected_ticks_total}",
-            f"Legacy Yahoo Scan Path: {legacy_active}",
-            f"yfinance Strict Calls (Backfill/Fallback): {strict_calls}/{strict_budget}",
-            f"yfinance Legacy Scan Calls: {legacy_calls}/{legacy_budget}",
-            f"yfinance Circuit Breaker: {'PAUSED' if yf_metrics.get('is_paused') else 'HEALTHY'}",
+            "Data Feed: 100% INDstocks Live Broker Feed",
+            "Third-Party Fallbacks: Zero (yfinance decommissioned)"
         ]
 
         # Bar Parity Summary (Phase 2C)

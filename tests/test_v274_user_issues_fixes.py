@@ -7,10 +7,15 @@ from src.feeds.fno_contract_master import FNOContractMaster
 
 
 def test_sensex_live_spot_no_82300_fallback():
-    """Verify Sensex spot resolves live and never falls back to 82,300."""
-    spot, chg = get_live_sensex_spot()
-    assert spot > 50000, f"Expected valid Sensex spot > 50000, got {spot}"
-    assert abs(spot - 82300.0) > 0.01, f"Sensex spot must not be hardcoded 82300.0, got {spot}"
+    """Verify Sensex spot resolves live from INDstocks and never falls back to 82,300."""
+    from unittest.mock import patch
+    from src.paper.indmoney_live_feed import INDMoneyLiveFeed
+    from src.utils.sensex_feed import get_sensex_spot_source
+    with patch.object(INDMoneyLiveFeed, "fetch_batch_quotes", return_value={"SENSEX": {"ltp": 82142.93, "change_pct": -0.47}}):
+        spot, chg = get_live_sensex_spot()
+        assert spot > 50000, f"Expected valid Sensex spot > 50000, got {spot}"
+        assert abs(spot - 82300.0) > 0.01, f"Sensex spot must not be hardcoded 82300.0, got {spot}"
+        assert get_sensex_spot_source() == "INDSTOCKS"
 
 
 def test_midcap_nifty_contract_master_uses_correct_underlying():

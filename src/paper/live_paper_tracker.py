@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
-from src.gateway.yfinance_gateway import YFinanceGateway
 
 from src.utils.time_and_logger import setup_logger, get_utc_iso, get_ist_time_str, get_ist_now
 from src.notifications.ntfy_dispatcher import safe_headers
@@ -72,6 +71,8 @@ class LivePaperTracker:
 
         self.is_running = False
         self.is_stale_feed = False
+        self.feed_status = "OK"
+        self._stale_alert_sent = False
         self.indmoney_feed = INDMoneyLiveFeed()
         try:
             self.option_quote_provider = IndstocksQuoteProvider() if IndstocksQuoteProvider else None
@@ -750,6 +751,12 @@ class LivePaperTracker:
         if not shortlist:
             return
 
+        # Spot and option prices must come from INDstocks only.
+        # If INDstocks fails or tick is older than 15s, set spot=None, status=STALE, skip signals
+        if getattr(self, "feed_status", "OK") == "STALE":
+            logger.warning("Skipping shortlist signals: INDstocks feed status is STALE. Signals skipped.")
+            return
+
         # Midday Freeze Gate (11:30 AM to 01:00 PM IST)
         # Suppress fresh trade ingestion during lunchtime theta decay & low-volume chop
         now_ist = get_ist_now()
@@ -995,11 +1002,27 @@ class LivePaperTracker:
             except Exception:
                 continue
 
+    def _send_stale_alert(self, symbol: str, tick_age: float):
+        """Sends one alert when INDstocks tick is older than 15s or broker fails."""
+        try:
+            from src.notifications.ntfy_dispatcher import NTFYDispatcher
+            dispatcher = NTFYDispatcher()
+            age_desc = f"{int(tick_age)}s" if tick_age < 999 else "unreachable"
+            msg = f"INDstocks quote for {symbol} is STALE ({age_desc} old > 15s limit). Status: STALE. Spot=None. Signals paused."
+            dispatcher.send_fallback_guard_alert("START", msg)
+        except Exception as e:
+            logger.debug(f"Notice sending stale feed alert: {e}")
+
     def _fetch_live_price(self, symbol: str, sector: str) -> Optional[float]:
-        """Fetches live market price for trailing stop and P&L calculation."""
+        """
+        Fetches live market price from INDstocks ONLY.
+        If INDstocks fails or the tick is older than 15s:
+        Sets spot=None, status=STALE, skips signals, and sends one NTFY alert.
+        Zero third-party fallback (zero external fallback).
+        """
         clean_sym = symbol.split(" ")[0].upper()
 
-        # 0. Check App 6 Crypto Radar first if sector is CRYPTO
+        # Handle Crypto Perpetuals (separate crypto radar microservice)
         if sector in ("CRYPTO", "CRYPTO_PERPETUALS") or any(k in clean_sym for k in ["BTC", "ETH", "SOL", "XRP", "PAXG", "OILUSD"]):
             try:
                 r = requests.get("http://127.0.0.1:8005/api/scan", timeout=1.5)
@@ -1012,110 +1035,20 @@ class LivePaperTracker:
             except Exception:
                 pass
 
-        # 0. Primary: Direct 0-Delay Official Broker Quote from INDmoney API
-        try:
-            ind_p = self.indmoney_feed.get_single_quote(clean_sym)
-            if ind_p and float(ind_p) > 0:
-                return round(float(ind_p), 2)
-        except Exception:
-            pass
+        # Equities, Indices, Commodities & Option Underlyings: INDstocks Live Broker Feed ONLY
+        lookup_sym = "MIDCPNIFTY" if ("MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym) else clean_sym
+        quote, tick_age = self.indmoney_feed.get_quote_with_age(lookup_sym)
 
-        # 1. Commodity Price resolution (Fallback)
-        if sector == "COMMODITIES" or any(k in clean_sym for k in ["CRUDE", "NATGAS", "GOLD", "SILVER"]):
-            # Try App #3 first
-            endpoints = [
-                "http://127.0.0.1:8002/api/scan",
-                "https://finplus-commodity-radar.onrender.com/api/scan"
-            ]
-            for ep in endpoints:
-                try:
-                    rc = requests.get(ep, timeout=1.5)
-                    if rc.status_code == 200:
-                        comm_dict = rc.json().get("commodities", {})
-                        for csym, cdata in comm_dict.items():
-                            if csym in clean_sym or clean_sym in csym:
-                                val = float(cdata.get("ltp", 0.0))
-                                if val > 0 and val != 8100.0:
-                                    return round(val, 2)
-                except Exception:
-                    continue
+        if quote and tick_age <= 15.0 and float(quote.get("ltp", 0.0)) > 0:
+            self.feed_status = "OK"
+            self._stale_alert_sent = False
+            return round(float(quote["ltp"]), 2)
 
-            # Real-Time Benchmark Calculation (WTI Crude, Henry Hub NatGas, COMEX Gold) via Gateway
-            try:
-                gw = YFinanceGateway()
-                usdinr = 88.50
-                usd_val = gw.get_fast_price("USDINR=X", reason="FALLBACK_GUARD")
-                if usd_val and float(usd_val) > 70:
-                    usdinr = float(usd_val)
-
-                if "CRUDE" in clean_sym:
-                    cl_val = gw.get_fast_price("CL=F", reason="FALLBACK_GUARD")
-                    if cl_val and float(cl_val) > 0:
-                        return round(float(cl_val) * usdinr, 2)
-                elif "NATGAS" in clean_sym:
-                    ng_val = gw.get_fast_price("NG=F", reason="FALLBACK_GUARD")
-                    if ng_val and float(ng_val) > 0:
-                        return round(float(ng_val) * usdinr, 2)
-                elif "GOLD" in clean_sym:
-                    gc_val = gw.get_fast_price("GC=F", reason="FALLBACK_GUARD")
-                    if gc_val and float(gc_val) > 0:
-                        return round((float(gc_val) * usdinr / 31.1034768) * 1.15, 2)
-            except Exception:
-                pass
-
-        # 2. PRIMARY: INDstocks Live Broker Feed for Index Spot (SENSEX, NIFTY, MIDCPNIFTY)
-        try:
-            lookup_sym = "MIDCPNIFTY" if ("MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym) else clean_sym
-            ind_res = self.indmoney_feed.fetch_batch_quotes([lookup_sym])
-            if lookup_sym in ind_res and float(ind_res[lookup_sym].get("ltp", 0.0)) > 0:
-                return round(float(ind_res[lookup_sym]["ltp"]), 2)
-        except Exception:
-            pass
-
-        # 3. SECONDARY: App 1 Macro Regime Spot
-        if "NIFTY" in clean_sym or "SENSEX" in clean_sym or "MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym:
-            endpoints = [
-                "http://127.0.0.1:8000/api/regime",
-                "https://finplus-index-breadth.onrender.com/api/regime"
-            ]
-            for ep in endpoints:
-                try:
-                    rc = requests.get(ep, timeout=1.5)
-                    if rc.status_code == 200:
-                        metrics = rc.json().get("metrics", {})
-                        if "SENSEX" in clean_sym:
-                            val = metrics.get("sensex_spot")
-                            if val and float(val) > 0 and abs(float(val) - 82300.0) > 0.01:
-                                return round(float(val), 2)
-                        elif clean_sym == "NIFTY":
-                            val = metrics.get("nifty_spot")
-                            if val and float(val) > 0:
-                                return round(float(val), 2)
-                except Exception:
-                    continue
-
-        index_map = {
-            "NIFTY": "^NSEI",
-            "SENSEX": "^BSESN",
-            "BANKNIFTY": "^NSEBANK",
-            "MIDCPNIFTY": "NIFTY_MID_SELECT.NS",
-            "MIDCAP": "NIFTY_MID_SELECT.NS",
-        }
-
-        # 4. EMERGENCY BACKUP ONLY: YFinanceGateway (used strictly if broker fails)
-        try:
-            gw = YFinanceGateway()
-            if sector in ("CRYPTO", "CRYPTO_PERPETUALS") or clean_sym.endswith("USD"):
-                base_crypto = clean_sym.replace("USD", "")
-                yf_ticker = f"{base_crypto}-USD"
-            else:
-                yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
-            lp = gw.get_fast_price(yf_ticker, reason="FALLBACK_GUARD")
-            if lp and float(lp) > 0:
-                return round(float(lp), 2)
-        except Exception:
-            pass
-
+        # INDstocks failed or tick is older than 15s -> STALE
+        self.feed_status = "STALE"
+        if not getattr(self, "_stale_alert_sent", False):
+            self._send_stale_alert(lookup_sym, tick_age)
+            self._stale_alert_sent = True
         return None
 
     def update_and_trail_positions(self):

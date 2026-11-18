@@ -250,7 +250,7 @@ class CandleStore:
         return chart_bars
 
     def get_candles_as_dataframe(self, symbol: str, timeframe: str = "15m", limit: int = 1000) -> pd.DataFrame:
-        """Retrieves candles formatted as a pandas DataFrame matching yfinance structure."""
+        """Retrieves candles formatted as a standard pandas DataFrame."""
         bars = self.get_candles(symbol, timeframe=timeframe, limit=limit)
         if not bars:
             return pd.DataFrame()

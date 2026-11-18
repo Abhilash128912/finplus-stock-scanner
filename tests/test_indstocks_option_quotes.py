@@ -171,7 +171,8 @@ def test_option_ticks_logging_and_exit_at_bid():
         tracker.option_quote_provider = mock_provider
 
         # Open trade
-        with patch.object(tracker, "is_market_open_for_sector", return_value=(True, "Open")):
+        with patch.object(tracker, "is_market_open_for_sector", return_value=(True, "Open")), \
+             patch.object(tracker.indmoney_feed, "get_quote_with_age", return_value=({"ltp": 25412.70}, 1.0)):
             pos = tracker.open_position(
                 source_app="TEST",
                 sector="INDEX_OPTIONS",

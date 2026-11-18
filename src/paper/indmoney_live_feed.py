@@ -243,6 +243,7 @@ class INDMoneyLiveFeed:
                                     "day_open": float(raw.get("day_open", ltp)),
                                     "prev_close": float(raw.get("prev_close", ltp)),
                                     "volume": int(raw.get("volume", 0)),
+                                    "fetch_time": time.time(),
                                     "source": "INDstocks Live Broker API"
                                 }
                 elif resp.status_code in (401, 403):
@@ -288,6 +289,7 @@ class INDMoneyLiveFeed:
                                             "day_open": float(raw.get("day_open", ltp)),
                                             "prev_close": float(raw.get("prev_close", ltp)),
                                             "volume": int(raw.get("volume", 0)),
+                                            "fetch_time": time.time(),
                                             "source": "INDstocks Live Broker API"
                                         }
                             continue
@@ -315,9 +317,43 @@ class INDMoneyLiveFeed:
 
     def get_single_quote(self, symbol: str) -> Optional[float]:
         """Returns live LTP for a single symbol from INDmoney, or None if unavailable."""
-        clean = symbol.split(" ")[0].upper()
-        quotes = self.fetch_batch_quotes([clean])
-        item = quotes.get(clean)
-        if item:
-            return item.get("ltp")
+        quote, age = self.get_quote_with_age(symbol)
+        if quote and age <= 15.0:
+            return quote.get("ltp")
         return None
+
+    def get_quote_with_age(self, symbol: str) -> Tuple[Optional[Dict[str, Any]], float]:
+        """
+        Returns (quote_dict, tick_age_seconds) for a symbol from official INDstocks broker API.
+        Enforces strict index alias resolution.
+        """
+        clean = symbol.split(" ")[0].upper()
+        if "MIDCAP" in clean or "MIDCPNIFTY" in clean:
+            lookup = "MIDCPNIFTY"
+        elif clean in ("NIFTY", "NIFTY 50", "^NSEI"):
+            lookup = "NIFTY"
+        elif clean in ("SENSEX", "^BSESN", "BSE SENSEX"):
+            lookup = "SENSEX"
+        elif clean in ("BANKNIFTY", "^NSEBANK", "NIFTY BANK"):
+            lookup = "BANKNIFTY"
+        else:
+            lookup = clean
+
+        now = time.time()
+        # 1. Check existing in-memory quote cache
+        if lookup in self._quote_cache:
+            item = self._quote_cache[lookup]
+            fetch_t = item.get("fetch_time", self._last_fetch_time)
+            age = max(0.0, now - fetch_t)
+            if age <= 15.0 and float(item.get("ltp", 0.0)) > 0:
+                return item, age
+
+        # 2. Fetch fresh quote from INDstocks broker API
+        quotes = self.fetch_batch_quotes([lookup], force=True)
+        item = quotes.get(lookup)
+        if item and float(item.get("ltp", 0.0)) > 0:
+            fetch_t = item.get("fetch_time", time.time())
+            age = max(0.0, now - fetch_t)
+            return item, age
+
+        return None, 999.0

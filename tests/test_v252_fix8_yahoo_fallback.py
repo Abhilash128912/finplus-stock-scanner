@@ -1,16 +1,12 @@
 """
-Acceptance Test for Item 8: Yahoo Fallback & Exponential Backoff
-- On failed/rate-limited chunk, retries up to 2 times with backoff (2s, 6s).
-- Falls back to CandleStore bars for those tickers.
-- Tags fallback tickers in scan log.
-- If >10% of tickers fall back in one cycle, triggers NTFY alert (priority, max once/hour).
+Acceptance Test for MarketDataFeed CandleStore Loading
+- Populates cache directly from CandleStore bars.
+- Zero external calls.
 """
 
 import sys
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import pandas as pd
 import pytest
 
@@ -22,7 +18,7 @@ from src.feeds.market_data_feed import MarketDataFeed
 from src.storage.candle_store import CandleStore
 
 
-def test_yahoo_fallback_on_429_retries_and_uses_candlestore(tmp_path):
+def test_market_data_feed_loads_from_candlestore(tmp_path):
     cs_db = tmp_path / "test_cs.db"
     cs = CandleStore(db_path=str(cs_db))
 
@@ -43,19 +39,9 @@ def test_yahoo_fallback_on_429_retries_and_uses_candlestore(tmp_path):
     feed.candle_store = cs
     feed._cache.clear()
 
-    retry_attempts = 0
-    def mock_download_with_429(*args, **kwargs):
-        nonlocal retry_attempts
-        retry_attempts += 1
-        raise Exception("HTTP 429 Too Many Requests (Rate Limited)")
+    downloaded = feed.prefetch_batch_15m_candles(["RELIANCE.NS"], chunk_size=1)
+    assert downloaded == 1
 
-    with patch.object(feed.gateway, "download", side_effect=mock_download_with_429):
-        with patch("src.feeds.market_data_feed.is_equity_market_open_ist", return_value=False):
-            downloaded = feed.prefetch_batch_15m_candles(["RELIANCE.NS"], chunk_size=1)
-
-    assert retry_attempts == 1, f"Expected gateway download attempt, got {retry_attempts}"
-
-    # CandleStore fallback must have populated the cache
+    # CandleStore must have populated the cache
     assert "RELIANCE.NS" in feed._cache
     assert len(feed._cache["RELIANCE.NS"]["df"]) == 2
-    assert "RELIANCE.NS" in feed.fallback_tickers_this_cycle

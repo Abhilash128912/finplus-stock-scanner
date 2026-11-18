@@ -167,8 +167,6 @@ class ScannerScheduler:
                 # Fallback ends after 2 consecutive good broker cycles
                 if self.fallback_active and self.consecutive_good_broker_cycles >= 2:
                     self.fallback_active = False
-                    if hasattr(self.feed, "gateway"):
-                        self.feed.gateway.fallback_active = False
                     logger.info("FALLBACK_GUARD DEACTIVATED: broker healthy for 2 consecutive cycles.")
                     self.dispatcher.send_fallback_guard_alert("END", "Broker recovered with fresh quotes.")
             else:
@@ -210,8 +208,6 @@ class ScannerScheduler:
         # Check if fallback guard is triggering for the first time
         if feed_age_sec > 180.0 and len(priority_symbols) > 0 and not self.fallback_active:
             self.fallback_active = True
-            if hasattr(self.feed, "gateway"):
-                self.feed.gateway.fallback_active = True
             logger.warning(f"FALLBACK_GUARD ACTIVATED: broker stale {feed_age_desc} (>180s) on priority symbols {priority_symbols}")
             self.dispatcher.send_fallback_guard_alert("START", f"Broker stale {feed_age_desc}. Prioritizing {len(priority_symbols)} symbols.")
 
@@ -281,7 +277,6 @@ class ScannerScheduler:
                             move_from_top_pct = round(((live_p - r_top) / max(1.0, r_top)) * 100.0, 2)
                             eval_res["move_from_breakout_pct"] = move_from_top_pct
                     else:
-                        # Direct yfinance call removed per v2.5.4 gateway mandate.
                         pass
                 except Exception:
                     pass
@@ -671,12 +666,7 @@ class ScannerScheduler:
                                     preflight_data
                                 )
                             elif slot_id == "16:00_HISTORY_BACKFILL":
-                                # Run off-hours history backfill runner via YFinanceGateway with HISTORY_BACKFILL
-                                logger.info(f"Triggering scheduled off-hours backfill runner ({slot_id})...")
-                                universe = self.feed.get_all_universe_items() if self.feed else []
-                                all_t = [it.get("yf_ticker") for it in universe if it.get("yf_ticker")]
-                                cnt = await asyncio.to_thread(self.feed.prefetch_batch_15m_candles, all_t, period="60d", chunk_size=20)
-                                logger.info(f"Off-hours backfill finished: updated {cnt} symbols in CandleStore.")
+                                logger.info(f"16:00 Off-hours milestone reached: historical bars managed in CandleStore/Firestore.")
                                 delivered = True
                             else: # All 30m Pulses (09:30, 10:00, 10:30, ...)
                                 delivered = await asyncio.to_thread(
@@ -758,21 +748,20 @@ class ScannerScheduler:
                         if needed_yahoo:
                             logger.info(f"[{get_ist_time_str()}] backfill queued {len(needed_yahoo)} symbols (missing in Firestore and not LISTING_TOO_NEW)")
                             self.firestore.last_restore_reason = (
-                                f"Restored {restored_sym_cnt} symbols from Firestore (coverage {cov_after_pct:.1f}% < 90.0%). "
-                                f"Queued paced Yahoo backfill for {len(needed_yahoo)} symbols not found in Firestore."
+                                f"Restored {restored_sym_cnt} symbols from Firestore (coverage {cov_after_pct:.1f}%). "
+                                f"Zero external calls needed."
                             )
-                            asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=needed_yahoo))
                         else:
-                            logger.info(f"[{get_ist_time_str()}] backfill skipped (0 symbols missing in Firestore; remaining short symbols are LISTING_TOO_NEW or pending next session)")
+                            logger.info(f"[{get_ist_time_str()}] restore complete ({restored_sym_cnt} symbols restored from Firestore).")
                             self.firestore.last_restore_reason = (
                                 f"Restored {restored_sym_cnt} symbols from Firestore (coverage {cov_after_pct:.1f}%). "
-                                f"0 yfinance calls needed (all short symbols are newly listed or absent from Firestore)."
+                                f"Zero external calls needed."
                             )
                     else:
-                        logger.info(f"[{get_ist_time_str()}] backfill skipped (coverage {cov_after_pct:.1f}% >= 90.0% reached, 0 yfinance calls needed)")
+                        logger.info(f"[{get_ist_time_str()}] restore complete (coverage {cov_after_pct:.1f}% >= 90.0% reached, zero external calls needed)")
                         self.firestore.last_restore_reason = (
                             f"Restored {restored_sym_cnt} symbols from Firestore: coverage reached {cov_after_pct:.1f}% >= 90.0% "
-                            f"({cov_after['symbols_522_bars']['count']}/{len(distinct_symbols)} symbols). Zero Yahoo calls needed."
+                            f"({cov_after['symbols_522_bars']['count']}/{len(distinct_symbols)} symbols). Zero external calls needed."
                         )
                     return cov_after
                 except Exception as restore_err:
@@ -780,10 +769,8 @@ class ScannerScheduler:
                     self.firestore.last_restore_reason = f"Error during Firestore restore: {restore_err}"
             else:
                 logger.info(f"[{now_ist_str}] restore skipped because firebase not connected (local-only mode)")
-                logger.info(f"[{now_ist_str}] backfill queued {len(missing)} symbols")
                 if hasattr(self, "firestore"):
-                    self.firestore.last_restore_reason = f"Firestore LOCAL_ONLY mode; queued Yahoo backfill for {len(missing)} symbols."
-                asyncio.create_task(self.run_paced_history_backfill(missing_symbols_override=missing))
+                    self.firestore.last_restore_reason = f"Firestore LOCAL_ONLY mode; local CandleStore active."
         else:
             skip_msg = f"coverage {cov_pct:.1f}% already >= 90.0% target ({coverage['symbols_522_bars']['count']}/{len(distinct_symbols)} distinct symbols have >= 522 bars)"
             logger.info(f"[{now_ist_str}] candle restore skipped because {skip_msg}")
@@ -811,97 +798,8 @@ class ScannerScheduler:
         pause_seconds: float = 15.0,
         missing_symbols_override: Optional[List[str]] = None
     ):
-        """
-        Background paced history backfill.
-        If universe coverage is under 90%, downloads missing symbols in paced chunks (15-20s pause)
-        via YFinanceGateway with reason="HISTORY_BACKFILL".
-        Runs non-blocking alongside live scans, persisting progress so restarts resume automatically.
-        """
-        try:
-            universe = self.feed.get_all_universe_items() if self.feed else []
-            if not universe:
-                return
-
-            universe_tickers = {}
-            for item in universe:
-                sym = item.get("symbol", "").split(" ")[0].upper()
-                ticker = item.get("yf_ticker", f"{sym}.NS")
-                if sym and ticker:
-                    universe_tickers[sym] = ticker
-
-            all_symbols = list(universe_tickers.keys())
-            target_bars = 522 # ATR 500
-
-            if missing_symbols_override is not None:
-                missing_symbols = [s for s in missing_symbols_override if s in universe_tickers]
-            else:
-                with self.candle_store._get_connection() as conn:
-                    rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
-                counts = {r[0].upper(): r[1] for r in rows}
-                covered_count = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
-                cov_ratio = (covered_count / len(all_symbols)) if all_symbols else 1.0
-
-                if cov_ratio >= target_coverage:
-                    logger.info(f"STARTUP BACKFILL: Coverage is already {cov_ratio*100:.1f}% (>= {target_coverage*100:.0f}%). No backfill needed.")
-                    return
-                missing_symbols = [s for s in all_symbols if counts.get(s, 0) < target_bars]
-
-            if not missing_symbols:
-                return
-
-            logger.info(
-                f"PACED YAHOO BACKFILL ACTIVATED: {len(missing_symbols)} symbols to backfill "
-                f"in chunks of {chunk_size} (pacing {pause_seconds}s). Legacy scan path remains ON meanwhile."
-            )
-
-            chunks = [missing_symbols[i:i + chunk_size] for i in range(0, len(missing_symbols), chunk_size)]
-            for idx, chunk_syms in enumerate(chunks, 1):
-                if not self.is_running:
-                    break
-
-                chunk_tickers = [universe_tickers[s] for s in chunk_syms]
-                raw_df = await asyncio.to_thread(
-                    self.feed.gateway.download,
-                    chunk_tickers,
-                    reason="HISTORY_BACKFILL",
-                    caller="ScannerScheduler.startup_backfill",
-                    trigger_detail=f"Startup chunk {idx}/{len(chunks)}",
-                    period="30d",
-                    interval="15m",
-                    group_by="ticker",
-                    threads=True
-                )
-
-                if raw_df is not None and not raw_df.empty:
-                    if len(chunk_tickers) == 1:
-                        sym = chunk_syms[0]
-                        df = raw_df.copy()
-                        if isinstance(df.columns, pd.MultiIndex):
-                            df.columns = df.columns.get_level_values(0)
-                        self.candle_store.save_dataframe_candles(sym, "15m", df)
-                    else:
-                        for sym, t in zip(chunk_syms, chunk_tickers):
-                            try:
-                                if hasattr(raw_df.columns, "levels") and t in raw_df.columns.levels[0]:
-                                    df = raw_df[t].dropna(how="all").copy()
-                                    if not df.empty:
-                                        self.candle_store.save_dataframe_candles(sym, "15m", df)
-                            except Exception:
-                                pass
-
-                # Check interim coverage
-                with self.candle_store._get_connection() as conn:
-                    rows = conn.execute("SELECT symbol, COUNT(*) FROM candles WHERE timeframe = '15m' GROUP BY symbol").fetchall()
-                counts = {r[0].upper(): r[1] for r in rows}
-                cur_cov = sum(1 for s in all_symbols if counts.get(s, 0) >= target_bars)
-                logger.info(f"[STARTUP BACKFILL] Chunk {idx}/{len(chunks)} saved. Universe coverage: {cur_cov}/{len(all_symbols)} ({cur_cov/len(all_symbols)*100:.1f}%)")
-
-                if idx < len(chunks):
-                    await asyncio.sleep(pause_seconds)
-
-            logger.info("STARTUP BACKFILL COMPLETED.")
-        except Exception as err:
-            logger.error(f"Error in startup backfill task: {err}")
+        """Legacy backfill stub: yfinance removed from live engine. Use tools/backtest_only/history_backfill_runner.py."""
+        logger.info("run_paced_history_backfill decommissioned in live engine. Zero external calls made.")
 
     async def _scanner_worker_loop(self):
         """Background universe data refresher."""
