@@ -117,29 +117,36 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
 
     def _get_auth_token(self, force_refresh: bool = False) -> str:
         """
-        Retrieves active INDstocks token from .env or finplus_core auth client.
+        Retrieves active INDstocks token from finplus_core auth client or .env.
         Strict rule: Never log the token.
         """
         token = None
         if not force_refresh:
-            token = os.getenv("INDSTOCKS_TOKEN") or os.getenv("INDMONEY_ACCESS_TOKEN")
-            
-        if force_refresh or not token:
             try:
                 from finplus_core.auth import INDMoneyAuthClient
                 auth_client = INDMoneyAuthClient()
-                if force_refresh:
-                    token = auth_client.generate_fresh_token()
-                else:
-                    token = auth_client.get_valid_token(auto_refresh=True)
+                token = auth_client.get_valid_token(auto_refresh=True)
             except Exception as e:
                 logger.warning(f"Could not load token via INDMoneyAuthClient: {e}")
+                token = os.getenv("INDSTOCKS_TOKEN") or os.getenv("INDMONEY_ACCESS_TOKEN")
+        else:
+            try:
+                from finplus_core.auth import INDMoneyAuthClient
+                auth_client = INDMoneyAuthClient()
+                token = auth_client.generate_fresh_token()
+            except Exception as e:
+                logger.warning(f"Could not force-generate fresh token via INDMoneyAuthClient: {e}")
+                token = os.getenv("INDSTOCKS_TOKEN") or os.getenv("INDMONEY_ACCESS_TOKEN")
 
         if not token:
             token = os.getenv("INDSTOCKS_TOKEN") or os.getenv("INDMONEY_ACCESS_TOKEN")
 
         if not token:
             raise ValueError("INDSTOCKS_TOKEN not found in environment or auth cache.")
+
+        # Keep process environment synchronized
+        os.environ["INDSTOCKS_TOKEN"] = token
+        os.environ["INDMONEY_ACCESS_TOKEN"] = token
         return token
 
     def _get_headers(self, force_refresh: bool = False) -> Dict[str, str]:

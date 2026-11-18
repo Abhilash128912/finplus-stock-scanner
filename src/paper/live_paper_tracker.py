@@ -571,7 +571,7 @@ class LivePaperTracker:
         sl_dist_pct = (abs(actual_entry_price - stop_loss) / actual_entry_price) if actual_entry_price > 0 else 0.0
         if is_option:
             opt_sl_pct = (abs(opt_entry_prem - opt_sl) / opt_entry_prem) if opt_entry_prem > 0 else 0.0
-            if opt_sl_pct > 0.30:
+            if round(opt_sl_pct, 4) > 0.35:
                 tag_list.append("WIDE_SL")
         else:
             if sl_dist_pct > 0.01:
@@ -1010,7 +1010,11 @@ class LivePaperTracker:
         # 4. EMERGENCY BACKUP ONLY: YFinanceGateway (used strictly if broker fails)
         try:
             gw = YFinanceGateway()
-            yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
+            if sector in ("CRYPTO", "CRYPTO_PERPETUALS") or clean_sym.endswith("USD"):
+                base_crypto = clean_sym.replace("USD", "")
+                yf_ticker = f"{base_crypto}-USD"
+            else:
+                yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
             lp = gw.get_fast_price(yf_ticker, reason="FALLBACK_GUARD")
             if lp and float(lp) > 0:
                 return round(float(lp), 2)

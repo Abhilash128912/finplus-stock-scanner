@@ -877,17 +877,22 @@ class NTFYDispatcher:
         """
         sym = pos.get("symbol", "")
         act = pos.get("action", "BUY")
+        is_opt = bool(pos.get("is_option"))
         entry = float(pos.get("entry_price", 0.0))
         sl = float(pos.get("initial_sl", 0.0))
         qty = int(pos.get("quantity", 1))
-        risk_rupees = round(abs(entry - sl) * qty, 0)
+        
+        entry_disp = float(pos.get("opt_entry_premium") or entry) if is_opt else entry
+        sl_disp = float(pos.get("opt_initial_sl") or sl) if is_opt else sl
+        risk_rupees = round(abs(entry_disp - sl_disp) * qty, 0)
         grade = pos.get("grade", "B")
         setup = pos.get("setup_key", "BREAKOUT")
 
         title = f"FinPlus Trigger | [{act}] {sym}"
+        entry_lbl = "Prem" if is_opt else "Entry"
         lines = [
             f"Symbol: {sym} ({act}) | Grade: {grade}",
-            f"Entry: Rs {entry:,.2f} | Initial SL: Rs {sl:,.2f}",
+            f"{entry_lbl}: Rs {entry_disp:,.2f} | Initial SL: Rs {sl_disp:,.2f}",
             f"Qty: {qty} | Risk: Rs {risk_rupees:,.0f}",
             f"Setup: {setup}",
             "No target: trail the stop",
