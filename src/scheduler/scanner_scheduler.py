@@ -178,6 +178,13 @@ class ScannerScheduler:
                     if hasattr(self, "paper_tracker") and self.paper_tracker:
                         self.paper_tracker.is_stale_feed = True
                     logger.warning(f"Feed data is {feed_age_desc} old (>60s). Feed marked STALE_FEED.")
+        elif not is_open:
+            # During market off-hours or evening session, ensure stale feed flag is clear
+            # so off-hours scans, MCX commodities, and crypto are never paralyzed
+            if self.is_stale_feed:
+                self.is_stale_feed = False
+                if hasattr(self, "paper_tracker") and self.paper_tracker:
+                    self.paper_tracker.is_stale_feed = False
 
         # Determine active open symbols and top-3 priority symbols for fallback guard
         open_symbols = set()

@@ -491,9 +491,13 @@ class LivePaperTracker:
                     logger.info(f"Entry Blocked for {symbol} ({sector}): Intraday cutoff after 15:15 IST.")
                     return None
 
-        # Block entry if price feed is marked STALE_FEED
-        if getattr(self, "is_stale_feed", False):
-            logger.warning(f"Entry Blocked for {symbol} ({sector}): Feed is flagged STALE_FEED.")
+        # Block entry if price feed is marked STALE_FEED (equity sectors only)
+        equity_sectors = (
+            "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",
+            "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"
+        )
+        if sector in equity_sectors and getattr(self, "is_stale_feed", False):
+            logger.warning(f"Entry Blocked for {symbol} ({sector}): Equity feed is flagged STALE_FEED.")
             return None
 
         clean_base = symbol.split(" ")[0].upper()
@@ -1121,10 +1125,7 @@ class LivePaperTracker:
 
         now_ist = self._get_now_ist()
 
-        # Block trailing evaluation if feed is flagged STALE_FEED
-        if getattr(self, "is_stale_feed", False):
-            logger.warning("Skipping paper trailing & exit checks: Feed is flagged STALE_FEED.")
-            return
+        is_equity_stale = getattr(self, "is_stale_feed", False)
 
         # Direct 0-delay batch pre-fetch from INDmoney broker API
         try:
@@ -1178,6 +1179,10 @@ class LivePaperTracker:
                 # Block price fetch and evaluation if market is closed for this sector
                 is_mkt_open, mkt_reason = self.is_market_open_for_sector(sector, now_ist)
                 if not is_mkt_open:
+                    continue
+
+                # Block evaluation of equity positions if equity broker feed is flagged STALE_FEED
+                if sector in equity_sectors and is_equity_stale:
                     continue
 
                 is_equity_eod = is_mkt_open and ((hour == 15 and minute >= 0) or (hour > 15))
@@ -1600,8 +1605,12 @@ class LivePaperTracker:
                 if not is_mkt_open:
                     logger.warning(f"Blocking automated close_position for {pos_id} ({exit_reason}): {mkt_reason}.")
                     return False
-                if getattr(self, "is_stale_feed", False):
-                    logger.warning(f"Blocking automated close_position for {pos_id} ({exit_reason}): Feed is flagged STALE_FEED.")
+                is_equity = sector in (
+                    "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",
+                    "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"
+                )
+                if is_equity and getattr(self, "is_stale_feed", False):
+                    logger.warning(f"Blocking automated close_position for {pos_id} ({exit_reason}): Equity feed is flagged STALE_FEED.")
                     return False
 
             # Remove from open list BEFORE DB insert under atomic lock
@@ -1700,11 +1709,44 @@ class LivePaperTracker:
             # Update setup statistics (Phase 6a)
             self.record_setup_trade_result(pos.get("setup_key"), is_win=(net_pnl > 0), r_result=r_multiple, net_pnl=net_pnl)
 
+            # Direct Google Sheets Sync via Webhook
+            try:
+                ist_str = pos.get("exit_time_ist", "") or self._get_now_ist().strftime("%Y-%m-%d %H:%M:%S")
+                parts = ist_str.split(" ")
+                date_part = parts[0]
+                time_part = parts[1] if len(parts) > 1 else ""
+                trade_record = {
+                    "date": date_part,
+                    "time": time_part,
+                    "sector": pos.get("sector", "EQUITY"),
+                    "trade_mode": "PAPER",
+                    "symbol": pos.get("symbol"),
+                    "action": pos.get("action"),
+                    "entry_price": float(opt_entry if is_opt else pos.get("entry_price", 0.0)),
+                    "exit_price": float(opt_exit if is_opt else exit_price),
+                    "quantity": qty,
+                    "gross_pnl": float(gross_pnl),
+                    "brokerage": 40.0,
+                    "stt_ctt": 5.0,
+                    "taxes": 0.0,
+                    "total_charges": float(charges),
+                    "net_pnl": float(net_pnl),
+                    "exit_reason": exit_reason,
+                    "notes": f"Paper trade: {pos.get('setup_key', '')} ({pos.get('grade', 'B')})"
+                }
+                self._push_trade_to_google_sheet(trade_record)
+            except Exception as gsheet_err:
+                logger.warning(f"Error preparing Google Sheet sync payload for {pos.get('symbol')}: {gsheet_err}")
+
             # Phase 6f: For TAKEN trades only, send NTFY exit alert with realized P&L.
             # Untaken trades receive zero exit alerts after the initial trigger.
             # Block exit alerts if market is closed or feed is stale (unless manual or forced)
             is_mkt_open, _ = self.is_market_open_for_sector(sector, now_ist)
-            feed_stale = getattr(self, "is_stale_feed", False)
+            is_equity = sector in (
+                "INTRADAY_CASH", "STOCK_OPTIONS", "INDEX_OPTIONS",
+                "SENSEX_ASYMMETRIC", "NIFTY_ASYMMETRIC", "MIDCAP_ASYMMETRIC"
+            )
+            feed_stale = getattr(self, "is_stale_feed", False) if is_equity else False
             if (is_mkt_open and not feed_stale) or is_manual or force:
                 if pos.get("taken") == 1:
                     try:
@@ -1887,6 +1929,32 @@ class LivePaperTracker:
             logger.info(f"NTFY Trade Closed push sent for {pos['symbol']} ({pnl_sign}Rs {net_pnl:,.2f})")
         except Exception as e:
             logger.warning(f"Failed sending trade closed alert to NTFY: {e}")
+
+    def _push_trade_to_google_sheet(self, trade_record: Dict[str, Any]):
+        """Pushes closed trade record to authorized Google Sheets Webhook in a background thread."""
+        webhook_url = os.getenv("GOOGLE_SHEET_WEBHOOK_URL", "https://script.google.com/macros/s/AKfycbxKk9PhyjyqB80cyTr_C_ndnppKy8q7a2xDM1JH_c4L7EM2dip7uU6-MHnXTVuto0v2uA/exec")
+        if not webhook_url:
+            return
+
+        def _do_push():
+            try:
+                now_ist = self._get_now_ist()
+                ist_str = now_ist.strftime("%Y-%m-%d %H:%M:%S")
+                payload = {
+                    "action": "LOG_TRADE",
+                    "timestamp_utc": get_utc_iso(),
+                    "ist_time": ist_str,
+                    "trade": trade_record
+                }
+                r = requests.post(webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+                if r.status_code in (200, 302):
+                    logger.info(f"Successfully synced trade {trade_record.get('symbol')} to Google Sheet.")
+                else:
+                    logger.warning(f"Google Sheet webhook returned {r.status_code}: {r.text[:100]}")
+            except Exception as e:
+                logger.warning(f"Failed to sync trade {trade_record.get('symbol')} to Google Sheet: {e}")
+
+        threading.Thread(target=_do_push, daemon=True).start()
 
     def record_setup_trade_result(self, setup_key: Optional[str], is_win: bool, r_result: float, net_pnl: float):
         """Records trade result into setup_stats and recomputes rolling 30 metrics and grade (Phase 6a)."""
