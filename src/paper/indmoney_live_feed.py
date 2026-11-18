@@ -38,8 +38,21 @@ except Exception as e:
     AUTH_CLIENT_AVAILABLE = False
 
 
-# Known Official Scrip Codes for Commodities & Active F&O Equities
+# Known Official Scrip Codes for Indices, Commodities & Active F&O Equities
 DEFAULT_SCRIP_REGISTRY = {
+    # Major Indices (Official BIDX / NIDX Security IDs on INDstocks)
+    "SENSEX": "BIDX_40000006",
+    "^BSESN": "BIDX_40000006",
+    "NIFTY": "NIDX_40000001",
+    "^NSEI": "NIDX_40000001",
+    "NIFTY 50": "NIDX_40000001",
+    "BANKNIFTY": "NIDX_40000003",
+    "MIDCPNIFTY": "NIDX_40000093",
+    "MIDCAP NIFTY": "NIDX_40000093",
+    "NIFTY_MID_SELECT.NS": "NIDX_40000093",
+    "INDIA VIX": "NIDX_40000107",
+    "^INDIAVIX": "NIDX_40000107",
+
     # MCX Commodities (Official Security IDs on INDstocks)
     "CRUDEOILM": "MCX_573423",
     "NATGASMINI": "MCX_574320",

@@ -329,34 +329,35 @@ class ShortlistEngine:
         """
         regime_ctx = regime or {}
         last_price = 0.0
-        if default_sym == "NIFTY":
-            last_price = float(regime_ctx.get("metrics", {}).get("nifty_spot") or (item.get("last_price", 0.0) if item else 0.0))
-        elif default_sym == "SENSEX":
-            sx_spot = float(regime_ctx.get("metrics", {}).get("sensex_spot") or 0.0)
-            if sx_spot > 50000 and abs(sx_spot - 82300.0) > 0.01:
-                last_price = sx_spot
-            else:
-                from src.utils.sensex_feed import get_live_sensex_spot
-                live_sx, _ = get_live_sensex_spot()
-                last_price = live_sx if live_sx > 50000 else (item.get("last_price", 0.0) if item else 0.0)
-        elif default_sym in ("MIDCPNIFTY", "MIDCAP"):
-            mid_spot = float(regime_ctx.get("metrics", {}).get("midcap_spot") or 0.0)
-            if mid_spot > 5000:
-                last_price = mid_spot
+
+        # PRIMARY: Query INDstocks Broker Feed directly for live index spot
+        try:
+            from src.paper.indmoney_live_feed import INDMoneyLiveFeed
+            ind_feed = INDMoneyLiveFeed()
+            lookup_sym = "MIDCPNIFTY" if default_sym in ("MIDCPNIFTY", "MIDCAP") else default_sym
+            ind_res = ind_feed.fetch_batch_quotes([lookup_sym])
+            if lookup_sym in ind_res and float(ind_res[lookup_sym].get("ltp", 0.0)) > 0:
+                last_price = round(float(ind_res[lookup_sym]["ltp"]), 2)
+        except Exception:
+            pass
+
+        # BACKUP: Use App 1 regime or Sensex fallback only if broker did not return spot
+        if last_price <= 0.0:
+            if default_sym == "NIFTY":
+                last_price = float(regime_ctx.get("metrics", {}).get("nifty_spot") or (item.get("last_price", 0.0) if item else 0.0))
+            elif default_sym == "SENSEX":
+                sx_spot = float(regime_ctx.get("metrics", {}).get("sensex_spot") or 0.0)
+                if sx_spot > 50000 and abs(sx_spot - 82300.0) > 0.01:
+                    last_price = sx_spot
+                else:
+                    from src.utils.sensex_feed import get_live_sensex_spot
+                    live_sx, _ = get_live_sensex_spot()
+                    last_price = live_sx if live_sx > 50000 else (item.get("last_price", 0.0) if item else 0.0)
+            elif default_sym in ("MIDCPNIFTY", "MIDCAP"):
+                mid_spot = float(regime_ctx.get("metrics", {}).get("midcap_spot") or 0.0)
+                last_price = mid_spot if mid_spot > 5000 else (item.get("last_price", 0.0) if item else 0.0)
             else:
                 last_price = item.get("last_price", 0.0) if item else 0.0
-                if last_price <= 0.0:
-                    try:
-                        import requests
-                        r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/NIFTY_MID_SELECT.NS?interval=1d", headers={"User-Agent": "Mozilla/5.0"}, timeout=2.0)
-                        if r.status_code == 200:
-                            m_p = float(r.json()["chart"]["result"][0]["meta"]["regularMarketPrice"] or 0.0)
-                            if m_p > 5000:
-                                last_price = round(m_p, 2)
-                    except Exception:
-                        pass
-        else:
-            last_price = item.get("last_price", 0.0) if item else 0.0
 
         if not item:
             strike_step = default_step

@@ -968,7 +968,16 @@ class LivePaperTracker:
             except Exception:
                 pass
 
-        # 2. Index Ticker resolution
+        # 2. PRIMARY: INDstocks Live Broker Feed for Index Spot (SENSEX, NIFTY, MIDCPNIFTY)
+        try:
+            lookup_sym = "MIDCPNIFTY" if ("MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym) else clean_sym
+            ind_res = self.indmoney_feed.fetch_batch_quotes([lookup_sym])
+            if lookup_sym in ind_res and float(ind_res[lookup_sym].get("ltp", 0.0)) > 0:
+                return round(float(ind_res[lookup_sym]["ltp"]), 2)
+        except Exception:
+            pass
+
+        # 3. SECONDARY: App 1 Macro Regime Spot
         if "NIFTY" in clean_sym or "SENSEX" in clean_sym or "MIDCAP" in clean_sym or "MIDCPNIFTY" in clean_sym:
             endpoints = [
                 "http://127.0.0.1:8000/api/regime",
@@ -981,7 +990,7 @@ class LivePaperTracker:
                         metrics = rc.json().get("metrics", {})
                         if "SENSEX" in clean_sym:
                             val = metrics.get("sensex_spot")
-                            if val and float(val) > 0:
+                            if val and float(val) > 0 and abs(float(val) - 82300.0) > 0.01:
                                 return round(float(val), 2)
                         elif clean_sym == "NIFTY":
                             val = metrics.get("nifty_spot")
@@ -998,7 +1007,7 @@ class LivePaperTracker:
             "MIDCAP": "NIFTY_MID_SELECT.NS",
         }
 
-        # 3. Fallback Live Quote via YFinanceGateway (only if broker failed)
+        # 4. EMERGENCY BACKUP ONLY: YFinanceGateway (used strictly if broker fails)
         try:
             gw = YFinanceGateway()
             yf_ticker = index_map.get(clean_sym, f"{clean_sym}.NS" if not clean_sym.startswith("^") else clean_sym)
