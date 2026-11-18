@@ -25,6 +25,11 @@ from src.notifications.ntfy_dispatcher import safe_headers
 from src.utils.indian_market_calendar import is_equity_market_open_ist, is_mcx_market_open_ist
 from src.paper.indmoney_live_feed import INDMoneyLiveFeed
 
+try:
+    from src.feeds.option_quote_provider import IndstocksQuoteProvider
+except Exception:
+    IndstocksQuoteProvider = None
+
 logger = setup_logger("LivePaperTracker")
 
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
@@ -68,6 +73,12 @@ class LivePaperTracker:
         self.is_running = False
         self.is_stale_feed = False
         self.indmoney_feed = INDMoneyLiveFeed()
+        try:
+            self.option_quote_provider = IndstocksQuoteProvider() if IndstocksQuoteProvider else None
+        except Exception as q_init_err:
+            logger.warning(f"Failed to initialize IndstocksQuoteProvider: {q_init_err}")
+            self.option_quote_provider = None
+        self._last_tick_log_time: Dict[str, float] = {}
         self._init_db()
         self._load_open_positions()
 
@@ -264,6 +275,19 @@ class LivePaperTracker:
                 )
             """)
 
+            # Requirement 7: option_ticks table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS option_ticks (
+                    trade_id TEXT NOT NULL,
+                    ts REAL NOT NULL,
+                    bid REAL NOT NULL,
+                    ask REAL NOT NULL,
+                    ltp REAL NOT NULL,
+                    iv REAL NOT NULL,
+                    oi INTEGER NOT NULL
+                )
+            """)
+
             # Dynamic ALTER TABLE migrations for existing databases
             for col, col_type in [
                 ("highest_price", "REAL DEFAULT 0.0"),
@@ -274,7 +298,10 @@ class LivePaperTracker:
                 ("taken_time_ist", "TEXT DEFAULT ''"),
                 ("real_entry", "REAL DEFAULT 0.0"),
                 ("real_qty", "INTEGER DEFAULT 0"),
-                ("last_trail_ntfy_ts", "REAL DEFAULT 0.0")
+                ("last_trail_ntfy_ts", "REAL DEFAULT 0.0"),
+                ("price_source", "TEXT DEFAULT 'REAL_QUOTE'"),
+                ("opt_token", "TEXT DEFAULT ''"),
+                ("opt_scrip_code", "TEXT DEFAULT ''")
             ]:
                 try:
                     conn.execute(f"ALTER TABLE active_paper_positions ADD COLUMN {col} {col_type}")
@@ -290,7 +317,10 @@ class LivePaperTracker:
                 ("taken_time_ist", "TEXT DEFAULT ''"),
                 ("real_entry", "REAL DEFAULT 0.0"),
                 ("real_qty", "INTEGER DEFAULT 0"),
-                ("r_multiple", "REAL DEFAULT 0.0")
+                ("r_multiple", "REAL DEFAULT 0.0"),
+                ("price_source", "TEXT DEFAULT 'REAL_QUOTE'"),
+                ("opt_token", "TEXT DEFAULT ''"),
+                ("opt_scrip_code", "TEXT DEFAULT ''")
             ]:
                 try:
                     conn.execute(f"ALTER TABLE closed_paper_trades ADD COLUMN {col} {col_type}")
@@ -433,17 +463,83 @@ class LivePaperTracker:
         if risk_r <= 0:
             risk_r = actual_entry_price * 0.015
 
-        # Realistic ATM Option Premium Model
+        # Real INDstocks Quotes & Realistic ATM Option Premium Model
+        price_source = "REAL_QUOTE"
+        opt_token = ""
+        opt_scrip_code = ""
+        opt_iv = 0.0
+        opt_oi = 0
+        real_quote_obj = None
+
         if is_option:
-            if "SENSEX" in clean_base:
-                opt_entry_prem = 180.0
-            elif "NIFTY" in clean_base and "MIDCAP" not in clean_base and "MIDCPNIFTY" not in clean_base:
-                opt_entry_prem = 110.0
-            elif "MIDCPNIFTY" in clean_base or "MIDCAP" in clean_base:
-                opt_entry_prem = 55.0
+            # 1. Resolve Strike and Option Type
+            strike_val = 0.0
+            for t in tokens:
+                try:
+                    val = float(t)
+                    if val > 10.0:
+                        strike_val = val
+                        break
+                except ValueError:
+                    pass
+            if strike_val <= 0.0:
+                if "SENSEX" in clean_base:
+                    strike_val = round(actual_entry_price / 100.0) * 100.0
+                elif "MIDCPNIFTY" in clean_base or "MIDCAP" in clean_base:
+                    strike_val = round(actual_entry_price / 25.0) * 25.0
+                elif "NIFTY" in clean_base:
+                    strike_val = round(actual_entry_price / 50.0) * 50.0
+                else:
+                    strike_val = actual_entry_price
+
+            opt_type_str = "PE" if is_put else "CE"
+
+            # 2. Fetch Real Option Quote from INDstocks API
+            if self.option_quote_provider:
+                try:
+                    real_quote_obj = self.option_quote_provider.get_quote(
+                        symbol=clean_base,
+                        expiry="NEAR",
+                        strike=strike_val,
+                        opt_type=opt_type_str
+                    )
+                except Exception as q_err:
+                    logger.warning(f"Error fetching INDstocks option quote for {symbol}: {q_err}")
+
+            # Requirement 9: Skip signals where (ask - bid)/ask > 5% or depth is empty; log them as SKIPPED_ILLIQUID
+            if real_quote_obj and real_quote_obj.get("source") == "REAL_QUOTE" and real_quote_obj.get("is_illiquid"):
+                logger.warning(f"SKIPPED_ILLIQUID: {symbol} rejected ({real_quote_obj.get('illiquid_reason')})")
+                return None
+
+            # Requirement 6: Paper fills: entry at ask
+            if real_quote_obj and real_quote_obj.get("source") == "REAL_QUOTE" and real_quote_obj.get("ask", 0.0) > 0.0:
+                opt_entry_prem = round(float(real_quote_obj["ask"]), 2)
+                price_source = "REAL_QUOTE"
+                opt_token = str(real_quote_obj.get("token", ""))
+                opt_scrip_code = str(real_quote_obj.get("scrip_code", ""))
+                opt_iv = float(real_quote_obj.get("iv", 0.0))
+                opt_oi = int(real_quote_obj.get("oi", 0))
+
+                # Requirement 4: Subscribe to live WebSocket updates
+                if opt_token:
+                    exch = "BSE" if "BFO" in opt_scrip_code else "NSE"
+                    try:
+                        self.option_quote_provider.subscribe(opt_token, exch=exch)
+                    except Exception as ws_err:
+                        logger.warning(f"Could not subscribe WS for {opt_token}: {ws_err}")
             else:
-                opt_entry_prem = max(2.0, round(actual_entry_price * 0.012, 2))
-            opt_entry_prem = round(opt_entry_prem * 1.005, 2) # Slippage on premium
+                # Requirement 8: Fallback to synthetic model and tag SYNTHETIC
+                price_source = "SYNTHETIC"
+                if "SENSEX" in clean_base:
+                    opt_entry_prem = 180.0
+                elif "NIFTY" in clean_base and "MIDCAP" not in clean_base and "MIDCPNIFTY" not in clean_base:
+                    opt_entry_prem = 110.0
+                elif "MIDCPNIFTY" in clean_base or "MIDCAP" in clean_base:
+                    opt_entry_prem = 55.0
+                else:
+                    opt_entry_prem = max(2.0, round(actual_entry_price * 0.012, 2))
+                opt_entry_prem = round(opt_entry_prem * 1.005, 2) # Slippage on premium
+
             opt_sl = round(opt_entry_prem * 0.70, 2)   # -30% SL
             opt_tgt = 0.0 # No target: trail stop only (Phase 5f)
         else:
@@ -480,6 +576,9 @@ class LivePaperTracker:
         elif grade == "C":
             tag_list.append("LOW CONFIDENCE")
 
+        if is_option and price_source == "SYNTHETIC":
+            tag_list.append("SYNTHETIC")
+
         tags_str = ",".join(tag_list)
         now_ist_str = get_ist_now().strftime("%Y-%m-%d %I:%M:%S %p IST")
         opened_utc = get_utc_iso()
@@ -511,7 +610,7 @@ class LivePaperTracker:
             "unrealized_pnl": 0.0,
             "pnl_pct": 0.0,
             "notes": notes,
-            "highest_price": opt_entry if is_option else actual_entry_price,
+            "highest_price": opt_entry_prem if is_option else actual_entry_price,
             "tags": tags_str,
             "setup_key": s_key,
             "grade": grade,
@@ -520,7 +619,13 @@ class LivePaperTracker:
             "real_entry": 0.0,
             "real_qty": 0,
             "last_trail_ntfy_ts": 0.0,
-            "atr_val": atr_val or (actual_entry_price * 0.015)
+            "atr_val": atr_val or (actual_entry_price * 0.015),
+            "price_source": price_source,
+            "opt_token": opt_token,
+            "opt_scrip_code": opt_scrip_code,
+            "opt_iv": opt_iv,
+            "opt_oi": opt_oi,
+            "strike": strike_val if is_option else 0.0
         }
 
         # Dispatch NTFY alert on trigger (Phase 5h): Suppress if WIDE_SL, OVER_CAPITAL, or Grade C
@@ -538,8 +643,9 @@ class LivePaperTracker:
                     opt_entry_premium, opt_current_premium, opt_initial_sl,
                     opt_trailing_sl, opt_target, stage, status,
                     entry_time_ist, opened_at_utc, notes,
-                    highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, last_trail_ntfy_ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, last_trail_ntfy_ts,
+                    price_source, opt_token, opt_scrip_code
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 pos_id, source_app, sector, symbol, action.upper(),
                 position["is_option"], position["is_put"],
@@ -549,7 +655,8 @@ class LivePaperTracker:
                 opt_entry_prem, opt_entry_prem, opt_sl,
                 opt_sl, 0.0, position["stage"], "OPEN",
                 now_ist_str, opened_utc, notes,
-                actual_entry_price, tags_str, s_key, grade, 0, "", 0.0, 0, 0.0
+                actual_entry_price, tags_str, s_key, grade, 0, "", 0.0, 0, 0.0,
+                price_source, opt_token, opt_scrip_code
             ))
             conn.commit()
 
@@ -1140,33 +1247,92 @@ class LivePaperTracker:
                                 logger.info(f"DATA_SUSPECT cleared for {sym}: 3 consecutive ticks within {clear_limit}% band.")
 
                 if is_opt:
-                    underlying_gain = (entry - live_price) if is_put else (live_price - entry)
-                    
-                    # Dynamic ATM Delta (0.50 -> 0.70 on acceleration, 0.20 on reversal)
-                    if underlying_gain > 0:
-                        delta = min(0.70, 0.50 + (underlying_gain / entry) * 4)
+                    p_source = pos.get("price_source", "SYNTHETIC")
+                    opt_token = str(pos.get("opt_token") or "")
+                    now_ts = time.time()
+
+                    if p_source == "REAL_QUOTE" and opt_token and self.option_quote_provider:
+                        # 1. Try WebSocket streamed quote first
+                        stream_q = self.option_quote_provider.get_latest_stream_quote(opt_token)
+                        live_bid = 0.0
+                        live_ask = 0.0
+                        live_ltp = 0.0
+                        live_iv = float(pos.get("opt_iv") or 0.0)
+                        live_oi = int(pos.get("opt_oi") or 0)
+
+                        if stream_q and (now_ts - stream_q.get("ts", 0.0)) < 5.0:
+                            live_ltp = float(stream_q.get("ltp") or 0.0)
+                            live_bid = live_ltp
+                            live_ask = live_ltp
+                        else:
+                            # 2. REST polling fallback every 5s (Requirement 4)
+                            last_rest = pos.get("_last_rest_poll", 0.0)
+                            if now_ts - last_rest >= 5.0:
+                                pos["_last_rest_poll"] = now_ts
+                                clean_sym = pos["symbol"].split(" ")[0].upper()
+                                strike_val = float(pos.get("strike") or entry)
+                                opt_t = "PE" if pos.get("is_put") else "CE"
+                                q = self.option_quote_provider.get_quote(clean_sym, "NEAR", strike_val, opt_t)
+                                if q.get("source") == "REAL_QUOTE":
+                                    live_bid = float(q.get("bid") or 0.0)
+                                    live_ask = float(q.get("ask") or 0.0)
+                                    live_ltp = float(q.get("ltp") or 0.0)
+                                    live_iv = float(q.get("iv") or live_iv)
+                                    live_oi = int(q.get("oi") or live_oi)
+                                    pos["opt_iv"] = live_iv
+                                    pos["opt_oi"] = live_oi
+
+                        # Value open position at BID (Requirement 6: exit at bid)
+                        opt_curr = live_bid if live_bid > 0 else (live_ltp if live_ltp > 0 else pos.get("opt_current_premium", pos["opt_entry_premium"]))
+                        pos["opt_current_premium"] = opt_curr
+                        pos["highest_price"] = max(float(pos.get("highest_price") or pos["opt_entry_premium"]), opt_curr)
+
+                        # Requirement 7: Every 60s while trade is open, append to option_ticks
+                        last_tick_log = pos.get("_last_tick_log", 0.0)
+                        if now_ts - last_tick_log >= 60.0:
+                            pos["_last_tick_log"] = now_ts
+                            try:
+                                with self._get_connection() as conn:
+                                    conn.execute(
+                                        "INSERT INTO option_ticks (trade_id, ts, bid, ask, ltp, iv, oi) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                                        (pos["position_id"], now_ts, live_bid, live_ask, live_ltp or opt_curr, live_iv, live_oi)
+                                    )
+                                    conn.commit()
+                            except Exception as ex:
+                                logger.error(f"Error logging option tick: {ex}")
+
+                        unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
+                        opt_entry_val = pos.get("opt_entry_premium", 1.0)
+                        pos["pnl_pct"] = round(((pos["opt_current_premium"] - opt_entry_val) / opt_entry_val) * 100, 2) if opt_entry_val > 0 else 0.0
+
                     else:
-                        delta = max(0.20, 0.50 + (underlying_gain / entry) * 4)
+                        underlying_gain = (entry - live_price) if is_put else (live_price - entry)
+                        
+                        # Dynamic ATM Delta (0.50 -> 0.70 on acceleration, 0.20 on reversal)
+                        if underlying_gain > 0:
+                            delta = min(0.70, 0.50 + (underlying_gain / entry) * 4)
+                        else:
+                            delta = max(0.20, 0.50 + (underlying_gain / entry) * 4)
 
-                    # Intraday Theta Decay (~2.5% per hour)
-                    hours_held = 0.0
-                    try:
-                        opened_dt = datetime.datetime.fromisoformat(pos.get("opened_at_utc", "").replace("Z", "+00:00"))
-                        hours_held = max(0.0, (datetime.datetime.now(datetime.timezone.utc) - opened_dt).total_seconds() / 3600.0)
-                    except Exception:
-                        pass
-                    theta_decay_pts = min(pos["opt_entry_premium"] * 0.40, hours_held * (pos["opt_entry_premium"] * 0.025))
+                        # Intraday Theta Decay (~2.5% per hour)
+                        hours_held = 0.0
+                        try:
+                            opened_dt = datetime.datetime.fromisoformat(pos.get("opened_at_utc", "").replace("Z", "+00:00"))
+                            hours_held = max(0.0, (datetime.datetime.now(datetime.timezone.utc) - opened_dt).total_seconds() / 3600.0)
+                        except Exception:
+                            pass
+                        theta_decay_pts = min(pos["opt_entry_premium"] * 0.40, hours_held * (pos["opt_entry_premium"] * 0.025))
 
-                    opt_gain_pts = (underlying_gain * delta) - theta_decay_pts
-                    max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
-                    opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
-                    pos["opt_current_premium"] = opt_curr
-                    pos["highest_price"] = max(float(pos.get("highest_price") or pos["opt_entry_premium"]), opt_curr)
+                        opt_gain_pts = (underlying_gain * delta) - theta_decay_pts
+                        max_allowed_prem = max(10.0, pos["opt_entry_premium"] * 3.0)
+                        opt_curr = min(max_allowed_prem, max(0.05, round(pos["opt_entry_premium"] + opt_gain_pts, 2)))
+                        pos["opt_current_premium"] = opt_curr
+                        pos["highest_price"] = max(float(pos.get("highest_price") or pos["opt_entry_premium"]), opt_curr)
 
-                    # Unrealized P&L capped at 100% loss of premium paid
-                    unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
-                    opt_entry_val = pos.get("opt_entry_premium", 1.0)
-                    pos["pnl_pct"] = round(((pos["opt_current_premium"] - opt_entry_val) / opt_entry_val) * 100, 2) if opt_entry_val > 0 else 0.0
+                        # Unrealized P&L capped at 100% loss of premium paid
+                        unrealized = max(-pos["opt_entry_premium"] * pos["quantity"], round((opt_curr - pos["opt_entry_premium"]) * pos["quantity"], 2))
+                        opt_entry_val = pos.get("opt_entry_premium", 1.0)
+                        pos["pnl_pct"] = round(((pos["opt_current_premium"] - opt_entry_val) / opt_entry_val) * 100, 2) if opt_entry_val > 0 else 0.0
                 else:
                     if act == "BUY":
                         gain_pts = live_price - entry
@@ -1316,6 +1482,19 @@ class LivePaperTracker:
 
         if is_opt:
             opt_entry = pos.get("opt_entry_premium", 1.0)
+            p_source = pos.get("price_source", "REAL_QUOTE")
+            opt_token = str(pos.get("opt_token") or "")
+            opt_scrip = str(pos.get("opt_scrip_code") or "")
+
+            # Requirement 4: Unsubscribe from WebSocket on trade exit
+            if opt_token and self.option_quote_provider:
+                exch = "BSE" if "BFO" in opt_scrip else "NSE"
+                try:
+                    self.option_quote_provider.unsubscribe(opt_token, exch=exch)
+                except Exception as ws_u_err:
+                    logger.warning(f"Error unsubscribing WS for {opt_token}: {ws_u_err}")
+
+            # Requirement 6: Option exit executed at BID
             opt_exit = pos.get("opt_current_premium", opt_entry)
             gross_pnl = round((opt_exit - opt_entry) * qty, 2)
             # Brokerage: ₹40 flat roundtrip + STT / turnover taxes ~₹15
@@ -1354,17 +1533,19 @@ class LivePaperTracker:
                         is_option, entry_price, exit_price, quantity,
                         gross_pnl, total_charges, net_pnl, exit_reason,
                         entry_time_ist, exit_time_ist, opened_at_utc, closed_at_utc,
-                        highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, r_multiple
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        highest_price, tags, setup_key, grade, taken, taken_time_ist, real_entry, real_qty, r_multiple,
+                        price_source, opt_token, opt_scrip_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     trade_id, pos_id, pos["symbol"], pos["sector"], pos["action"],
-                    pos["is_option"], pos["entry_price"], pos["exit_price"], qty,
+                    pos["is_option"], (opt_entry if is_opt else pos["entry_price"]), (opt_exit if is_opt else pos["exit_price"]), qty,
                     gross_pnl, charges, net_pnl, exit_reason,
                     pos["entry_time_ist"], exit_time_ist, pos["opened_at_utc"], closed_utc,
                     pos.get("highest_price", pos["entry_price"]), tags_str,
                     pos.get("setup_key", ""), pos.get("grade", "B"),
                     pos.get("taken", 0), pos.get("taken_time_ist", ""),
-                    pos.get("real_entry", 0.0), pos.get("real_qty", 0), r_multiple
+                    pos.get("real_entry", 0.0), pos.get("real_qty", 0), r_multiple,
+                    pos.get("price_source", "REAL_QUOTE"), pos.get("opt_token", ""), pos.get("opt_scrip_code", "")
                 ))
                 conn.execute("DELETE FROM active_paper_positions WHERE position_id = ?", (pos_id,))
                 conn.commit()
@@ -1813,6 +1994,38 @@ class LivePaperTracker:
             "top_trusted_setup": best_setup,
             "setup_breakdown": setup_breakdown
         }
+
+    def get_pnl_by_price_source(self) -> Dict[str, Any]:
+        """
+        Requirement 8: Reports options performance separated by price source:
+        REAL_QUOTE (live INDstocks bid/ask) vs SYNTHETIC (delta/theta model).
+        """
+        with self._get_connection() as conn:
+            rows = conn.execute("""
+                SELECT 
+                    COALESCE(price_source, 'SYNTHETIC') as p_source,
+                    COUNT(*) as trade_count,
+                    COALESCE(SUM(gross_pnl), 0.0) as total_gross,
+                    COALESCE(SUM(total_charges), 0.0) as total_charges,
+                    COALESCE(SUM(net_pnl), 0.0) as total_net,
+                    SUM(CASE WHEN net_pnl > 0 THEN 1 ELSE 0 END) as wins
+                FROM closed_paper_trades
+                WHERE is_option = 1
+                GROUP BY COALESCE(price_source, 'SYNTHETIC')
+            """).fetchall()
+
+            report = {}
+            for r in rows:
+                n = int(r["trade_count"])
+                w = int(r["wins"] or 0)
+                report[r["p_source"]] = {
+                    "trade_count": n,
+                    "gross_pnl": round(float(r["total_gross"]), 2),
+                    "total_charges": round(float(r["total_charges"]), 2),
+                    "net_pnl": round(float(r["total_net"]), 2),
+                    "win_rate_pct": round((w / n * 100.0), 1) if n > 0 else 0.0
+                }
+            return report
 
     def get_status_dict(self) -> Dict[str, Any]:
         """Returns the complete payload expected by the FrontPage live.html cockpit (Phase 5i)."""
