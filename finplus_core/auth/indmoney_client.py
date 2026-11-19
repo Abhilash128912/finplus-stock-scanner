@@ -327,6 +327,8 @@ class INDMoneyAuthClient:
                 return new_token
 
             elif resp.status_code == 400 and "wait a minute" in resp.text.lower():
+                self._last_token_request_time = time.time()
+                self._save_token_to_file(self.access_token or "")
                 logger.warning("Broker rate limit cooldown triggered (400): %s", resp.text)
                 raise RateLimitCooldownError(f"Broker rate limit hit (400): {resp.text}")
             elif resp.status_code in (400, 401, 403):
@@ -429,7 +431,13 @@ class INDMoneyAuthClient:
                 logger.info("Broker 60s cooldown active. Sleeping %ds before requesting fresh token...", wait_needed)
                 time.sleep(wait_needed)
 
-            new_token = self._execute_token_request(persist_to_env=persist_to_env)
+            try:
+                new_token = self._execute_token_request(persist_to_env=persist_to_env)
+            except RateLimitCooldownError:
+                logger.warning("Broker enforced rate limit. Sleeping 62s to clear window before retry...")
+                time.sleep(62)
+                new_token = self._execute_token_request(persist_to_env=persist_to_env)
+
             # Broadcast to peers
             try:
                 self._broadcast_token_to_peers(new_token)
@@ -470,7 +478,13 @@ class INDMoneyAuthClient:
                 await asyncio.sleep(wait_needed)
 
             loop = asyncio.get_running_loop()
-            new_token = await loop.run_in_executor(None, self._execute_token_request, persist_to_env)
+            try:
+                new_token = await loop.run_in_executor(None, self._execute_token_request, persist_to_env)
+            except RateLimitCooldownError:
+                logger.warning("Broker enforced rate limit. Sleeping 62s asynchronously before retry...")
+                await asyncio.sleep(62)
+                new_token = await loop.run_in_executor(None, self._execute_token_request, persist_to_env)
+
             # Broadcast to peers in background executor
             loop.run_in_executor(None, self._broadcast_token_to_peers, new_token)
             return new_token
