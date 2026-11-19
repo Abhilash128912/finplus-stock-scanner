@@ -1129,10 +1129,12 @@ class LivePaperTracker:
 
                 sym = pos["symbol"]
                 act = pos["action"]
-                entry = pos["entry_price"]
-                r_val = pos["risk_r"]
-                curr_sl = pos["trailing_sl"]
-                tgt = pos["target"]
+                entry = float(pos.get("entry_price") or 0.0)
+                r_val = float(pos.get("risk_r") or (entry * 0.015 if entry > 0 else 0.0))
+                curr_sl = float(pos.get("trailing_sl") or (entry * 0.99 if entry > 0 else 0.0))
+                tgt = float(pos.get("target") or (entry * 1.02 if entry > 0 else 0.0))
+                pos["trailing_sl"] = curr_sl
+                pos["target"] = tgt
                 sector = pos["sector"]
                 is_opt = bool(pos.get("is_option"))
                 is_put = bool(pos.get("is_put"))
