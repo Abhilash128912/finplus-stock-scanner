@@ -265,6 +265,9 @@ class INDMoneyAuthClient:
                     raise INDMoneyAuthError(f"Malformed token response: {resp.text}")
 
                 self.access_token = new_token
+                self.token_generated_at = time.time()
+                time_str = datetime.datetime.now(tz=IST).strftime("%H:%M")
+                logger.info("token refreshed at %s", time_str)
                 claims = self.decode_jwt_claims(new_token)
                 exp_dt = self.get_token_expiration(new_token)
 

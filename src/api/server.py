@@ -97,6 +97,15 @@ class PanelBasicAuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(PanelBasicAuthMiddleware)
 
+@app.middleware("http")
+async def add_no_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
 FRONTEND_DIR = os.path.join(_APP_ROOT, "finplus_stock_scanner", "frontend")
 if not os.path.exists(FRONTEND_DIR):
     FRONTEND_DIR = os.path.join(_APP_ROOT, "frontend")
@@ -130,6 +139,17 @@ def get_code_version() -> Dict[str, str]:
 
 scheduler = ScannerScheduler()
 scheduler_task = None
+
+def ensure_scanner_running():
+    """Restarts background scheduler task if it finished or cancelled (e.g. after Render sleep/wake)."""
+    global scheduler_task
+    if scheduler_task is None or scheduler_task.done():
+        logger.warning("Scanner background loop inactive or ended. Reviving scheduler task.")
+        try:
+            loop = asyncio.get_running_loop()
+            scheduler_task = loop.create_task(scheduler.start_loop())
+        except RuntimeError:
+            pass
 
 @app.on_event("startup")
 async def startup_event():
@@ -211,11 +231,13 @@ async def serve_live():
 
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health_check():
+    ensure_scanner_running()
     return {"status": "ok", "app": "FinPlus-Stock-Scanner"}
 
 @app.api_route("/api/health", methods=["GET", "HEAD"])
 async def get_health_simple():
     """Simple uptime healthcheck endpoint."""
+    ensure_scanner_running()
     return {"status": "HEALTHY", "service": "FinPlus-Stock-Scanner", "timestamp_utc": get_utc_iso()}
 
 @app.api_route("/api/health/deep", methods=["GET", "HEAD"])
@@ -1021,6 +1043,7 @@ async def get_status():
 
 @app.get("/api/scan")
 async def get_scan_results():
+    ensure_scanner_running()
     return {
         "timestamp_utc": scheduler.last_scan_utc,
         "ist_time": get_ist_time_str(),
@@ -1033,67 +1056,90 @@ async def get_scan_results():
 async def get_live_indices():
     """
     Returns real-time 3-second live Nifty 50 and Sensex 30 spots directly
-    from App #1's live feed, ensuring continuous live price updates.
+    from App #1's live feed or direct broker fallback without hardcoded fallbacks.
     """
-    import os, requests
+    ensure_scanner_running()
+    import os, httpx
+    is_render = bool(os.getenv("RENDER")) or bool(os.getenv("RENDER_SERVICE_ID"))
     app1_url = os.getenv("APP1_URL", "https://finplus-index-breadth.onrender.com")
-    local_url = "http://127.0.0.1:8000"
-    
-    endpoints = [f"{local_url}/api/breadth", f"{app1_url}/api/breadth"]
+
+    # On Render, 127.0.0.1:8000 does not exist; query app1_url directly
+    endpoints = [f"{app1_url}/api/breadth"] if is_render else ["http://127.0.0.1:8000/api/breadth", f"{app1_url}/api/breadth"]
+
     for ep in endpoints:
         try:
-            r = requests.get(ep, timeout=1.5)
-            if r.status_code == 200:
-                d = r.json()
-                bm = d.get("broad_market", {})
-                nf = d.get("nifty", {})
-                sx = d.get("sensex", {})
-                sx_spot_val = float(bm.get("sensex_spot") or sx.get("spot_price") or 0.0)
-                sx_chg_val = float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0))
-                # Intercept stale/hardcoded 82300 or invalid spot
-                if sx_spot_val <= 0.0 or abs(sx_spot_val - 82300.0) < 0.01:
-                    try:
-                        from src.utils.sensex_feed import get_live_sensex_spot
-                        live_sx, live_chg = get_live_sensex_spot()
-                        if live_sx > 50000:
-                            sx_spot_val = live_sx
-                            sx_chg_val = live_chg
-                    except Exception:
-                        pass
+            async with httpx.AsyncClient(timeout=2.0) as client:
+                r = await client.get(ep)
+                if r.status_code == 200:
+                    d = r.json()
+                    bm = d.get("broad_market", {})
+                    nf = d.get("nifty", {})
+                    sx = d.get("sensex", {})
 
-                return {
-                    "status": "LIVE_SYNCED",
-                    "source": ep,
-                    "timestamp": d.get("timestamp"),
-                    "nifty_spot": float(bm.get("nifty_spot") or nf.get("spot_price") or 25380.0),
-                    "nifty_change_pct": float(bm.get("nifty_change_pct", 0.0) if bm.get("nifty_change_pct") is not None else nf.get("change_pct", 0.0)),
-                    "sensex_spot": sx_spot_val,
-                    "sensex_change_pct": sx_chg_val,
-                    "market_regime": d.get("market_regime", {})
-                }
+                    raw_sx = bm.get("sensex_spot") or sx.get("spot_price")
+                    raw_nf = bm.get("nifty_spot") or nf.get("spot_price")
+
+                    sx_spot_val = float(raw_sx) if raw_sx and float(raw_sx) > 0 else None
+                    nf_spot_val = float(raw_nf) if raw_nf and float(raw_nf) > 0 else None
+
+                    sx_chg_val = float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0))
+                    nf_chg_val = float(bm.get("nifty_change_pct", 0.0) if bm.get("nifty_change_pct") is not None else nf.get("change_pct", 0.0))
+
+                    return {
+                        "status": "LIVE_SYNCED",
+                        "source": ep,
+                        "timestamp": d.get("timestamp"),
+                        "nifty_spot": nf_spot_val,
+                        "nifty_change_pct": nf_chg_val,
+                        "sensex_spot": sx_spot_val,
+                        "sensex_change_pct": sx_chg_val,
+                        "market_regime": d.get("market_regime", {})
+                    }
         except Exception:
             continue
-            
-    nf_item = scheduler.latest_shortlist.get("nifty_radar", {})
-    sx_item = scheduler.latest_shortlist.get("sensex_radar", {})
-    cached_sx = float(sx_item.get("last_price", 0.0))
-    cached_sx_chg = float(sx_item.get("pct_change_pdc", 0.0))
-    if cached_sx <= 0.0 or abs(cached_sx - 82300.0) < 0.01:
-        try:
-            from src.utils.sensex_feed import get_live_sensex_spot
-            live_sx, live_chg = get_live_sensex_spot()
-            if live_sx > 50000:
-                cached_sx = live_sx
-                cached_sx_chg = live_chg
-        except Exception:
-            pass
+
+    # Fallback to direct broker quote feed if App #1 is sleeping / booting
+    direct_sx = None
+    direct_sx_chg = 0.0
+    direct_nf = None
+    direct_nf_chg = 0.0
+
+    try:
+        from src.utils.sensex_feed import get_live_sensex_spot
+        live_sx, live_chg = get_live_sensex_spot()
+        if live_sx and live_sx > 50000:
+            direct_sx = live_sx
+            direct_sx_chg = live_chg
+    except Exception:
+        pass
+
+    try:
+        if scheduler.indmoney_feed:
+            quotes = scheduler.indmoney_feed.fetch_batch_quotes(["NIFTY"])
+            q_nf = quotes.get("NIFTY")
+            if q_nf and q_nf.get("last_price") and float(q_nf["last_price"]) > 0:
+                direct_nf = float(q_nf["last_price"])
+                direct_nf_chg = float(q_nf.get("pct_change_pdc", 0.0))
+    except Exception:
+        pass
+
+    if direct_sx is not None or direct_nf is not None:
+        return {
+            "status": "DIRECT_BROKER_FEED",
+            "source": "INDSTOCKS_DIRECT",
+            "nifty_spot": direct_nf,
+            "nifty_change_pct": direct_nf_chg,
+            "sensex_spot": direct_sx,
+            "sensex_change_pct": direct_sx_chg,
+        }
 
     return {
-        "status": "CACHED_FALLBACK",
-        "nifty_spot": float(nf_item.get("last_price", 25380.0)),
-        "nifty_change_pct": float(nf_item.get("pct_change_pdc", 0.0)),
-        "sensex_spot": cached_sx,
-        "sensex_change_pct": cached_sx_chg,
+        "status": "UNAVAILABLE",
+        "source": "NONE",
+        "nifty_spot": None,
+        "nifty_change_pct": 0.0,
+        "sensex_spot": None,
+        "sensex_change_pct": 0.0,
     }
 
 @app.get("/api/shortlist")

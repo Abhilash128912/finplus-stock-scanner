@@ -46,7 +46,7 @@
             APP-02 • 30M BEST-IN-CLASS
           </span>
           <span class="text-xs px-2 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-400 font-mono" id="app1-sync-pill">
-            Connecting Gateway (:8000)...
+            Connecting Gateway...
           </span>
         </div>
         <p class="text-xs text-slate-400 mt-1">
@@ -437,7 +437,10 @@
     async function loadData() {
       try {
         updateExchangeStatus();
-        const res = await fetch('/api/scan');
+        const res = await fetch('/api/scan?_t=' + Date.now(), {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        });
         if (!res.ok) throw new Error('API offline');
         const data = await res.json();
         
@@ -460,13 +463,19 @@
 
     async function syncApp1() {
       try {
-        const res = await fetch('/api/live-indices');
+        const res = await fetch('/api/live-indices?_t=' + Date.now(), {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        });
         if (res.ok) {
           const d = await res.json();
           if (d.nifty_spot) {
             const nFormatted = '₹' + Number(d.nifty_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             const nEl = document.getElementById('nifty-spot-val');
             if (nEl) nEl.textContent = nFormatted;
+          } else {
+            const nEl = document.getElementById('nifty-spot-val');
+            if (nEl && (nEl.textContent === 'Loading...' || !nEl.textContent)) nEl.textContent = '₹--';
           }
           if (d.nifty_change_pct !== undefined) {
             const nChg = Number(d.nifty_change_pct);
@@ -481,6 +490,9 @@
             const sFormatted = '₹' + Number(d.sensex_spot).toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2});
             const sEl = document.getElementById('sensex-spot-val');
             if (sEl) sEl.textContent = sFormatted;
+          } else {
+            const sEl = document.getElementById('sensex-spot-val');
+            if (sEl && (sEl.textContent === 'Loading...' || !sEl.textContent)) sEl.textContent = '₹--';
           }
           if (d.sensex_change_pct !== undefined) {
             const sChg = Number(d.sensex_change_pct);
@@ -502,7 +514,10 @@
         // Fallback to direct App 1 breadth
         const directEndpoint = isCloud ? 'https://finplus-index-breadth.onrender.com/api/breadth' : 'http://127.0.0.1:8000/api/breadth';
         try {
-          const res2 = await fetch(directEndpoint);
+          const res2 = await fetch(directEndpoint + '?_t=' + Date.now(), {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+          });
           if (res2.ok) {
             const d2 = await res2.json();
             const bm = d2.broad_market || {};

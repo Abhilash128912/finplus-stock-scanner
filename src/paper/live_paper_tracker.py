@@ -845,64 +845,70 @@ class LivePaperTracker:
             sx_strike = sx["recommended_strike"]
             from src.utils.sensex_feed import get_live_sensex_spot
             live_sx, _ = get_live_sensex_spot()
-            sx_ltp = float(sx.get("last_price") or live_sx or 82200.0)
-            lot = int(sx.get("lot_size", 20))
-            self.open_position(
-                source_app="APP_02_STOCK_SCANNER",
-                sector="SENSEX_ASYMMETRIC",
-                symbol=sx_strike,
-                action="BUY",
-                entry_price=sx_ltp,
-                stop_loss=sx_ltp * 0.99,
-                target=sx_ltp * 1.02,
-                quantity=lot,
-                notes="Sensex Radar Ticket",
-                confluence_score=sx.get("confluence_score", 85),
-                regime=sx.get("regime_confluence", "APPROVED"),
-                setup_key="SENSEX_ASYMMETRIC"
-            )
+            raw_sx = sx.get("last_price") or live_sx
+            if raw_sx and float(raw_sx) > 0:
+                sx_ltp = float(raw_sx)
+                lot = int(sx.get("lot_size", 20))
+                self.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector="SENSEX_ASYMMETRIC",
+                    symbol=sx_strike,
+                    action="BUY",
+                    entry_price=sx_ltp,
+                    stop_loss=sx_ltp * 0.99,
+                    target=sx_ltp * 1.02,
+                    quantity=lot,
+                    notes="Sensex Radar Ticket",
+                    confluence_score=sx.get("confluence_score", 85),
+                    regime=sx.get("regime_confluence", "APPROVED"),
+                    setup_key="SENSEX_ASYMMETRIC"
+                )
 
         # 4. Nifty Radar
         nf = shortlist.get("nifty_radar", {})
         if nf.get("is_actionable") and nf.get("recommended_strike"):
             nf_strike = nf["recommended_strike"]
-            nf_ltp = float(nf.get("last_price", 25380.0))
-            lot = int(nf.get("lot_size", 65))
-            self.open_position(
-                source_app="APP_02_STOCK_SCANNER",
-                sector="NIFTY_ASYMMETRIC",
-                symbol=nf_strike,
-                action="BUY",
-                entry_price=nf_ltp,
-                stop_loss=nf_ltp * 0.99,
-                target=nf_ltp * 1.02,
-                quantity=lot,
-                notes="Nifty Radar Ticket",
-                confluence_score=nf.get("confluence_score", 85),
-                regime=nf.get("regime_confluence", "APPROVED"),
-                setup_key="NIFTY_ASYMMETRIC"
-            )
+            raw_nf = nf.get("last_price")
+            if raw_nf and float(raw_nf) > 0:
+                nf_ltp = float(raw_nf)
+                lot = int(nf.get("lot_size", 65))
+                self.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector="NIFTY_ASYMMETRIC",
+                    symbol=nf_strike,
+                    action="BUY",
+                    entry_price=nf_ltp,
+                    stop_loss=nf_ltp * 0.99,
+                    target=nf_ltp * 1.02,
+                    quantity=lot,
+                    notes="Nifty Radar Ticket",
+                    confluence_score=nf.get("confluence_score", 85),
+                    regime=nf.get("regime_confluence", "APPROVED"),
+                    setup_key="NIFTY_ASYMMETRIC"
+                )
 
         # 5. Midcap Nifty Radar
         mid = shortlist.get("midcap_radar", {})
         if mid.get("is_actionable") and mid.get("recommended_strike"):
             mid_strike = mid["recommended_strike"]
-            mid_ltp = float(mid.get("last_price", 14125.0))
-            lot = int(mid.get("lot_size", 120))
-            self.open_position(
-                source_app="APP_02_STOCK_SCANNER",
-                sector="MIDCAP_ASYMMETRIC",
-                symbol=mid_strike,
-                action="BUY",
-                entry_price=mid_ltp,
-                stop_loss=mid_ltp * 0.99,
-                target=mid_ltp * 1.02,
-                quantity=lot,
-                notes="Midcap Nifty Radar Ticket",
-                confluence_score=mid.get("confluence_score", 85),
-                regime=mid.get("regime_confluence", "APPROVED"),
-                setup_key="MIDCAP_ASYMMETRIC"
-            )
+            raw_mid = mid.get("last_price")
+            if raw_mid and float(raw_mid) > 0:
+                mid_ltp = float(raw_mid)
+                lot = int(mid.get("lot_size", 120))
+                self.open_position(
+                    source_app="APP_02_STOCK_SCANNER",
+                    sector="MIDCAP_ASYMMETRIC",
+                    symbol=mid_strike,
+                    action="BUY",
+                    entry_price=mid_ltp,
+                    stop_loss=mid_ltp * 0.99,
+                    target=mid_ltp * 1.02,
+                    quantity=lot,
+                    notes="Midcap Nifty Radar Ticket",
+                    confluence_score=mid.get("confluence_score", 85),
+                    regime=mid.get("regime_confluence", "APPROVED"),
+                    setup_key="MIDCAP_ASYMMETRIC"
+                )
 
     def ingest_commodities(self):
         """Polls App #3 (Commodities) locally or in cloud and auto-ingests qualified commodity trades."""

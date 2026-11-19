@@ -116,6 +116,7 @@ class INDMoneyLiveFeed:
         self.cache_ttl = cache_ttl_seconds
         self.auth_client = None
         self._quote_cache: Dict[str, Dict[str, Any]] = {}
+        self.last_errors: Dict[str, Optional[str]] = {}
         self._last_fetch_time: float = 0.0
         self._broker_cooldown_until: float = 0.0
         self.scrip_registry = dict(DEFAULT_SCRIP_REGISTRY)
@@ -212,7 +213,21 @@ class INDMoneyLiveFeed:
         except Exception as e:
             logger.warning(f"Failed to obtain INDstocks auth headers ({e}). Setting 60s cooldown.")
             self._broker_cooldown_until = now + 60.0
-            return self._quote_cache
+            return {
+                s: {
+                    "symbol": s,
+                    "scrip_code": self.resolve_scrip_code(s),
+                    "ltp": None,
+                    "tick_age": 999.0,
+                    "feed_status": "ERROR",
+                    "error": str(e)
+                }
+                for s in symbols
+            }
+
+        from email.utils import parsedate_to_datetime
+        from src.utils.indian_market_calendar import is_equity_market_open_ist
+        is_market_open, _ = is_equity_market_open_ist()
 
         scrip_list = list(scrip_to_sym.keys())
         results = {}
@@ -222,46 +237,75 @@ class INDMoneyLiveFeed:
             chunk = scrip_list[i:i + chunk_size]
             joined = ",".join(chunk)
             url = f"{self.BASE_URL}{self.QUOTES_ENDPOINT}?scrip-codes={joined}"
+            fetched_at = time.time()
 
             try:
                 resp = requests.get(url, headers=headers, timeout=4.0)
                 if resp.status_code == 200:
                     payload = resp.json()
                     data = payload.get("data", {})
+                    # Exchange timestamp from Date header or response
+                    date_hdr = resp.headers.get("Date")
+                    chunk_ex_ts = None
+                    if date_hdr:
+                        try:
+                            chunk_ex_ts = parsedate_to_datetime(date_hdr).timestamp()
+                        except Exception:
+                            chunk_ex_ts = fetched_at
+                    else:
+                        chunk_ex_ts = fetched_at
+
                     for scrip, raw in data.items():
                         sym = scrip_to_sym.get(scrip)
                         if sym and raw:
                             ltp = float(raw.get("live_price", 0.0))
+                            inst_ex_ts = chunk_ex_ts
+                            raw_ts = raw.get("timestamp") or raw.get("last_traded_time") or raw.get("ltt")
+                            if raw_ts:
+                                try:
+                                    r_flt = float(raw_ts)
+                                    inst_ex_ts = r_flt / 1000.0 if r_flt > 1e11 else r_flt
+                                except Exception:
+                                    pass
+                            tick_age = max(0.0, round(fetched_at - inst_ex_ts, 1))
+
+                            if not is_market_open:
+                                feed_status = "MARKET_CLOSED"
+                            elif tick_age > 15.0:
+                                feed_status = "STALE"
+                            else:
+                                feed_status = "OK"
+
                             if ltp > 0:
                                 results[sym] = {
                                     "symbol": sym,
                                     "scrip_code": scrip,
-                                    "ltp": ltp,
+                                    "ltp": ltp if feed_status != "STALE" else None,
                                     "change_pct": float(raw.get("day_change_percentage", 0.0)),
                                     "day_high": float(raw.get("day_high", ltp)),
                                     "day_low": float(raw.get("day_low", ltp)),
                                     "day_open": float(raw.get("day_open", ltp)),
                                     "prev_close": float(raw.get("prev_close", ltp)),
                                     "volume": int(raw.get("volume", 0)),
-                                    "fetch_time": time.time(),
+                                    "exchange_ts": inst_ex_ts,
+                                    "fetch_time": fetched_at,
+                                    "fetched_at": fetched_at,
+                                    "tick_age": tick_age,
+                                    "feed_status": feed_status,
                                     "source": "INDstocks Live Broker API"
                                 }
+                                self.last_errors[sym] = None
                 elif resp.status_code in (401, 403):
-                    # Single-flight refresh lock: first caller refreshes, others wait and reuse
+                    # Single-flight refresh lock: regenerate once via TOTP
                     with self._refresh_lock:
-                        # Re-verify token validity under lock to avoid duplicate refreshes
-                        if not self.auth_client.is_token_valid():
-                            logger.warning(f"INDstocks returned HTTP {resp.status_code}. Refreshing token under single-flight lock...")
-                            try:
-                                self.auth_client.generate_fresh_token()
-                            except Exception as refresh_err:
-                                logger.error(f"Failed to auto-refresh token via TOTP: {refresh_err}")
-                                self._broker_cooldown_until = time.time() + 60.0
-                                break
-                        else:
-                            logger.info("Token already refreshed by previous chunk/thread.")
+                        logger.warning(f"INDstocks returned HTTP {resp.status_code}. Single-flight TOTP refresh...")
+                        try:
+                            self.auth_client.force_refresh_token()
+                        except Exception as refresh_err:
+                            logger.error(f"Failed to auto-refresh token via TOTP: {refresh_err}")
+                            self._broker_cooldown_until = time.time() + 60.0
+                            break
 
-                        # Get updated headers
                         try:
                             headers = self.auth_client.get_auth_headers()
                         except Exception as e:
@@ -274,24 +318,49 @@ class INDMoneyLiveFeed:
                         if retry_resp.status_code == 200:
                             payload = retry_resp.json()
                             data = payload.get("data", {})
+                            date_hdr = retry_resp.headers.get("Date")
+                            chunk_ex_ts = parsedate_to_datetime(date_hdr).timestamp() if date_hdr else fetched_at
+
                             for scrip, raw in data.items():
                                 sym = scrip_to_sym.get(scrip)
                                 if sym and raw:
                                     ltp = float(raw.get("live_price", 0.0))
+                                    inst_ex_ts = chunk_ex_ts
+                                    raw_ts = raw.get("timestamp") or raw.get("last_traded_time") or raw.get("ltt")
+                                    if raw_ts:
+                                        try:
+                                            r_flt = float(raw_ts)
+                                            inst_ex_ts = r_flt / 1000.0 if r_flt > 1e11 else r_flt
+                                        except Exception:
+                                            pass
+                                    tick_age = max(0.0, round(fetched_at - inst_ex_ts, 1))
+
+                                    if not is_market_open:
+                                        feed_status = "MARKET_CLOSED"
+                                    elif tick_age > 15.0:
+                                        feed_status = "STALE"
+                                    else:
+                                        feed_status = "OK"
+
                                     if ltp > 0:
                                         results[sym] = {
                                             "symbol": sym,
                                             "scrip_code": scrip,
-                                            "ltp": ltp,
+                                            "ltp": ltp if feed_status != "STALE" else None,
                                             "change_pct": float(raw.get("day_change_percentage", 0.0)),
                                             "day_high": float(raw.get("day_high", ltp)),
                                             "day_low": float(raw.get("day_low", ltp)),
                                             "day_open": float(raw.get("day_open", ltp)),
                                             "prev_close": float(raw.get("prev_close", ltp)),
                                             "volume": int(raw.get("volume", 0)),
-                                            "fetch_time": time.time(),
+                                            "exchange_ts": inst_ex_ts,
+                                            "fetch_time": fetched_at,
+                                            "fetched_at": fetched_at,
+                                            "tick_age": tick_age,
+                                            "feed_status": feed_status,
                                             "source": "INDstocks Live Broker API"
                                         }
+                                        self.last_errors[sym] = None
                             continue
                         else:
                             logger.warning(f"Retry after refresh returned HTTP {retry_resp.status_code}.")
@@ -308,12 +377,26 @@ class INDMoneyLiveFeed:
             except Exception as e:
                 logger.debug(f"INDstocks batch quote error for chunk {i}: {e}")
 
-        if results:
-            self._quote_cache.update(results)
-            self._last_fetch_time = time.time()
-            return self._quote_cache
+        # Fill in failed/missing symbols with None (ZERO cached fallback on failure)
+        for s in symbols:
+            clean = s.split(" ")[0].upper()
+            if clean not in results:
+                self.last_errors[clean] = "Failed to fetch live quote"
+                results[clean] = {
+                    "symbol": clean,
+                    "scrip_code": self.resolve_scrip_code(clean),
+                    "ltp": None,
+                    "tick_age": 999.0,
+                    "feed_status": "MARKET_CLOSED" if not is_market_open else "ERROR",
+                    "source": "NONE",
+                    "error": self.last_errors[clean]
+                }
 
-        return self._quote_cache
+        if any(v.get("ltp") is not None for v in results.values()):
+            self._quote_cache.update({k: v for k, v in results.items() if v.get("ltp") is not None})
+            self._last_fetch_time = time.time()
+
+        return results
 
     def get_single_quote(self, symbol: str) -> Optional[float]:
         """Returns live LTP for a single symbol from INDmoney, or None if unavailable."""

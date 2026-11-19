@@ -49,11 +49,7 @@ def get_live_sensex_spot(fallback_val: float = 0.0) -> Tuple[float, float]:
     except Exception as ind_err:
         logger.debug(f"INDstocks primary Sensex quote notice: {ind_err}")
 
-    # 2. Return last cached live tick if valid
-    if _CACHED_SENSEX_SPOT > 50000:
-        return _CACHED_SENSEX_SPOT, _CACHED_SENSEX_CHANGE_PCT
-
-    # 3. FUTURE-CONTRACT PROXY (tagged spot_source=FUT_PROXY)
+    # 2. FUTURE-CONTRACT PROXY (tagged spot_source=FUT_PROXY)
     try:
         from src.paper.indmoney_live_feed import INDMoneyLiveFeed
         ind_feed = INDMoneyLiveFeed()

@@ -359,7 +359,10 @@
 
     async function fetchLivePositions() {
       try {
-        const res = await fetch('/api/paper/status');
+        const res = await fetch('/api/paper/status?_t=' + Date.now(), {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+        });
         if (!res.ok) {
           const container = document.getElementById('positionsContainer');
           if (container && !rawData) {
