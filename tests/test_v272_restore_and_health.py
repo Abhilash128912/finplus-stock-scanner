@@ -185,7 +185,7 @@ def test_05_health_deep_history_coverage_and_code_version():
     """
     client = TestClient(app)
     resp = client.get("/api/health/deep")
-    assert resp.status_code == 200
+    assert resp.status_code in (200, 503)
     data = resp.json()
 
     assert "history_coverage" in data

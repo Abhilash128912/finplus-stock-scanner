@@ -177,6 +177,25 @@ class NTFYDispatcher:
                 logger.warning(f"NTFY rate limit reached (HTTP 429): Quota exhausted for today ({current_utc_date}). Halting retries until next UTC day.")
                 return False
             elif resp.status_code in (401, 403):
+                if self.auth_token:
+                    logger.warning(
+                        f"NTFY push authorization failed (HTTP {resp.status_code}) with token. "
+                        "Retrying unauthenticated push for public topic..."
+                    )
+                    try:
+                        no_auth_headers = safe_headers(headers, None)
+                        retry_resp = requests.post(url, data=message.encode('utf-8'), headers=no_auth_headers, timeout=10)
+                        if retry_resp.status_code == 200:
+                            self.token_rejected = False
+                            self.auth_token = ""
+                            logger.info("Unauthenticated NTFY push succeeded on public topic. Cleared rejected token.")
+                            if dedupe:
+                                self._recent_alert_cache[dedupe_key] = now
+                            new_count = self.ledger.increment_ntfy_sent_count(today)
+                            logger.info(f"NTFY push delivered to '{url}' (Today: {new_count}/{MAX_DAILY_NOTIFICATIONS}, Type={alert_type_norm})")
+                            return True
+                    except Exception as e_retry:
+                        logger.warning(f"Unauthenticated retry to '{url}' failed: {e_retry}")
                 self.token_rejected = True
                 logger.error(f"NTFY push authorization failed (HTTP {resp.status_code}): Token was rejected by NTFY server. Notifications disabled.")
                 return False

@@ -398,7 +398,7 @@ async def deep_health_check():
     }
 
     # Diagnostic endpoint status code policy:
-    # Always return HTTP 200 so monitoring probes (BetterStack, Pingdom) do not trigger false service-down incidents.
+    # Always return HTTP 200 so monitoring probes (BetterStack, Pingdom, Render health checks) do not trigger false service-down incidents.
     # Subsystem degradation or issues are reported within the JSON payload ("status": "HEALTHY" | "DEGRADED").
     if not market_open:
         http_status = 200
