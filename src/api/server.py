@@ -1076,11 +1076,26 @@ async def get_live_indices():
                     nf = d.get("nifty", {})
                     sx = d.get("sensex", {})
 
-                    raw_sx = bm.get("sensex_spot") or sx.get("spot_price")
-                    raw_nf = bm.get("nifty_spot") or nf.get("spot_price")
+                    # Check if App 1 breadth data is STALE (>15s)
+                    import time
+                    now_ts = time.time()
+                    ep_data_status = bm.get("data_status") or d.get("market_regime", {}).get("data_status")
+                    ep_tick_age = bm.get("tick_age")
+                    ep_fetch_time = bm.get("fetch_time")
+                    is_stale_ep = (
+                        ep_data_status == "STALE" or
+                        (ep_tick_age is not None and float(ep_tick_age) > 15.0) or
+                        (ep_fetch_time is not None and (now_ts - float(ep_fetch_time)) > 15.0)
+                    )
 
-                    sx_spot_val = float(raw_sx) if raw_sx and float(raw_sx) > 0 else None
-                    nf_spot_val = float(raw_nf) if raw_nf and float(raw_nf) > 0 else None
+                    if is_stale_ep:
+                        sx_spot_val = None
+                        nf_spot_val = None
+                    else:
+                        raw_sx = bm.get("sensex_spot") or sx.get("spot_price")
+                        raw_nf = bm.get("nifty_spot") or nf.get("spot_price")
+                        sx_spot_val = float(raw_sx) if raw_sx and float(raw_sx) > 0 else None
+                        nf_spot_val = float(raw_nf) if raw_nf and float(raw_nf) > 0 else None
 
                     # Guard against stale hardcoded 82300.0 Sensex fallback
                     if sx_spot_val and abs(sx_spot_val - 82300.0) < 0.01:
