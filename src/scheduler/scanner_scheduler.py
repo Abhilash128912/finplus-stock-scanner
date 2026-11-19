@@ -227,6 +227,26 @@ class ScannerScheduler:
         candidate_triggers: List[Dict[str, Any]] = []
         variant_evals_buffer: List[Dict[str, Any]] = []
 
+        # Check App #1 regime and data status (Requirement 4: SKIPPED_NO_REGIME)
+        success_reg, reg_data = self.interceptor.fetch_current_regime()
+        is_regime_outage, regime_outage_reason = self.interceptor.check_regime_outage(reg_data, success_reg)
+
+        if is_regime_outage:
+            logger.warning(
+                "SKIPPED_NO_REGIME: App #1 regime is UNKNOWN or feed STALE/PARTIAL (%s). Skipping all new signals.",
+                regime_outage_reason
+            )
+            # Send one ntfy alert per outage (not per cycle)
+            if not getattr(self, "_regime_outage_alerted", False):
+                self._regime_outage_alerted = True
+                trend_code = (reg_data.get("regime") or reg_data.get("trend", {}).get("code", "UNKNOWN")).upper()
+                data_status = (reg_data.get("data_status") or "UNKNOWN").upper()
+                self.dispatcher.send_regime_outage_alert(trend_code, data_status, regime_outage_reason)
+        else:
+            if getattr(self, "_regime_outage_alerted", False):
+                self._regime_outage_alerted = False
+                logger.info("Market regime recovered from outage. Alert state reset.")
+
         for item in universe:
             ticker = item.get("yf_ticker")
             sym = item.get("symbol")
@@ -455,6 +475,10 @@ class ScannerScheduler:
         self.last_scan_utc = get_utc_iso()
 
         # Multi-Setup Menu Selection & Paper Placement (Phase 6b, 6c)
+        if is_regime_outage:
+            candidate_triggers.clear()
+            logger.info("SKIPPED_NO_REGIME: All new candidate triggers skipped.")
+
         candidate_triggers.sort(key=lambda x: x.get("rank_score", 0.0), reverse=True)
         if self.paper_tracker:
             for cand in candidate_triggers:
@@ -488,10 +512,13 @@ class ScannerScheduler:
         self.latest_shortlist = shortlist
         
         # Auto-ingest candidates into 24/7 Live Paper Tracker
-        try:
-            self.paper_tracker.ingest_shortlist(shortlist)
-        except Exception as e:
-            logger.error(f"Error auto-ingesting shortlist to paper tracker: {e}")
+        if not is_regime_outage:
+            try:
+                self.paper_tracker.ingest_shortlist(shortlist)
+            except Exception as e:
+                logger.error(f"Error auto-ingesting shortlist to paper tracker: {e}")
+        else:
+            logger.warning("SKIPPED_NO_REGIME: Paper trade ingestion skipped due to regime outage.")
 
         # Dispatch 30m pulse (enforcing 30m cooldown)
         self.dispatcher.send_30m_shortlist_pulse(shortlist)

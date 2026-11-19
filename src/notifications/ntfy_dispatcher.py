@@ -680,6 +680,36 @@ class NTFYDispatcher:
                 success = True
         return success
 
+    def send_regime_outage_alert(self, regime_code: str, data_status: str, details: str = "") -> bool:
+        """
+        Dispatches high-priority NTFY alert once per market regime outage (UNKNOWN or STALE/PARTIAL feed).
+        """
+        from datetime import datetime, timezone, timedelta
+        ist_now = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+        time_str = ist_now.strftime("%I:%M:%S %p IST")
+
+        title = "FinPlus Scanner | Regime Outage (Signals Paused)"
+        msg = (
+            f"Market Regime Outage at {time_str}.\n"
+            f"Regime: {regime_code} | Data Status: {data_status}\n"
+            f"Action: All new entry signals SKIPPED (SKIPPED_NO_REGIME) for capital protection.\n"
+            f"Reason: {details}"
+        )
+        priority = "4"
+
+        success = False
+        for topic in self.topics:
+            url = f"https://ntfy.sh/{topic}"
+            headers = {
+                "Title": title,
+                "Priority": priority,
+                "Markdown": "yes",
+                "X-Markdown": "yes"
+            }
+            if self._safe_post(url, msg, headers, alert_type="ROUTINE", is_priority=True):
+                success = True
+        return success
+
     def send_1545_self_report(
         self, 
         rejected_ticks_total: int = 0, 

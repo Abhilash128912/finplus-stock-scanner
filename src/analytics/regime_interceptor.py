@@ -70,6 +70,44 @@ class App1RegimeInterceptor:
         self._cache_ts = now
         return self._cached_result
 
+    @staticmethod
+    def check_regime_outage(regime: Dict[str, Any], is_success: bool = True) -> Tuple[bool, str]:
+        """
+        Evaluates whether App #1 regime constitutes an outage requiring signal suppression.
+        Conditions:
+        - App #1 unreachable (is_success is False)
+        - Regime is UNKNOWN
+        - data_status is STALE
+        - data_status is PARTIAL with spot or breadth missing
+        """
+        if not is_success or not regime:
+            return True, "APP1_UNREACHABLE"
+
+        trend_code = (regime.get("regime") or regime.get("trend", {}).get("code", "")).upper()
+        data_status = (regime.get("data_status") or "").upper()
+        metrics = regime.get("metrics", {})
+
+        nifty_spot = metrics.get("nifty_spot")
+        sensex_spot = metrics.get("sensex_spot")
+        bm_adv = metrics.get("broad_market_advances")
+        bm_adr = metrics.get("advance_decline_ratio")
+
+        spot_or_breadth_missing = (
+            nifty_spot is None or
+            sensex_spot is None or
+            bm_adv is None or
+            bm_adr is None
+        )
+
+        if trend_code == "UNKNOWN":
+            return True, f"REGIME_UNKNOWN (data_status={data_status or 'NONE'})"
+        if data_status == "STALE":
+            return True, f"FEED_STALE (regime={trend_code})"
+        if data_status == "PARTIAL" and spot_or_breadth_missing:
+            return True, f"FEED_PARTIAL_MISSING_DATA (nifty={nifty_spot}, sensex={sensex_spot}, adv={bm_adv})"
+
+        return False, ""
+
     def evaluate_confluence(self, signal_direction: int, instrument_type: str = "STOCK", rvol: float = 1.0, confluence_score: int = 0) -> Tuple[str, str, Dict[str, Any]]:
         """
         Cross-verifies an ignition signal against App #1 Macro Regime.
@@ -81,6 +119,11 @@ class App1RegimeInterceptor:
             
         success, regime = self.fetch_current_regime()
         
+        # Check for Regime Outage (UNKNOWN, STALE, or PARTIAL on spot/breadth)
+        is_outage, outage_reason = self.check_regime_outage(regime, success)
+        if is_outage:
+            return "VETOED_NO_REGIME", f"VETOED (SKIPPED_NO_REGIME: {outage_reason})", regime
+
         # FAIL CLOSED GUARD
         if not success:
             allow_standalone = os.getenv("ALLOW_STANDALONE_GATE", "false").lower() in ("true", "1", "yes")
