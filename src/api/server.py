@@ -1173,22 +1173,24 @@ async def get_live_indices():
     direct_nf = None
     direct_nf_chg = 0.0
 
-    # 1. Check local scheduler shortlist
+    # 1. Fetch live quotes directly from broker feed (Priority 1)
     try:
-        if scheduler.latest_shortlist:
-            nf_radar = scheduler.latest_shortlist.get("nifty_radar") or {}
-            if nf_radar.get("last_price") and float(nf_radar["last_price"]) > 0:
-                direct_nf = float(nf_radar["last_price"])
-                direct_nf_chg = float(nf_radar.get("pct_change_pdc", 0.0))
-            sx_radar = scheduler.latest_shortlist.get("sensex_radar") or {}
-            if sx_radar.get("last_price") and float(sx_radar["last_price"]) > 0:
-                if abs(float(sx_radar["last_price"]) - 82300.0) >= 0.01:
-                    direct_sx = float(sx_radar["last_price"])
-                    direct_sx_chg = float(sx_radar.get("pct_change_pdc", 0.0))
+        if scheduler.indmoney_feed:
+            quotes = scheduler.indmoney_feed.fetch_batch_quotes(["NIFTY", "SENSEX"])
+            q_nf = quotes.get("NIFTY") or {}
+            val_nf = q_nf.get("ltp") or q_nf.get("last_price")
+            if val_nf and float(val_nf) > 0:
+                direct_nf = float(val_nf)
+                direct_nf_chg = float(q_nf.get("change_pct", q_nf.get("pct_change_pdc", 0.0)))
+            q_sx = quotes.get("SENSEX") or {}
+            val_sx = q_sx.get("ltp") or q_sx.get("last_price")
+            if val_sx and float(val_sx) > 0:
+                direct_sx = float(val_sx)
+                direct_sx_chg = float(q_sx.get("change_pct", q_sx.get("pct_change_pdc", 0.0)))
     except Exception:
         pass
 
-    # 2. Check Sensex feed utility
+    # 2. Check Sensex feed utility if Sensex still missing
     if direct_sx is None:
         try:
             from src.utils.sensex_feed import get_live_sensex_spot
@@ -1199,16 +1201,19 @@ async def get_live_indices():
         except Exception:
             pass
 
-    # 3. Check batch quotes
-    if direct_nf is None:
+    # 3. Fallback to local scheduler shortlist only if broker did not return quote
+    if direct_nf is None or direct_sx is None:
         try:
-            if scheduler.indmoney_feed:
-                quotes = scheduler.indmoney_feed.fetch_batch_quotes(["NIFTY"])
-                q_nf = quotes.get("NIFTY") or {}
-                val = q_nf.get("ltp") or q_nf.get("last_price")
-                if val and float(val) > 0:
-                    direct_nf = float(val)
-                    direct_nf_chg = float(q_nf.get("pct_change_pdc", 0.0))
+            if scheduler.latest_shortlist:
+                nf_radar = scheduler.latest_shortlist.get("nifty_radar") or {}
+                if direct_nf is None and nf_radar.get("last_price") and float(nf_radar["last_price"]) > 0:
+                    direct_nf = float(nf_radar["last_price"])
+                    direct_nf_chg = float(nf_radar.get("pct_change_pdc", 0.0))
+                sx_radar = scheduler.latest_shortlist.get("sensex_radar") or {}
+                if direct_sx is None and sx_radar.get("last_price") and float(sx_radar["last_price"]) > 0:
+                    if abs(float(sx_radar["last_price"]) - 82300.0) >= 0.01:
+                        direct_sx = float(sx_radar["last_price"])
+                        direct_sx_chg = float(sx_radar.get("pct_change_pdc", 0.0))
         except Exception:
             pass
 
