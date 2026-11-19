@@ -526,10 +526,11 @@ def test_05_market_closed_and_stale_feed_guard(tmp_path):
     assert not closed_stale
     assert "pos_trent" in tracker.active_positions
 
-    # 5. Restore healthy feed during market hours: exit succeeds (mock NTFY to prevent real push to phone)
+    # 5. Restore healthy feed during market hours: exit succeeds (mock NTFY & GSheet to prevent leaks)
     tracker.is_stale_feed = False
     with patch("src.notifications.ntfy_dispatcher.NTFYDispatcher.send_stop_hit_alert") as mock_stop_alert, \
-         patch.object(tracker, "_dispatch_ntfy_trade_closed") as mock_close_alert:
+         patch.object(tracker, "_dispatch_ntfy_trade_closed") as mock_close_alert, \
+         patch.object(tracker, "_push_trade_to_google_sheet") as mock_gsheet:
         closed_good = tracker.close_position("pos_trent", exit_price=6340.0, exit_reason="INITIAL_SL_HIT")
         assert closed_good
         assert "pos_trent" not in tracker.active_positions

@@ -5,6 +5,7 @@ Exit Strategy: Pure Dynamic Trailing Stop-Loss (No Arbitrary Target Caps)
 """
 
 import os
+import sys
 import sqlite3
 import threading
 import time
@@ -430,46 +431,54 @@ class CryptoPaperEngine:
         except Exception as e:
             logger.error(f"Error persisting closed trade {trade_id}: {e}")
 
-        # Sync closed trade to Google Sheets
+        # Sync closed trade to Google Sheets (production only, strictly guarded against test leakage)
         try:
-            webhook_url = os.getenv("GOOGLE_SHEET_WEBHOOK_URL", "https://script.google.com/macros/s/AKfycbxKk9PhyjyqB80cyTr_C_ndnppKy8q7a2xDM1JH_c4L7EM2dip7uU6-MHnXTVuto0v2uA/exec")
-            if webhook_url:
-                ist_str = closed_record.get("exit_time_ist", "").replace("T", " ")
-                parts = ist_str.split(" ")
-                date_part = parts[0]
-                time_part = parts[1][:8] if len(parts) > 1 else ""
-                action_clean = "BUY" if "BUY" in closed_record["action"] else "SELL"
-                trade_record = {
-                    "date": date_part,
-                    "time": time_part,
-                    "sector": "CRYPTO_PERPETUALS",
-                    "trade_mode": "PAPER",
-                    "symbol": closed_record["symbol"],
-                    "action": action_clean,
-                    "entry_price": float(closed_record["entry_price"]),
-                    "exit_price": float(closed_record["exit_price"]),
-                    "quantity": float(closed_record["quantity"]),
-                    "gross_pnl": float(closed_record.get("pnl_inr", 0.0)),
-                    "brokerage": 0.0,
-                    "stt_ctt": 0.0,
-                    "taxes": 0.0,
-                    "total_charges": 0.0,
-                    "net_pnl": float(closed_record.get("pnl_inr", 0.0)),
-                    "exit_reason": closed_record.get("exit_reason", ""),
-                    "notes": f"Crypto Paper: {closed_record.get('notes', '')}"
-                }
-                def _push():
-                    try:
-                        payload = {
-                            "action": "LOG_TRADE",
-                            "timestamp_utc": closed_record.get("exit_time_utc", get_utc_iso()),
-                            "ist_time": f"{date_part} {time_part}",
-                            "trade": trade_record
-                        }
-                        requests.post(webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
-                    except Exception as err:
-                        logger.warning(f"Error pushing crypto trade to Google Sheet: {err}")
-                threading.Thread(target=_push, daemon=True).start()
+            if (
+                os.getenv("FINPLUS_ENVIRONMENT") not in ("test", "testing", "pytest")
+                and "pytest" not in sys.modules
+                and "unittest" not in sys.modules
+                and not str(closed_record.get("symbol", "")).upper().startswith("TEST")
+            ):
+                webhook_url = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
+                if not webhook_url and os.getenv("FINPLUS_ENVIRONMENT") == "production":
+                    webhook_url = "https://script.google.com/macros/s/AKfycbxKk9PhyjyqB80cyTr_C_ndnppKy8q7a2xDM1JH_c4L7EM2dip7uU6-MHnXTVuto0v2uA/exec"
+                if webhook_url:
+                    ist_str = closed_record.get("exit_time_ist", "").replace("T", " ")
+                    parts = ist_str.split(" ")
+                    date_part = parts[0]
+                    time_part = parts[1][:8] if len(parts) > 1 else ""
+                    action_clean = "BUY" if "BUY" in closed_record["action"] else "SELL"
+                    trade_record = {
+                        "date": date_part,
+                        "time": time_part,
+                        "sector": "CRYPTO_PERPETUALS",
+                        "trade_mode": "PAPER",
+                        "symbol": closed_record["symbol"],
+                        "action": action_clean,
+                        "entry_price": float(closed_record["entry_price"]),
+                        "exit_price": float(closed_record["exit_price"]),
+                        "quantity": float(closed_record["quantity"]),
+                        "gross_pnl": float(closed_record.get("pnl_inr", 0.0)),
+                        "brokerage": 0.0,
+                        "stt_ctt": 0.0,
+                        "taxes": 0.0,
+                        "total_charges": 0.0,
+                        "net_pnl": float(closed_record.get("pnl_inr", 0.0)),
+                        "exit_reason": closed_record.get("exit_reason", ""),
+                        "notes": f"Crypto Paper: {closed_record.get('notes', '')}"
+                    }
+                    def _push():
+                        try:
+                            payload = {
+                                "action": "LOG_TRADE",
+                                "timestamp_utc": closed_record.get("exit_time_utc", get_utc_iso()),
+                                "ist_time": f"{date_part} {time_part}",
+                                "trade": trade_record
+                            }
+                            requests.post(webhook_url, json=payload, headers={"Content-Type": "application/json"}, timeout=10)
+                        except Exception as err:
+                            logger.warning(f"Error pushing crypto trade to Google Sheet: {err}")
+                    threading.Thread(target=_push, daemon=True).start()
         except Exception as e:
             logger.warning(f"Error initiating crypto Google Sheet sync: {e}")
 

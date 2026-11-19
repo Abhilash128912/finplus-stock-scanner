@@ -1873,7 +1873,31 @@ class LivePaperTracker:
 
     def _push_trade_to_google_sheet(self, trade_record: Dict[str, Any]):
         """Pushes closed trade record to authorized Google Sheets Webhook in a background thread."""
-        webhook_url = os.getenv("GOOGLE_SHEET_WEBHOOK_URL", "https://script.google.com/macros/s/AKfycbxKk9PhyjyqB80cyTr_C_ndnppKy8q7a2xDM1JH_c4L7EM2dip7uU6-MHnXTVuto0v2uA/exec")
+        # 1. Test / Mock / Pytest Safety Quarantine: NEVER leak test or synthetic trades to user's journal
+        if (
+            os.getenv("FINPLUS_ENVIRONMENT") in ("test", "testing", "pytest")
+            or "pytest" in sys.modules
+            or "unittest" in sys.modules
+        ):
+            logger.debug(f"[GoogleSheetSync] Suppressed sync in test environment for {trade_record.get('symbol')}")
+            return
+
+        # 2. Synthetic symbol, mock trade, or test source guard
+        sym = str(trade_record.get("symbol", "")).upper()
+        notes = str(trade_record.get("notes", "")).lower()
+        if (
+            sym in ("TEST", "MOCK", "DUMMY")
+            or "test" in notes
+            or "mock" in notes
+            or trade_record.get("source_app") == "TEST"
+        ):
+            logger.debug(f"[GoogleSheetSync] Suppressed sync for synthetic/test trade {sym}")
+            return
+
+        webhook_url = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
+        if not webhook_url and os.getenv("FINPLUS_ENVIRONMENT") == "production":
+            webhook_url = "https://script.google.com/macros/s/AKfycbxKk9PhyjyqB80cyTr_C_ndnppKy8q7a2xDM1JH_c4L7EM2dip7uU6-MHnXTVuto0v2uA/exec"
+
         if not webhook_url:
             return
 

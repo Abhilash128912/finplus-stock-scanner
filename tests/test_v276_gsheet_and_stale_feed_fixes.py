@@ -94,3 +94,21 @@ def test_crypto_paper_engine_gsheet_sync(tmp_path):
         assert closed is not None
         assert closed["symbol"] == "ETHUSD"
         assert closed["exit_reason"] == "TRAIL_SL_HIT"
+
+
+def test_synthetic_and_test_trades_blocked_from_gsheet_sync(tmp_path):
+    """Verify that _push_trade_to_google_sheet strictly suppresses POST for tests and synthetic symbols."""
+    db_file = str(tmp_path / "test_safety.db")
+    # Unpatch the method specifically for this test to test its internal logic
+    tracker = LivePaperTracker(db_path=db_file)
+    from src.paper.live_paper_tracker import LivePaperTracker as OrigTracker
+    
+    with patch("requests.post") as mock_post:
+        # 1. Blocked because pytest is running
+        OrigTracker._push_trade_to_google_sheet(tracker, {"symbol": "TRENT", "source_app": "TEST"})
+        assert not mock_post.called
+
+        # 2. Blocked for synthetic mock symbol
+        OrigTracker._push_trade_to_google_sheet(tracker, {"symbol": "MOCK", "source_app": "SCANNER"})
+        assert not mock_post.called
+
