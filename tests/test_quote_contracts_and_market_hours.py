@@ -126,3 +126,5 @@ def test_outside_market_hours_marks_market_closed(monkeypatch):
     assert rel is not None
     assert rel["feed_status"] == "MARKET_CLOSED"
     assert rel["ltp"] == 2500.0
+
+

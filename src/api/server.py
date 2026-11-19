@@ -1068,7 +1068,7 @@ async def get_live_indices():
 
     for ep in endpoints:
         try:
-            async with httpx.AsyncClient(timeout=2.0) as client:
+            async with httpx.AsyncClient(timeout=3.5) as client:
                 r = await client.get(ep)
                 if r.status_code == 200:
                     d = r.json()
@@ -1082,8 +1082,24 @@ async def get_live_indices():
                     sx_spot_val = float(raw_sx) if raw_sx and float(raw_sx) > 0 else None
                     nf_spot_val = float(raw_nf) if raw_nf and float(raw_nf) > 0 else None
 
+                    # Guard against stale hardcoded 82300.0 Sensex fallback
+                    if sx_spot_val and abs(sx_spot_val - 82300.0) < 0.01:
+                        sx_spot_val = None
+
                     sx_chg_val = float(bm.get("sensex_change_pct", 0.0) if bm.get("sensex_change_pct") is not None else sx.get("change_pct", 0.0))
                     nf_chg_val = float(bm.get("nifty_change_pct", 0.0) if bm.get("nifty_change_pct") is not None else nf.get("change_pct", 0.0))
+
+                    # Enrich missing spot with local scheduler shortlist if needed
+                    if (sx_spot_val is None or nf_spot_val is None) and scheduler.latest_shortlist:
+                        sx_r = scheduler.latest_shortlist.get("sensex_radar") or {}
+                        nf_r = scheduler.latest_shortlist.get("nifty_radar") or {}
+                        if sx_spot_val is None and sx_r.get("last_price") and float(sx_r["last_price"]) > 0:
+                            if abs(float(sx_r["last_price"]) - 82300.0) >= 0.01:
+                                sx_spot_val = float(sx_r["last_price"])
+                                sx_chg_val = float(sx_r.get("pct_change_pdc", sx_chg_val))
+                        if nf_spot_val is None and nf_r.get("last_price") and float(nf_r["last_price"]) > 0:
+                            nf_spot_val = float(nf_r["last_price"])
+                            nf_chg_val = float(nf_r.get("pct_change_pdc", nf_chg_val))
 
                     return {
                         "status": "LIVE_SYNCED",
@@ -1098,30 +1114,50 @@ async def get_live_indices():
         except Exception:
             continue
 
-    # Fallback to direct broker quote feed if App #1 is sleeping / booting
+    # Fallback to direct broker quote feed / shortlist if App #1 is sleeping / booting
     direct_sx = None
     direct_sx_chg = 0.0
     direct_nf = None
     direct_nf_chg = 0.0
 
+    # 1. Check local scheduler shortlist
     try:
-        from src.utils.sensex_feed import get_live_sensex_spot
-        live_sx, live_chg = get_live_sensex_spot()
-        if live_sx and live_sx > 50000:
-            direct_sx = live_sx
-            direct_sx_chg = live_chg
+        if scheduler.latest_shortlist:
+            nf_radar = scheduler.latest_shortlist.get("nifty_radar") or {}
+            if nf_radar.get("last_price") and float(nf_radar["last_price"]) > 0:
+                direct_nf = float(nf_radar["last_price"])
+                direct_nf_chg = float(nf_radar.get("pct_change_pdc", 0.0))
+            sx_radar = scheduler.latest_shortlist.get("sensex_radar") or {}
+            if sx_radar.get("last_price") and float(sx_radar["last_price"]) > 0:
+                if abs(float(sx_radar["last_price"]) - 82300.0) >= 0.01:
+                    direct_sx = float(sx_radar["last_price"])
+                    direct_sx_chg = float(sx_radar.get("pct_change_pdc", 0.0))
     except Exception:
         pass
 
-    try:
-        if scheduler.indmoney_feed:
-            quotes = scheduler.indmoney_feed.fetch_batch_quotes(["NIFTY"])
-            q_nf = quotes.get("NIFTY")
-            if q_nf and q_nf.get("last_price") and float(q_nf["last_price"]) > 0:
-                direct_nf = float(q_nf["last_price"])
-                direct_nf_chg = float(q_nf.get("pct_change_pdc", 0.0))
-    except Exception:
-        pass
+    # 2. Check Sensex feed utility
+    if direct_sx is None:
+        try:
+            from src.utils.sensex_feed import get_live_sensex_spot
+            live_sx, live_chg = get_live_sensex_spot()
+            if live_sx and live_sx > 50000 and abs(live_sx - 82300.0) >= 0.01:
+                direct_sx = live_sx
+                direct_sx_chg = live_chg
+        except Exception:
+            pass
+
+    # 3. Check batch quotes
+    if direct_nf is None:
+        try:
+            if scheduler.indmoney_feed:
+                quotes = scheduler.indmoney_feed.fetch_batch_quotes(["NIFTY"])
+                q_nf = quotes.get("NIFTY") or {}
+                val = q_nf.get("ltp") or q_nf.get("last_price")
+                if val and float(val) > 0:
+                    direct_nf = float(val)
+                    direct_nf_chg = float(q_nf.get("pct_change_pdc", 0.0))
+        except Exception:
+            pass
 
     if direct_sx is not None or direct_nf is not None:
         return {
