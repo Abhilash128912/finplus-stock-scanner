@@ -131,7 +131,7 @@ class IndstocksQuoteProvider(OptionQuoteProvider):
             try:
                 from finplus_core.auth import INDMoneyAuthClient
                 auth_client = INDMoneyAuthClient()
-                token = auth_client.generate_fresh_token()
+                token = auth_client.get_valid_token(auto_refresh=True)
             except Exception as e:
                 logger.warning(f"Could not force-generate fresh token via INDMoneyAuthClient: {e}")
                 token = os.getenv("INDSTOCKS_TOKEN") or os.getenv("INDMONEY_ACCESS_TOKEN")

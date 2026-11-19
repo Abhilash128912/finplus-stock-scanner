@@ -551,6 +551,48 @@ async def admin_set_token(request: Request):
         return JSONResponse(status_code=500, content={"status": "ERROR", "message": str(e)})
 
 
+@app.get("/api/auth/token")
+async def get_active_auth_token(request: Request):
+    """
+    Returns the active INDstocks broker session token to authorized client apps.
+    Protected by Bearer ADMIN_TOKEN.
+    Ensures that only ONE app generates the token, and all peer apps share it.
+    """
+    admin_token = os.getenv("ADMIN_TOKEN") or "finplus-admin-secret-2026"
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Unauthorized: Missing Bearer token")
+
+    token = auth_header.split(" ", 1)[1].strip()
+    if token != admin_token:
+        raise HTTPException(status_code=403, detail="Forbidden: Invalid ADMIN_TOKEN")
+
+    active_token = None
+    exp_iso = None
+    if scheduler.indmoney_feed and scheduler.indmoney_feed.auth_client:
+        auth_c = scheduler.indmoney_feed.auth_client
+        try:
+            active_token = auth_c.get_valid_token(auto_refresh=True)
+            exp_dt = auth_c.get_token_expiration(active_token)
+            exp_iso = exp_dt.isoformat() if exp_dt else None
+        except Exception as e:
+            logger.warning(f"Could not retrieve fresh token for peer: {e}")
+            active_token = auth_c.access_token
+
+    if not active_token:
+        active_token = os.getenv("INDMONEY_ACCESS_TOKEN") or os.getenv("INDSTOCKS_TOKEN")
+
+    if not active_token:
+        raise HTTPException(status_code=503, detail="No active broker token available on master")
+
+    return {
+        "status": "SUCCESS",
+        "token": active_token,
+        "expiry": exp_iso,
+        "role": "master"
+    }
+
+
 @app.get("/api/admin/errors")
 async def get_admin_errors(request: Request):
     """
